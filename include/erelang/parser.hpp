@@ -11,7 +11,7 @@
 
 namespace erelang {
 
-enum class BinOp { Add, Sub, Mul, Div, Mod, EQ, NE, LT, LE, GT, GE, And, Or, Coalesce };
+enum class BinOp { Add, Sub, Mul, Div, Mod, Pow, EQ, NE, LT, LE, GT, GE, And, Or, Coalesce };
 enum class UnOp { Neg, Not };
 enum class Visibility { Public, Private };
 

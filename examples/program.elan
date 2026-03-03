@@ -5,8 +5,15 @@
 #include <modules/math.elan> as math
 
 public action main {
-    let r = mul(2,52)
-    print r
+    // Declare 'r' before using it
+    let r = 10 
+    
+    // Now you can perform arithmetic
+    print r + 2
+    
+    // Utilizing your math module
+    let result = math.sum(r, 5)
+    print "Math result: {result}"
 }
 
 run main

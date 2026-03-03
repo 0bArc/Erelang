@@ -1,0 +1,7 @@
+public action main {
+    let string = "hello"
+    let n = 2
+    print string + n
+}
+
+run main

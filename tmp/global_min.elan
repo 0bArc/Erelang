@@ -1,0 +1,9 @@
+@erelang
+
+public global X = 1
+
+public action main {
+    print X
+}
+
+run main

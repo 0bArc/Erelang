@@ -26,10 +26,13 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
             switch (node.op) {
                 case BinOp::Add:
                     if (TypeChecker::is_int(lt) && TypeChecker::is_int(rt)) { inferred = {"int"}; break; }
-                    if ((TypeChecker::is_string(lt) && (TypeChecker::is_string(rt)||TypeChecker::is_int(rt))) || (TypeChecker::is_string(rt) && (TypeChecker::is_string(lt)||TypeChecker::is_int(lt)))) { inferred={"string"}; break; }
+                    if (TypeChecker::is_string(lt) && TypeChecker::is_string(rt)) { inferred={"string"}; break; }
+                    if ((TypeChecker::is_string(lt) && TypeChecker::is_int(rt)) || (TypeChecker::is_int(lt) && TypeChecker::is_string(rt))) {
+                        DiagBuilder(result_, Severity::Error, "Illegal '+' operands", "TC011", ctx.actionName()).emit();
+                    }
                     inferred={"unknown"};
                     break;
-                case BinOp::Sub: case BinOp::Mul: case BinOp::Div: case BinOp::Mod:
+                case BinOp::Sub: case BinOp::Mul: case BinOp::Div: case BinOp::Mod: case BinOp::Pow:
                     inferred = {"int"}; break;
                 case BinOp::And: case BinOp::Or: inferred={"bool"}; break;
                 default: inferred={"bool"}; break; // comparisons
@@ -219,7 +222,9 @@ void TypeChecker::init_builtins() {
     add("now_ms",0,0,"int"); add("now_iso",0,0,"string");
     add("env",1,1,"string"); add("username",0,0,"string"); add("machine_guid",0,0,"string"); add("computer_name",0,0,"string"); add("volume_serial",0,0,"string"); add("hwid",0,0,"string"); add("rand_int",0,2,"int"); add("uuid",0,0,"string");
     add("args_count",0,0,"int"); add("args_get",1,1,"string");
-    add("exec",1,1,"int"); add("run_file",1,1,"void"); add("run_bat",1,1,"void"); add("read_line",0,0,"string"); add("prompt",1,1,"string");
+    add("exec",1,1,"int"); add("run_file",1,1,"void"); add("run_bat",1,1,"void"); add("read_line",0,0,"string"); add("input",0,1,"string"); add("prompt",1,1,"string");
+    add("toint",1,1,"int"); add("toInt",1,1,"int"); add("tostr",1,1,"string"); add("toString",1,1,"string"); add("tofloat",1,1,"string");
+    add("string.lstrip",1,1,"string"); add("string.rstrip",1,1,"string"); add("string.strip",1,1,"string"); add("string.lower",1,1,"string"); add("string.upper",1,1,"string");
     // Filesystem
     add("read_text",1,1,"string"); add("write_text",2,2,"void"); add("append_text",2,2,"void"); add("file_exists",1,1,"bool"); add("mkdirs",1,1,"void"); add("copy_file",2,2,"bool"); add("move_file",2,2,"bool"); add("delete_file",1,1,"bool");
     add("list_files",1,1,"unknown"); add("cwd",0,0,"string"); add("chdir",1,1,"bool");

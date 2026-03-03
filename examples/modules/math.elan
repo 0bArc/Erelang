@@ -1,14 +1,64 @@
-@erevos
+@erelang
+@module("math.core")
 
 
-public action sum(x,y) {
+public global MATH_PI = "3.141592653589793"
+public global MATH_E  = "2.718281828459045"
+
+
+
+public action sum(x, y) {
     return x + y
 }
 
-public action mul(x,y) {
+public action sub(x, y) {
+    return x - y
+}
+
+public action mul(x, y) {
     return x * y
 }
 
-public action min(x,y) {
-    return x - y
+public action div(x, y) {
+    if (y == "0" || y == 0) {
+        print "[Math Error] Division by zero"
+        return "0"
+    }
+    return x / y
+}
+
+public action mod(x, y) {
+    return x % y
+}
+
+public action pow(base, exp) {
+    return base ^ exp
+}
+
+public action abs(val) {
+    if (val < 0) {
+        return 0 - val
+    }
+    return val
+}
+
+public action min(x, y) {
+    if (x < y) { return x }
+    return y
+}
+
+public action max(x, y) {
+    if (x > y) { return x }
+    return y
+}
+
+
+public action is_even(n) {
+    return (n % 2) == 0
+}
+
+public action clamp(val, min_val, max_val) {
+    if (val < min_val) { return min_val }
+    if (val > max_val) { return max_val }
+    return val
 }

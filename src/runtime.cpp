@@ -1088,6 +1088,28 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
             nameStr = aliasTarget.substr(kBuiltinAliasPrefix.size());
         }
     }
+
+    // Script module alias resolution: alias.action(...) -> action(...)
+    // Example: #include <modules/math.elan> as math ; math.sum(2,3) -> sum(2,3)
+    if (currentProgram_) {
+        const auto dot = nameStr.find('.');
+        if (dot != std::string::npos && dot > 0 && dot + 1 < nameStr.size()) {
+            const std::string alias = nameStr.substr(0, dot);
+            const std::string method = nameStr.substr(dot + 1);
+            for (const auto& importDecl : currentProgram_->imports) {
+                if (!importDecl.alias || *importDecl.alias != alias || importDecl.path.empty()) continue;
+                std::string normalizedPath = importDecl.path;
+                for (auto& ch : normalizedPath) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                const bool isBuiltin = (normalizedPath.rfind("builtin/", 0) == 0 || normalizedPath.rfind("builtin:", 0) == 0);
+                if (isBuiltin) continue;
+                if (find_action(*currentProgram_, method)) {
+                    nameStr = method;
+                }
+                break;
+            }
+        }
+    }
+
     auto argS = [&](size_t i){ return i < args.size() ? eval_string(*args[i], env) : std::string(); };
     // If the name refers to a scripted action in the running program, execute it and return any ctx.returnValue
     if (currentProgram_) {
@@ -1284,12 +1306,49 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
     if (nameStr == "toint") {
         return std::to_string((long long)to_int(argS(0)));
     }
+    if (nameStr == "toInt") {
+        return std::to_string((long long)to_int(argS(0)));
+    }
     if (nameStr == "tofloat") {
         double v = to_double(argS(0));
         std::ostringstream ss; ss << v; return ss.str();
     }
     if (nameStr == "tostr") {
         return argS(0);
+    }
+    if (nameStr == "toString") {
+        return argS(0);
+    }
+    if (nameStr == "string.lstrip") {
+        std::string s = argS(0);
+        size_t i = 0;
+        while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i])) != 0) ++i;
+        return s.substr(i);
+    }
+    if (nameStr == "string.rstrip") {
+        std::string s = argS(0);
+        if (s.empty()) return s;
+        size_t j = s.size();
+        while (j > 0 && std::isspace(static_cast<unsigned char>(s[j - 1])) != 0) --j;
+        return s.substr(0, j);
+    }
+    if (nameStr == "string.strip") {
+        std::string s = argS(0);
+        size_t i = 0;
+        while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i])) != 0) ++i;
+        size_t j = s.size();
+        while (j > i && std::isspace(static_cast<unsigned char>(s[j - 1])) != 0) --j;
+        return s.substr(i, j - i);
+    }
+    if (nameStr == "string.lower") {
+        std::string s = argS(0);
+        for (auto& ch : s) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        return s;
+    }
+    if (nameStr == "string.upper") {
+        std::string s = argS(0);
+        for (auto& ch : s) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+        return s;
     }
     if (nameStr == "is_int") {
         return is_int_string(argS(0)) ? std::string("true") : std::string("false");
@@ -1338,6 +1397,16 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
     }
     if (nameStr == "read_line") {
         std::string s; std::getline(std::cin, s); return s;
+    }
+    if (nameStr == "input") {
+        if (!args.empty()) {
+            std::string msg = argS(0);
+            std::cout << msg;
+            std::cout.flush();
+        }
+        std::string s;
+        std::getline(std::cin, s);
+        return s;
     }
     if (nameStr == "prompt") {
         std::string msg = argS(0); std::cout << msg; std::cout.flush(); std::string s; std::getline(std::cin, s); return s;
@@ -2791,18 +2860,45 @@ std::string Runtime::eval_string(const Expr& e, const Env& env) const {
             }
             return std::string();
         };
+        auto is_char_like = [](const std::string& s) -> bool {
+            return s.size() == 1 && std::isalpha(static_cast<unsigned char>(s[0])) != 0;
+        };
+        auto require_int_operands = [&](const char* opName) {
+            if (!is_int_string(ls) || !is_int_string(rs)) {
+                throw std::runtime_error(std::string("Illegal operation: ") + opName + " requires int operands");
+            }
+        };
         switch (b.op) {
             case BinOp::Add: {
                 if (auto r = unitAddSub(BinOp::Add); !r.empty()) return r;
-                return (is_int_string(ls) && is_int_string(rs)) ? std::to_string(li + ri) : (ls + rs);
+                if ((is_char_like(ls) && is_int_string(rs)) || (is_int_string(ls) && is_char_like(rs))) {
+                    throw std::runtime_error("Illegal operation: char + int");
+                }
+                if (is_int_string(ls) && is_int_string(rs)) return std::to_string(li + ri);
+                if (!is_int_string(ls) && !is_int_string(rs)) return ls + rs;
+                throw std::runtime_error("Illegal operation: string + int");
             }
             case BinOp::Sub: {
                 if (auto r = unitAddSub(BinOp::Sub); !r.empty()) return r;
+                require_int_operands("-");
                 return std::to_string(li - ri);
             }
-            case BinOp::Mul: return std::to_string(li * ri);
-            case BinOp::Div: return std::to_string(ri==0?0:li / ri);
-            case BinOp::Mod: return std::to_string(ri==0?0:li % ri);
+            case BinOp::Mul:
+                require_int_operands("*");
+                return std::to_string(li * ri);
+            case BinOp::Div:
+                require_int_operands("/");
+                return std::to_string(ri==0?0:li / ri);
+            case BinOp::Mod:
+                require_int_operands("%");
+                return std::to_string(ri==0?0:li % ri);
+            case BinOp::Pow: {
+                require_int_operands("^");
+                if (ri < 0) return "0";
+                int64_t value = 1;
+                for (int64_t i = 0; i < ri; ++i) value *= li;
+                return std::to_string(value);
+            }
             case BinOp::EQ: return (ls == rs) ? "true" : "false";
             case BinOp::NE: return (ls != rs) ? "true" : "false";
             case BinOp::LT: return (li < ri) ? "true" : "false";

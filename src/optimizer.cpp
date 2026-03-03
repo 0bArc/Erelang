@@ -48,6 +48,12 @@ struct FoldStats {
 		case BinOp::Mod:
 			if (rhs == 0) return std::nullopt;
 			return lhs % rhs;
+		case BinOp::Pow: {
+			if (rhs < 0) return std::nullopt;
+			int64_t value = 1;
+			for (int64_t i = 0; i < rhs; ++i) value *= lhs;
+			return value;
+		}
 		default: break;
 	}
 	return std::nullopt;

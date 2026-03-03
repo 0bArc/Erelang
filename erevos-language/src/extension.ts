@@ -18,7 +18,9 @@ const MODULE_METHODS_BY_SPEC: Record<string, string[]> = {
 // Built‑in functions & keywords (extended)
 const BUILT_INS = [
   // Core / time / env
-  'print','PRINT','sleep','now_ms','now_iso','env','username','computer_name','machine_guid','uuid','rand_int','hwid','args_count','args_get',
+  'print','PRINT','sleep','now_ms','now_iso','env','username','computer_name','machine_guid','uuid','rand_int','hwid','args_count','args_get','input',
+  'toint','toInt','tofloat','tostr','toString',
+  'string.lstrip','string.rstrip','string.strip','string.lower','string.upper',
   // Filesystem
   'read_text','write_text','append_text','file_exists','mkdirs','copy_file','move_file','delete_file','list_files','cwd','chdir',
   'path_join','path_dirname','path_basename','path_ext',

@@ -1,0 +1,6 @@
+public action main {
+    let s = "  hello  "
+    print s:strip():upper()
+}
+
+run main

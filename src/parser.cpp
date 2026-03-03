@@ -182,6 +182,7 @@ ExprPtr Parser::parse_multiplicative() {
         if (match(TokenKind::Star)) { auto right = parse_unary(); left = std::make_shared<Expr>(Expr{ BinaryExpr{ BinOp::Mul, left, right } }); }
         else if (match(TokenKind::Slash)) { auto right = parse_unary(); left = std::make_shared<Expr>(Expr{ BinaryExpr{ BinOp::Div, left, right } }); }
         else if (match(TokenKind::Percent)) { auto right = parse_unary(); left = std::make_shared<Expr>(Expr{ BinaryExpr{ BinOp::Mod, left, right } }); }
+        else if (match(TokenKind::Caret) || match(TokenKind::Pow)) { auto right = parse_unary(); left = std::make_shared<Expr>(Expr{ BinaryExpr{ BinOp::Pow, left, right } }); }
         else break;
     }
     return left;
@@ -200,6 +201,25 @@ ExprPtr Parser::parse_unary() {
 }
 
 ExprPtr Parser::parse_primary() {
+    auto apply_colon_chain = [&](ExprPtr target) -> ExprPtr {
+        while (match(TokenKind::Colon)) {
+            const Token& methodTok = consume();
+            if (!(methodTok.kind == TokenKind::Word || methodTok.kind == TokenKind::Keyword)) {
+                throw std::runtime_error("Expected method name after ':'");
+            }
+            FunctionCallExpr call;
+            call.name = std::string("string.") + ident_text(methodTok);
+            call.args.push_back(target);
+            expect(TokenKind::LParen, "(");
+            if (!match(TokenKind::RParen)) {
+                do { call.args.push_back(parse_expression()); } while (match(TokenKind::Comma));
+                expect(TokenKind::RParen, ")");
+            }
+            target = std::make_shared<Expr>(Expr{ call });
+        }
+        return target;
+    };
+
     const Token& t = peek();
     // new Type(expr, ...)
     if ((t.kind == TokenKind::Word || t.kind == TokenKind::Keyword) && t.text == "new") {
@@ -215,13 +235,25 @@ ExprPtr Parser::parse_primary() {
         }
         return std::make_shared<Expr>(Expr{ ne });
     }
-    if (t.kind == TokenKind::String || t.kind == TokenKind::Char || t.kind == TokenKind::RawString) { consume(); return std::make_shared<Expr>(Expr{ ExprString{ t.text } }); }
-    if (t.kind == TokenKind::Number) { consume(); return std::make_shared<Expr>(Expr{ ExprNumber{ parse_numeric_literal(t.text) } }); }
-    if (t.kind == TokenKind::Duration) { consume(); return std::make_shared<Expr>(Expr{ ExprNumber{ parse_duration_ms(t.text) } }); }
-    if (t.kind == TokenKind::UnitNumber) { consume(); return std::make_shared<Expr>(Expr{ ExprString{ t.text } }); }
+    if (t.kind == TokenKind::String || t.kind == TokenKind::Char || t.kind == TokenKind::RawString) {
+        consume();
+        return apply_colon_chain(std::make_shared<Expr>(Expr{ ExprString{ t.text } }));
+    }
+    if (t.kind == TokenKind::Number) {
+        consume();
+        return apply_colon_chain(std::make_shared<Expr>(Expr{ ExprNumber{ parse_numeric_literal(t.text) } }));
+    }
+    if (t.kind == TokenKind::Duration) {
+        consume();
+        return apply_colon_chain(std::make_shared<Expr>(Expr{ ExprNumber{ parse_duration_ms(t.text) } }));
+    }
+    if (t.kind == TokenKind::UnitNumber) {
+        consume();
+        return apply_colon_chain(std::make_shared<Expr>(Expr{ ExprString{ t.text } }));
+    }
     if (t.kind == TokenKind::Word || t.kind == TokenKind::Keyword) {
-    if (t.text == "true" || t.text == "false") { consume(); return std::make_shared<Expr>(Expr{ ExprBool{ t.text == "true" } }); }
-    if (t.text == "null" || t.text == "nil" || t.text == "nullptr") { consume(); return std::make_shared<Expr>(Expr{ ExprString{ std::string() } }); }
+    if (t.text == "true" || t.text == "false") { consume(); return apply_colon_chain(std::make_shared<Expr>(Expr{ ExprBool{ t.text == "true" } })); }
+    if (t.text == "null" || t.text == "nil" || t.text == "nullptr") { consume(); return apply_colon_chain(std::make_shared<Expr>(Expr{ ExprString{ std::string() } })); }
         consume();
         std::string baseName = ident_text(t);
         bool hadIndex = false;
@@ -244,7 +276,7 @@ ExprPtr Parser::parse_primary() {
                 do { call.args.push_back(parse_expression()); } while (match(TokenKind::Comma));
                 expect(TokenKind::RParen, ")");
             }
-            return std::make_shared<Expr>(Expr{ call });
+            return apply_colon_chain(std::make_shared<Expr>(Expr{ call }));
         }
         // lookahead for dotted member access / dotted function calls as expressions
         std::vector<std::string> members;
@@ -264,16 +296,16 @@ ExprPtr Parser::parse_primary() {
                     do { call.args.push_back(parse_expression()); } while (match(TokenKind::Comma));
                     expect(TokenKind::RParen, ")");
                 }
-                return std::make_shared<Expr>(Expr{ call });
+                return apply_colon_chain(std::make_shared<Expr>(Expr{ call }));
             }
             if (members.size() == 1) {
-                return std::make_shared<Expr>(Expr{ MemberExpr{ baseName, members.front() } });
+                return apply_colon_chain(std::make_shared<Expr>(Expr{ MemberExpr{ baseName, members.front() } }));
             }
-            return std::make_shared<Expr>(Expr{ ExprIdent{ dottedName } });
+            return apply_colon_chain(std::make_shared<Expr>(Expr{ ExprIdent{ dottedName } }));
         }
-        return std::make_shared<Expr>(Expr{ ExprIdent{ baseName } });
+        return apply_colon_chain(std::make_shared<Expr>(Expr{ ExprIdent{ baseName } }));
     }
-    if (match(TokenKind::LParen)) { auto e = parse_expression(); expect(TokenKind::RParen, ")"); return e; }
+    if (match(TokenKind::LParen)) { auto e = parse_expression(); expect(TokenKind::RParen, ")"); return apply_colon_chain(e); }
     throw std::runtime_error("Expected expression");
 }
 
@@ -339,6 +371,21 @@ Hook Parser::parse_hook() {
 }
 
 GlobalDecl Parser::parse_global() {
+    // optional attributes/modifiers before global
+    auto attrs = parse_attributes();
+    (void)attrs;
+
+    while (true) {
+        bool consumedModifier = false;
+        if (match_word("export")) consumedModifier = true;
+        else if (match_word("public")) consumedModifier = true;
+        else if (match_word("private")) consumedModifier = true;
+
+        if (!consumedModifier) break;
+        skip_separators();
+    }
+
+    skip_separators();
     if (!match_word("global")) throw std::runtime_error("Expected 'global'");
     const Token& nameTok = consume();
     if (!(nameTok.kind == TokenKind::Word || nameTok.kind == TokenKind::Keyword)) throw std::runtime_error("Global name");

@@ -1,0 +1,6 @@
+public action main {
+    let v = input("Enter number: ")
+    print v + 2
+}
+
+run main

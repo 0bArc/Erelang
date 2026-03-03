@@ -1,0 +1,300 @@
+@erelang
+
+public entity GuiLegacy {
+  // Persistent state fields (must exist to survive across method calls)
+  public field handle: str
+  public field grid_x: int
+  public field grid_y: int
+  public field grid_w: int
+  public field grid_h: int
+  public field last_x: int
+  public field last_y: int
+  // Simple form bookkeeping (stores list handles of ids + kinds + optional submit action name)
+  public field form_ids: str
+  public field form_kinds: str
+  public field form_submit: str
+  // Simple stack layout fields
+  public field cur_x: int
+  public field cur_y: int
+  public field line_h: int
+  public field spacing: int
+  public field pad_x: int
+  public field pad_y: int
+  public field default_w: int
+  public field last_w: int
+  public field same_line: int
+  public action init(title: str, w: int, h: int) {
+    if (self.handle != "") { return }
+    let h = win_window_create(title, w, h)
+    self.handle = h
+    self.grid_x = 16
+    self.grid_y = 16
+    self.grid_w = 120
+    self.grid_h = 28
+    // stack defaults
+    self.cur_x = 16
+    self.cur_y = 16
+    self.pad_x = 16
+    self.pad_y = 16
+    self.line_h = 28
+    self.spacing = 8
+    self.default_w = 140
+    self.last_w = 0
+    self.same_line = 0
+  }
+  public action addLabel(text: str, x: int, y: int, w: int, h: int) {
+    win_label_create(self.handle, text, x, y, w, h)
+  }
+  public action addButton(id: str, text: str, x: int, y: int, w: int, h: int) {
+    win_button_create(self.handle, id, text, x, y, w, h)
+  }
+  public action addButtonCb(id: str, text: str, x: int, y: int, w: int, h: int, actionName: str) {
+    addButton(id, text, x, y, w, h)
+    win_on(self.handle, id, actionName)
+  }
+  public action addCheckbox(id: str, text: str, x: int, y: int, w: int, h: int) {
+    win_checkbox_create(self.handle, id, text, x, y, w, h)
+  }
+  public action addCheckboxCb(id: str, text: str, x: int, y: int, w: int, h: int, actionName: str) {
+    addCheckbox(id, text, x, y, w, h)
+    win_on(self.handle, id, actionName)
+  }
+  public action addRadio(id: str, text: str, x: int, y: int, w: int, h: int, groupStart: bool) {
+    win_radiobutton_create(self.handle, id, text, x, y, w, h, groupStart)
+  }
+  public action addRadioCb(id: str, text: str, x: int, y: int, w: int, h: int, groupStart: bool, actionName: str) {
+    addRadio(id, text, x, y, w, h, groupStart)
+    win_on(self.handle, id, actionName)
+  }
+  public action addSlider(id: str, x: int, y: int, w: int, h: int, min: int, max: int, value: int) {
+    win_slider_create(self.handle, id, x, y, w, h, min, max, value)
+  }
+  public action addSliderCb(id: str, x: int, y: int, w: int, h: int, min: int, max: int, value: int, actionName: str) {
+    addSlider(id, x, y, w, h, min, max, value)
+    win_on(self.handle, id, actionName)
+  }
+  public action addTextBox(id: str, x: int, y: int, w: int, h: int) {
+    win_textbox_create(self.handle, id, x, y, w, h)
+  }
+  // Grid helper for textbox
+  public action addTextBoxAt(id: str, col: int, row: int, spanW: int, spanH: int) {
+    gridPlace(col, row)
+    addTextBox(id, self.last_x, self.last_y, (spanW * self.grid_w), (spanH * self.grid_h))
+  }
+  public action addTextBoxAtCb(id: str, col: int, row: int, spanW: int, spanH: int, actionName: str) {
+    addTextBoxAt(id, col, row, spanW, spanH)
+    win_on(self.handle, id, actionName)
+  }
+  public action setTitle(text: str) { win_set_title(self.handle, text) }
+  public action move(x: int, y: int) { win_move(self.handle, x, y) }
+  public action resize(w: int, h: int) { win_resize(self.handle, w, h) }
+  public action setText(id: str, text: str) { win_set_text(self.handle, id, text) }
+  public action getText(id: str) {
+    let v = win_get_text(self.handle, id)
+    print v
+  }
+  public action getCheck(id: str) {
+    let v = win_get_check(self.handle, id)
+    print v
+  }
+  public action setCheck(id: str, v: bool) { win_set_check(self.handle, id, v) }
+  public action getSlider(id: str) {
+    let v = win_get_slider(self.handle, id)
+    print v
+  }
+  public action setSlider(id: str, v: int) { win_set_slider(self.handle, id, v) }
+  public action on(id: str, actionName: str) { win_on(self.handle, id, actionName) }
+  public action show() { win_show(self.handle) }
+  // Convenience: create+show if not created yet
+  public action ensureVisible(title: str, w: int, h: int) {
+    if (self.handle == "") { init(title, w, h) }
+    show()
+  }
+  public action loop(handler: str) { win_loop(handler) }
+  public action setScale(percent: int) { win_set_scale(self.handle, percent) }
+  public action autoScale() { win_auto_scale(self.handle) }
+  public action close() { win_close(self.handle) }
+  public action exit() { win_close(self.handle) }
+
+  // ================= HIGH LEVEL STACK LAYOUT API =================
+  public action stackConfig(padX: int, padY: int, lineH: int, spacing: int, defaultW: int) {
+    self.pad_x = padX
+    self.pad_y = padY
+    self.line_h = lineH
+    self.spacing = spacing
+    self.default_w = defaultW
+    self.cur_x = padX
+    self.cur_y = padY
+  }
+  private action __advance(width: int) {
+    self.last_w = width
+    if (self.same_line == 1) {
+      self.cur_x = self.cur_x + width + self.spacing
+      self.same_line = 0
+    } else {
+      self.cur_x = self.pad_x
+      self.cur_y = self.cur_y + self.line_h + self.spacing
+    }
+  }
+  public action newline() {
+    self.cur_x = self.pad_x
+    self.cur_y = self.cur_y + self.line_h + self.spacing
+  }
+  public action sameLine() { self.same_line = 1 }
+  private action __coords(w: int) {
+    // no-op helper placeholder (kept for readability)
+  }
+  public action open(title: str, w: int, h: int) { ensureVisible(title, w, h) }
+  public action label(text: str) {
+    let w = self.default_w * 2
+    win_label_create(self.handle, text, self.cur_x, self.cur_y, w, self.line_h)
+    __advance(w)
+  }
+  public action button(id: str, text: str, cb: str) {
+    let w = self.default_w
+    win_button_create(self.handle, id, text, self.cur_x, self.cur_y, w, self.line_h)
+    if (cb != "") { win_on(self.handle, id, cb) }
+    __advance(w)
+  }
+  public action checkbox(id: str, text: str, cb: str) {
+    let w = self.default_w
+    win_checkbox_create(self.handle, id, text, self.cur_x, self.cur_y, w, self.line_h)
+    if (cb != "") { win_on(self.handle, id, cb) }
+    __advance(w)
+  }
+  public action radio(id: str, text: str, groupStart: bool, cb: str) {
+    let w = self.default_w
+    win_radiobutton_create(self.handle, id, text, self.cur_x, self.cur_y, w, self.line_h, groupStart)
+    if (cb != "") { win_on(self.handle, id, cb) }
+    __advance(w)
+  }
+  public action slider(id: str, min: int, max: int, value: int, cb: str) {
+    let w = self.default_w * 2
+    win_slider_create(self.handle, id, self.cur_x, self.cur_y, w, self.line_h, min, max, value)
+    if (cb != "") { win_on(self.handle, id, cb) }
+    __advance(w)
+  }
+  public action textbox(id: str, width: int, cb: str) {
+    let w = width
+    if (w == 0) { w = self.default_w * 2 }
+    win_textbox_create(self.handle, id, self.cur_x, self.cur_y, w, self.line_h)
+    if (cb != "") { win_on(self.handle, id, cb) }
+    __advance(w)
+  }
+  public action formBeginSimple() { formBegin() }
+  public action formText(id: str, label: str) { label(label) textbox(id, 0, "") formAddText(id, label, 0, 0, 0, 0) }
+  public action formCheckbox(id: str, label: str) { checkbox(id, label, "") formAddCheckbox(id, label, 0, 0, 0, 0) }
+  public action formSlider(id: str, label: str, min: int, max: int, value: int) { label(label) slider(id, min, max, value, "") formAddSlider(id, 0, 0, 0, 0, min, max, value) }
+  public action formSubmit(label: str, cb: str) { button("__submit", label, cb) }
+  public action formPrintValues() { formValues() }
+
+  // Simple grid placement: set grid cell size and padding
+  public action gridConfig(x: int, y: int, cellW: int, cellH: int) {
+    self.grid_x = x
+    self.grid_y = y
+    self.grid_w = cellW
+    self.grid_h = cellH
+  }
+  public action gridPlace(col: int, row: int) {
+    let gx = self.grid_x
+    let gy = self.grid_y
+    let gw = self.grid_w
+    let gh = self.grid_h
+    let x = gx + (col * (gw + 8))
+    let y = gy + (row * (gh + 8))
+    self.last_x = x
+    self.last_y = y
+  }
+  public action addLabelAt(text: str, col: int, row: int, spanW: int, spanH: int) {
+    gridPlace(col, row)
+    addLabel(text, self.last_x, self.last_y, (spanW * self.grid_w), (spanH * self.grid_h))
+  }
+  public action addButtonAt(id: str, text: str, col: int, row: int, spanW: int, spanH: int) {
+    gridPlace(col, row)
+    addButton(id, text, self.last_x, self.last_y, (spanW * self.grid_w), (spanH * self.grid_h))
+  }
+  public action addButtonAtCb(id: str, text: str, col: int, row: int, spanW: int, spanH: int, actionName: str) {
+    gridPlace(col, row)
+    addButtonCb(id, text, self.last_x, self.last_y, (spanW * self.grid_w), (spanH * self.grid_h), actionName)
+  }
+  // Convenience: register callbacks by id
+  public action onClick(id: str, actionName: str) { win_on(self.handle, id, actionName) }
+  public action onChange(id: str, actionName: str) { win_on(self.handle, id, actionName) }
+  public action addCheckboxAt(id: str, text: str, col: int, row: int, spanW: int, spanH: int) {
+    gridPlace(col, row)
+    addCheckbox(id, text, self.last_x, self.last_y, (spanW * self.grid_w), (spanH * self.grid_h))
+  }
+  public action addCheckboxAtCb(id: str, text: str, col: int, row: int, spanW: int, spanH: int, actionName: str) {
+    gridPlace(col, row)
+    addCheckboxCb(id, text, self.last_x, self.last_y, (spanW * self.grid_w), (spanH * self.grid_h), actionName)
+  }
+  public action addRadioAt(id: str, text: str, col: int, row: int, spanW: int, spanH: int, groupStart: bool) {
+    gridPlace(col, row)
+    addRadio(id, text, self.last_x, self.last_y, (spanW * self.grid_w), (spanH * self.grid_h), groupStart)
+  }
+  public action addRadioAtCb(id: str, text: str, col: int, row: int, spanW: int, spanH: int, groupStart: bool, actionName: str) {
+    gridPlace(col, row)
+    addRadioCb(id, text, self.last_x, self.last_y, (spanW * self.grid_w), (spanH * self.grid_h), groupStart, actionName)
+  }
+  public action addSliderAt(id: str, col: int, row: int, spanW: int, spanH: int, min: int, max: int, value: int) {
+    gridPlace(col, row)
+    addSlider(id, self.last_x, self.last_y, (spanW * self.grid_w), (spanH * self.grid_h), min, max, value)
+  }
+  public action addSliderAtCb(id: str, col: int, row: int, spanW: int, spanH: int, min: int, max: int, value: int, actionName: str) {
+    gridPlace(col, row)
+    addSliderCb(id, self.last_x, self.last_y, (spanW * self.grid_w), (spanH * self.grid_h), min, max, value, actionName)
+  }
+  // --- Simple Form API ----------------------------------------------------
+  // Assumptions: form field kinds: text, check, radio, slider
+  public action formBegin() {
+    self.form_ids = list_new
+    self.form_kinds = list_new
+    self.form_submit = ""
+  }
+  private action __formRemember(id: str, kind: str) {
+    list_push(self.form_ids, id)
+    list_push(self.form_kinds, kind)
+  }
+  public action formAddText(id: str, label: str, col: int, row: int, spanW: int, spanH: int) {
+    addLabelAt(label, col, row, spanW, spanH)
+    addTextBoxAt(id, col + 1, row, spanW, spanH)
+    __formRemember(id, "text")
+  }
+  public action formAddCheckbox(id: str, label: str, col: int, row: int, spanW: int, spanH: int) {
+    addCheckboxAt(id, label, col, row, spanW, spanH)
+    __formRemember(id, "check")
+  }
+  public action formAddRadio(id: str, label: str, col: int, row: int, spanW: int, spanH: int, groupStart: bool) {
+    addRadioAt(id, label, col, row, spanW, spanH, groupStart)
+    __formRemember(id, "radio")
+  }
+  public action formAddSlider(id: str, col: int, row: int, spanW: int, spanH: int, min: int, max: int, value: int) {
+    addSliderAt(id, col, row, spanW, spanH, min, max, value)
+    __formRemember(id, "slider")
+  }
+  public action formOnSubmit(actionName: str) { self.form_submit = actionName }
+  // Collect and print values (id=val). For custom handling attach individual control callbacks or parse printed lines.
+  public action formValues() {
+    let count = list_len(self.form_ids)
+    let i = 0
+    while (i < count) {
+      let id = list_get(self.form_ids, i)
+      let kind = list_get(self.form_kinds, i)
+      if (kind == "text") {
+        let v = win_get_text(self.handle, id)
+        print id + "=" + v
+      }
+      if (kind == "check" || kind == "radio") {
+        let v = win_get_check(self.handle, id)
+        print id + "=" + v
+      }
+      if (kind == "slider") {
+        let v = win_get_slider(self.handle, id)
+        print id + "=" + v
+      }
+      i = i + 1
+    }
+  }
+  // Convenience: show current form then print values when user clicks a submit button tied to actionName.
+  public action formSubmitPrint() { formValues() }
+}

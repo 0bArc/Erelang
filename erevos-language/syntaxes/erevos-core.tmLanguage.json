@@ -1,0 +1,23 @@
+{
+  "scopeName": "source.erelang.core",
+  "name": "Erelang Core Metadata",
+  "fileTypes": ["core"],
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#pair" }
+  ],
+  "repository": {
+    "comment": {
+      "name": "comment.line.number-sign.erelang.core",
+      "match": "#.*$"
+    },
+    "pair": {
+      "name": "meta.assignment.erelang.core",
+      "match": "^(?![#\\s])([^=]+?)\\s*=\\s*(.*)$",
+      "captures": {
+        "1": { "name": "support.type.property-name.erelang.core" },
+        "2": { "name": "string.unquoted.erelang.core" }
+      }
+    }
+  }
+}

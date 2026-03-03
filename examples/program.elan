@@ -1,0 +1,29 @@
+@erelang
+
+#include <builtin/erefs> as fs
+#include <builtin/erepath> as path
+
+
+public action main {
+    let root = path.join(fs.cwd(), "tmp", "erelang_fs_demo")
+    fs.mkdir(root)
+
+    let notes = path.join(root, "notes.txt")
+    fs.write(notes, "hello")
+    fs.append(notes, "\nworld")
+
+
+
+    print "notes content:"
+    print fs.read(notes)
+
+    
+    fs.copy(notes, path.join(root, "notes.backup.txt"))
+    fs.move(path.join(root, "notes.backup.txt"), path.join(root, "notes.moved.txt"))
+
+    print "moved exists = " + fs.exists(path.join(root, "notes.moved.txt"))
+    print "dir listing: " + list_join(fs.list(root), ", ")
+}
+
+run main
+

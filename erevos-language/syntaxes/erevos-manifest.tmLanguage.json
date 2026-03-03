@@ -1,0 +1,7 @@
+{
+  "scopeName": "text.erelang.manifest",
+  "name": "Erelang Plugin Manifest",
+  "patterns": [
+    { "include": "text.xml" }
+  ]
+}

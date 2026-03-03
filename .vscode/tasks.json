@@ -1,0 +1,289 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Run Active erelang",
+			"type": "shell",
+			"command": "${workspaceFolder}/build/erelang.exe",
+			"args": [
+				"${file}"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "Build erelang (CMake + Ninja)",
+			"type": "shell",
+			"command": "cmake",
+			"args": [
+				"-S",
+				".",
+				"-B",
+				"build",
+				"-G",
+				"Ninja",
+				"&&",
+				"cmake",
+				"--build",
+				"build",
+				"--config",
+				"Release"
+			],
+			"problemMatcher": [
+				"$gcc",
+				"$msCompile"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Build erelang (CMake MinGW)",
+			"type": "shell",
+			"command": "cmake",
+			"args": [
+				"-S",
+				".",
+				"-B",
+				"build",
+				"-G",
+				"MinGW Makefiles",
+				"&&",
+				"cmake",
+				"--build",
+				"build",
+				"--config",
+				"Release"
+			],
+			"problemMatcher": [
+				"$gcc",
+				"$msCompile"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Rebuild erelang",
+			"type": "shell",
+			"command": "cmake",
+			"args": [
+				"--build",
+				"build",
+				"--config",
+				"Release"
+			],
+			"problemMatcher": [
+				"$gcc",
+				"$msCompile"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Rebuild erelang fast",
+			"type": "shell",
+			"command": "cmake",
+			"args": [
+				"--build",
+				"build",
+				"--config",
+				"Release",
+				"-j",
+				"4"
+			],
+			"problemMatcher": [
+				"$gcc",
+				"$msCompile"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Rebuild Erelang-in-erelang",
+			"type": "shell",
+			"command": "cmake",
+			"args": [
+				"--build",
+				"build",
+				"--config",
+				"Release"
+			],
+			"problemMatcher": [
+				"$gcc",
+				"$msCompile"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Rebuild after header fixes",
+			"type": "shell",
+			"command": "cmake",
+			"args": [
+				"--build",
+				"build",
+				"--config",
+				"Release"
+			],
+			"problemMatcher": [
+				"$gcc",
+				"$msCompile"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Rebuild after runtime exec ctx",
+			"type": "shell",
+			"command": "cmake",
+			"args": [
+				"--build",
+				"build",
+				"--config",
+				"Release"
+			],
+			"problemMatcher": [
+				"$gcc",
+				"$msCompile"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Rebuild parser params",
+			"type": "shell",
+			"command": "cmake",
+			"args": [
+				"--build",
+				"build",
+				"--config",
+				"Release"
+			],
+			"problemMatcher": [
+				"$gcc",
+				"$msCompile"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Rebuild with Env changes",
+			"type": "shell",
+			"command": "cmake",
+			"args": [
+				"--build",
+				"build",
+				"--config",
+				"Release"
+			],
+			"problemMatcher": [
+				"$gcc",
+				"$msCompile"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Rebuild with operators",
+			"type": "shell",
+			"command": "cmake",
+			"args": [
+				"--build",
+				"build",
+				"--config",
+				"Release"
+			],
+			"problemMatcher": [
+				"$gcc",
+				"$msCompile"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Rebuild with let/return",
+			"type": "shell",
+			"command": "cmake",
+			"args": [
+				"--build",
+				"build",
+				"--config",
+				"Release"
+			],
+			"problemMatcher": [
+				"$gcc",
+				"$msCompile"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Build project",
+			"type": "shell",
+			"command": "cmake --build build --config Debug",
+			"problemMatcher": [
+				"$gcc"
+			]
+		},
+		{
+			"label": "Build after scaling",
+			"type": "shell",
+			"command": "cmake --build build --config Debug",
+			"problemMatcher": [
+				"$gcc"
+			]
+		},
+		{
+			"label": "Rebuild with scaling fixes",
+			"type": "shell",
+			"command": "cmake --build build --config Debug",
+			"problemMatcher": [
+				"$gcc"
+			]
+		},
+		{
+			"label": "Build erelang after runtime changes",
+			"type": "shell",
+			"command": "cmake --build build --config Release -j 8",
+			"problemMatcher": [
+				"$gcc"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Configure & Build (CMake)",
+			"type": "shell",
+			"command": "cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build -j 8",
+			"problemMatcher": [
+				"$gcc"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Configure & Build (CMake, existing generator)",
+			"type": "shell",
+			"command": "cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j 8",
+			"problemMatcher": [
+				"$gcc"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Build after split fixes",
+			"type": "shell",
+			"command": "cmake --build build -j 8",
+			"problemMatcher": [
+				"$gcc"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Rebuild after LTO/guards fixes",
+			"type": "shell",
+			"command": "cmake --build build -j 8",
+			"problemMatcher": [
+				"$gcc"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Configure to refresh CMake after new file",
+			"type": "shell",
+			"command": "cmake -S . -B build -DCMAKE_BUILD_TYPE=Release",
+			"problemMatcher": [
+				"$gcc"
+			],
+			"group": "build"
+		}
+	]
+}

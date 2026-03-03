@@ -1,0 +1,91 @@
+{
+  "name": "erelang-language",
+  "displayName": "Erelang Language",
+  "publisher": "localdev",
+  "description": "Syntax highlighting and language basics for Erelang (.ere/.elan)",
+  "version": "0.0.3",
+  "engines": {
+    "vscode": "^1.104.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:erelang"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "erelang",
+        "aliases": [
+          "Erelang",
+          "erelang"
+        ],
+        "extensions": [
+          ".ere",
+          ".elan",
+          ".0bs"
+        ],
+        "configuration": "./language-configuration.json"
+      },
+      {
+        "id": "erelangManifest",
+        "aliases": [
+          "Erelang Manifest"
+        ],
+        "extensions": [
+          ".elp"
+        ],
+        "configuration": "./language-configuration-manifest.json"
+      },
+      {
+        "id": "erelangCore",
+        "aliases": [
+          "Erelang Core"
+        ],
+        "extensions": [
+          ".core"
+        ],
+        "configuration": "./language-configuration-core.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "erelang",
+        "scopeName": "source.erelang",
+        "path": "./syntaxes/erevos.tmLanguage.json"
+      },
+      {
+        "language": "erelangManifest",
+        "scopeName": "text.erelang.manifest",
+        "path": "./syntaxes/erevos-manifest.tmLanguage.json"
+      },
+      {
+        "language": "erelangCore",
+        "scopeName": "source.erelang.core",
+        "path": "./syntaxes/erevos-core.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "erelang",
+        "path": "./snippets/erevos.code-snippets"
+      }
+    ]
+  },
+  "main": "./out/extension.js",
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package",
+    "test": "echo No tests",
+    "postinstall": "node ./node_modules/vscode/bin/install"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.104.0",
+    "@vscode/vsce": "^3.6.2",
+    "typescript": "^5.5.4",
+    "vsce": "^2.15.0"
+  }
+}

@@ -1,0 +1,24 @@
+@erelang
+
+public entity Person {
+  public field name: str
+  public field age: int
+
+  public action init(name: str, age: int) {
+    self.name = name
+    self.age = age
+  }
+  public action test() {
+    print "void"
+  }
+  public action greet() {
+    print "Hello, my name is {name} and I am {age} years old."
+  }
+}
+
+
+public action main() {
+  let person = new Person()
+  person.init("Alex", 28)
+  person.greet()
+}

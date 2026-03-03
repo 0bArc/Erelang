@@ -1,0 +1,4 @@
+out/test/**
+src/**
+**/*.map
+**/*.ts

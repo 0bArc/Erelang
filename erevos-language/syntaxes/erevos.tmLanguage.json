@@ -1,0 +1,83 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Erelang",
+  "scopeName": "source.erelang",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#includes" },
+    { "include": "#strings" },
+    { "include": "#members" },
+    { "include": "#numbers" },
+    { "include": "#keywords" },
+    { "include": "#directives" },
+    { "include": "#entities" },
+    { "include": "#actions" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        { "name": "comment.line.double-slash.erelang", "match": "//.*$" }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        { "name": "string.quoted.double.erelang", "begin": "\"", "end": "\"", "patterns": [{"match": "\\.", "name": "constant.character.escape.erelang"}] },
+        { "name": "string.quoted.single.erelang", "begin": "'", "end": "'", "patterns": [{"match": "\\.", "name": "constant.character.escape.erelang"}] }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        { "name": "constant.numeric.integer.erelang", "match": "\\b[0-9]+\\b" }
+      ]
+    },
+    "members": {
+      "patterns": [
+        {
+          "name": "meta.member.access.erelang",
+          "match": "\\.([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "entity.name.function.member.erelang" }
+          }
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        { "name": "keyword.control.erelang", "match": "\\b(if|else|while|return|parallel|wait|all|run|fire|pause)\\b" },
+        { "name": "storage.type.erelang", "match": "\\b(void|int|str|bool|list|array|dict|map)\\b" },
+        { "name": "keyword.other.declaration.erelang", "match": "\\b(action|entity|hook|let|const|import|export|public|private|field|new)\\b" },
+        { "name": "constant.language.erelang", "match": "\\b(true|false|null|nil|nullptr)\\b" },
+        { "name": "support.function.builtin.erelang", "match": "\\b(print|PRINT|sleep|now_ms|env|username|computer_name|machine_guid|uuid|rand_int|list_new|list_push|list_len|dict_new|dict_set|dict_get|dict_has|dict_keys|dict_values|dict_get_or|dict_remove|dict_clear|dict_size|dict_merge|dict_clone|dict_items|dict_entries|dict_set_path|dict_get_path|dict_has_path|dict_remove_path|table_new|table_put|table_get|table_has|table_remove|table_rows|table_columns|table_row_keys|table_clear_row|table_count_row|win_window_create|win_button_create|win_checkbox_create|win_radiobutton_create|win_slider_create|win_textbox_create|win_label_create|win_on|win_show|win_loop|win_get_text|win_set_text|win_get_check|win_set_check|win_get_slider|win_set_slider|win_close|win_auto_scale|win_set_scale|ui_window_create|ui_label|ui_button|ui_checkbox|ui_radio|ui_slider|ui_textbox|ui_same_line|ui_newline|ui_spacer|ui_separator|ui_load)\\b" }
+      ]
+    },
+    "includes": {
+      "patterns": [
+        {
+          "name": "meta.preprocessor.include.erelang",
+          "match": "^\\s*(#include)\\s*(<[^>]+>|\"[^\"]+\")\\s*(?:\\b(as)\\b\\s+([A-Za-z_][A-Za-z0-9_]*))?\\s*$",
+          "captures": {
+            "1": { "name": "keyword.control.directive.include.erelang" },
+            "2": { "name": "string.unquoted.include.path.erelang" },
+            "3": { "name": "keyword.other.alias.erelang" },
+            "4": { "name": "variable.other.alias.erelang" }
+          }
+        }
+      ]
+    },
+    "directives": {
+      "patterns": [
+        { "name": "keyword.control.directive.erelang", "match": "@(erelang|strict|debug|deprecated|profile|describe|parallel|pure|final|override|hidden|event)\\b" }
+      ]
+    },
+    "entities": {
+      "patterns": [
+        { "name": "entity.name.type.erelang", "match": "\\bentity\\s+([A-Za-z_][A-Za-z0-9_]*)", "captures": { "1": { "name": "entity.name.type.erelang" } } }
+      ]
+    },
+    "actions": {
+      "patterns": [
+        { "name": "entity.name.function.erelang", "match": "\\baction\\s+([A-Za-z_][A-Za-z0-9_]*)", "captures": { "1": { "name": "entity.name.function.erelang" } } }
+      ]
+    }
+  }
+}

@@ -1,0 +1,16 @@
+# erelang / Erelang Planned Manifest
+name=erelang / Erelang
+author=Unknown Author
+version=1.3.0
+website=https://example.com/
+description=Erelang (erelang) scripting engine with native Win32 GUI helpers and rich built-ins.
+# Comma separated immediate feature highlights (already present)
+features=Native window toolkit,Threading builtins,Regex engine,Data store,Permissions,Binary buffers,Crypto hashing,Collatz benchmark,Filesystem helpers
+# Individual planned roadmap bullets (each line beginning with '-' or '*')
+- JSON module (parse/stringify, json_get/json_set)
+- WebSockets client (ws_connect/ws_send/ws_recv)
+- Strong crypto (sha256, hmac_sha256, aes_encrypt/aes_decrypt)
+- Bitwise operators & atomic primitives
+- Bulk HTTP and streaming download APIs
+- Pack/unpack binary helpers
+- Profiling & jit_enable experimental

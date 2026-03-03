@@ -1,0 +1,13 @@
+{
+  "keywords": ["action", "entity", "hook", "run", "print", "sleep", "parallel", "wait", "all", "let", "const", "return", "if", "else", "switch", "case", "default", "pause", "input", "public", "private", "export", "import", "null", "nil", "nullptr"],
+  "directives": ["erelang", "strict", "debug", "deprecated", "profile", "describe", "parallel", "pure", "final", "override", "hidden", "event"],
+  "types": ["void", "int", "str", "bool", "list", "array", "dict", "map"],
+  "operators": ["+", "-", "*", "/", "%", "==", "!=", "<", "<=", ">", ">=", "&&", "||", "=", "!"],
+  "brackets": {"lbrace": "{", "rbrace": "}", "lparen": "(", "rparen": ")"},
+  "comment": "//",
+  "stringQuotes": ["\"", "'"],
+  "visibilityModifiers": ["public", "private"],
+  "attributePrefix": "@",
+  "requiredHooks": ["onStart", "onEnd"],
+  "requiredEntry": "main"
+}

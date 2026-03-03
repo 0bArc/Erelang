@@ -1,0 +1,186 @@
+@erelang
+
+public entity Gui {
+  public field handle: str
+  public field pad_x: int
+  public field pad_y: int
+  public field line_h: int
+  public field spacing_x: int
+  public field spacing_y: int
+  public field default_w: int
+
+  public action init(title: str, w: int, h: int) {
+    if (self.handle != "") { return }
+    if (self.line_h == 0) { stackConfig(16, 16, 28, 8, 140) }
+    self.handle = win_window_create(title, w, h)
+    if (self.handle == "") { return }
+    win_layout_config(self.handle, self.pad_x, self.pad_y, self.line_h, self.spacing_x, self.spacing_y, self.default_w)
+  }
+
+  public action stackConfig(padX: int, padY: int, lineH: int, spacing: int, defaultW: int) {
+    self.pad_x = padX
+    self.pad_y = padY
+    self.line_h = lineH
+    self.spacing_x = spacing
+    self.spacing_y = spacing
+    self.default_w = defaultW
+    if (self.handle != "") {
+      win_layout_config(self.handle, padX, padY, lineH, spacing, spacing, defaultW)
+    }
+  }
+
+  public action layoutConfig(padX: int, padY: int, lineH: int, spacingX: int, spacingY: int, defaultW: int) {
+    self.pad_x = padX
+    self.pad_y = padY
+    self.line_h = lineH
+    self.spacing_x = spacingX
+    self.spacing_y = spacingY
+    self.default_w = defaultW
+    if (self.handle != "") {
+      win_layout_config(self.handle, padX, padY, lineH, spacingX, spacingY, defaultW)
+    }
+  }
+
+  public action ensureVisible(title: str, w: int, h: int) {
+    if (self.handle == "") { init(title, w, h) }
+    show()
+  }
+
+  private action hasWindow(): bool {
+    if (self.handle == "") {
+      print "[gui] window not initialised"
+      return false
+    }
+    return true
+  }
+
+  public action label(text: str) {
+    if (hasWindow() == false) { return }
+    ui_label(self.handle, text, 0, self.line_h)
+  }
+
+  public action button(id: str, text: str, cb: str) {
+    if (hasWindow() == false) { return }
+    ui_button(self.handle, id, text, cb, self.default_w, self.line_h)
+  }
+
+  public action checkbox(id: str, text: str, cb: str) {
+    if (hasWindow() == false) { return }
+    ui_checkbox(self.handle, id, text, cb, self.default_w, self.line_h, false)
+  }
+
+  public action radio(id: str, text: str, groupStart: bool, cb: str) {
+    if (hasWindow() == false) { return }
+    ui_radio(self.handle, id, text, groupStart, cb, self.default_w, self.line_h, false)
+  }
+
+  public action slider(id: str, min: int, max: int, value: int, cb: str) {
+    if (hasWindow() == false) { return }
+    ui_slider(self.handle, id, min, max, value, cb, self.default_w * 2, self.line_h)
+  }
+
+  public action textbox(id: str, width: int, cb: str) {
+    if (hasWindow() == false) { return }
+    let w = width
+    if (w == 0) { w = self.default_w * 2 }
+    ui_textbox(self.handle, id, "", cb, w, self.line_h)
+  }
+
+  public action sameLine() {
+    if (hasWindow() == false) { return }
+    ui_same_line(self.handle)
+  }
+  public action newline() {
+    if (hasWindow() == false) { return }
+    ui_newline(self.handle)
+  }
+
+  public action spacer(width: int, height: int) {
+    if (hasWindow() == false) { return }
+    ui_spacer(self.handle, width, height)
+  }
+
+  public action separator(width: int) {
+    if (hasWindow() == false) { return }
+    ui_separator(self.handle, width, 2)
+  }
+
+  public action pushWidth(width: int) {
+    if (hasWindow() == false) { return }
+    win_layout_push_width(self.handle, width)
+  }
+
+  public action popWidth() {
+    if (hasWindow() == false) { return }
+    win_layout_pop_width(self.handle)
+  }
+
+  public action resetCursor() {
+    if (hasWindow() == false) { return }
+    win_layout_reset(self.handle)
+  }
+
+  public action show() {
+    if (hasWindow() == false) { return }
+    win_show(self.handle)
+  }
+
+  public action loop(handler: str) { win_loop(handler) }
+
+  public action setScale(percent: int) {
+    if (hasWindow() == false) { return }
+    win_set_scale(self.handle, percent)
+  }
+
+  public action autoScale() {
+    if (hasWindow() == false) { return }
+    win_auto_scale(self.handle)
+  }
+
+  public action setText(id: str, text: str) {
+    if (hasWindow() == false) { return }
+    win_set_text(self.handle, id, text)
+  }
+
+  public action getText(id: str) {
+    if (hasWindow() == false) { return }
+    let v = win_get_text(self.handle, id)
+    print v
+  }
+
+  public action setCheck(id: str, value: bool) {
+    if (hasWindow() == false) { return }
+    win_set_check(self.handle, id, value)
+  }
+
+  public action getCheck(id: str) {
+    if (hasWindow() == false) { return }
+    let v = win_get_check(self.handle, id)
+    print v
+  }
+
+  public action setSlider(id: str, value: int) {
+    if (hasWindow() == false) { return }
+    win_set_slider(self.handle, id, value)
+  }
+
+  public action getSlider(id: str) {
+    if (hasWindow() == false) { return }
+    let v = win_get_slider(self.handle, id)
+    print v
+  }
+
+  public action on(id: str, actionName: str) {
+    if (hasWindow() == false) { return }
+    win_on(self.handle, id, actionName)
+  }
+
+  public action close() {
+    if (hasWindow() == false) { return }
+    win_close(self.handle)
+  }
+
+  public action load(path: str, handler: str) {
+    self.handle = ui_load(path, handler, true, false)
+  }
+}

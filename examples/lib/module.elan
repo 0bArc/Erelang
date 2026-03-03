@@ -1,0 +1,4 @@
+
+public action hook {
+    print "hook loaded"
+}

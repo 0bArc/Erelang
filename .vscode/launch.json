@@ -1,0 +1,35 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run Active erelang (erelang)",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/erelang.exe",
+      "args": ["${file}"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "preLaunchTask": "Rebuild erelang fast"
+    },
+    {
+      "name": "Run Active erelang (debug driver)",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/erelang.exe",
+      "args": ["${file}", "--debug"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "preLaunchTask": "Rebuild erelang fast"
+    },
+    {
+      "name": "Compile Active erelang -> app.exe",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/erelang.exe",
+      "args": ["--compile", "${file}", "--output", "${fileDirname}/app.exe"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "preLaunchTask": "Rebuild erelang fast"
+    }
+  ]
+}

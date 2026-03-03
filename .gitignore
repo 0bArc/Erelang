@@ -1,0 +1,114 @@
+# Build directories and CMake artifacts
+/build/
+/build-*/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+compile_commands.json
+
+# Dependencies fetched via FetchContent
+_deps/
+build/_deps/
+
+# Binary outputs
+*.exe
+*.dll
+*.dll.a
+*.lib
+*.pdb
+*.ilk
+*.obj
+*.o
+*.pch
+*.ipch
+*.exp
+
+# Logs & generated data
+*.log
+*.tmp
+*.cache
+
+# VSCode / IDE
+/.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/c_cpp_properties.json
+
+# Archives & zips not meant for source control
+*.zip
+*.7z
+*.tar
+*.tar.gz
+Workspace.zip
+examples.zip
+Erelang/erelang.zip
+
+# Node modules (VSCode extension project)
+erelang-language/node_modules/
+erelang-language/out/
+
+# ImGui INI state (runtime window layout)
+imgui.ini
+build/imgui.ini
+
+vscode
+
+# Generated test artifacts
+test_print.0bs
+
+# OS cruft
+Thumbs.db
+Desktop.ini
+
+# Crash dumps
+*.dmp
+
+# Devlog and debug output
+devlog/
+examples/debug/
+tmp/
+
+# Plugin build artifacts
+plugins/*/build/
+plugins/*/bin/
+
+# Language server outputs
+vscode/0bskript-semantic/
+vscode/0bskript-vscode/
+vscode/lang/
+
+# Ignore workspace settings
+*.code-workspace
+
+# Ignore images and large assets
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.svg
+*.webp
+
+# Policy and config backups
+*.cfg.bak
+
+# Rebranding and temp scripts
+tools/tmp-rebrand-erelang.ps1
+
+# Manifest and implementation logs
+implemented.manifest
+
+# Ignore other temp files
+erevos_full_guide.md
+kick off.md
+LICENSE.md
+
+
+plugins
+BOILERPLATE.md
+
+plugins.md
+syntax.md

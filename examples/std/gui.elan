@@ -1,0 +1,40 @@
+@erelang
+
+entity Window {
+  action init(title: str, w: int, h: int) {
+    // handled natively when constructing new Window; no-op here
+  }
+  action button(id: str, text: str, x: int, y: int, w: int, h: int) {
+    // native
+  }
+  action checkbox(id: str, text: str, x: int, y: int, w: int, h: int) {
+    // native
+  }
+  action radio(id: str, text: str, x: int, y: int, w: int, h: int, groupStart: bool) {
+    // native
+  }
+  action slider(id: str, x: int, y: int, w: int, h: int, min: int, max: int, value: int) {
+    // native
+  }
+  action onClick(id: str, actionName: str) {
+    // native
+  }
+  action onChange(id: str, actionName: str) {
+    // native
+  }
+  action show() {
+    // native
+  }
+  action label(text: str, x: int, y: int, w: int, h: int) {
+    // native
+  }
+  action nativeMessageBox(title: str, message: str) {
+    // native
+  }
+  action setScale(percent: int) {
+    // native
+  }
+  action close() {
+    // native
+  }
+}

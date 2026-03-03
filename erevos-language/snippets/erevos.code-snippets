@@ -1,0 +1,20 @@
+{
+  "Action": {
+    "prefix": "action",
+    "body": [
+      "public action ${1:name}(${2:param}: ${3:type}) {",
+      "  ${0}// body",
+      "}"
+    ],
+    "description": "Create an action"
+  },
+  "Entity": {
+    "prefix": "public entity",
+    "body": [
+      "entity ${1:Name} {",
+      "  ${0}",
+      "}"
+    ],
+    "description": "Create an entity"
+  }
+}

@@ -30,12 +30,7 @@ build/_deps/
 *.cache
 
 # VSCode / IDE
-/.vscode/*
-!.vscode/settings.json
-!.vscode/extensions.json
-!.vscode/tasks.json
-!.vscode/launch.json
-!.vscode/c_cpp_properties.json
+.vscode/
 
 # Archives & zips not meant for source control
 *.zip
@@ -113,13 +108,8 @@ BOILERPLATE.md
 plugins.md
 syntax.md
 
-# Ignore .github except tracked config/docs
+# Ignore .github
 .github/
 
-# Ignore .vscode except tracked config files
+# Ignore .vscode
 .vscode/
-.vscode/settings.json
-.vscode/extensions.json
-.vscode/tasks.json
-.vscode/launch.json
-.vscode/c_cpp_properties.json

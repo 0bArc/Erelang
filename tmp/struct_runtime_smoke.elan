@@ -10,12 +10,6 @@ public action main {
   print "before {p.name} {p.age}"
   p.age = 19
   print "after {p.name} {p.age}"
-
-   Map<string, any> meta = { "Age": 18 }
-
-   for (x,y : meta) {
-    print y
-   }
 }
 
 run main

@@ -1,4 +1,6 @@
 #include "erelang/typechecker.hpp"
+#include <algorithm>
+#include <cctype>
 #include <unordered_set>
 
 namespace erelang {
@@ -43,6 +45,25 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
             inferred = TypeInfo{"entity:" + node.typeName};
         } else if constexpr (std::is_same_v<T, MemberExpr>) {
             inferred = {"unknown"};
+            if (ctx.scopes) {
+                if (auto* owner = ctx.scopes->lookup(node.objectName)) {
+                    std::string otype = owner->type.name;
+                    const std::string prefix = "struct:";
+                    if (otype.rfind(prefix, 0) == 0 && ctx.program) {
+                        const std::string structName = otype.substr(prefix.size());
+                        for (const auto& sd : ctx.program->structs) {
+                            if (sd.name != structName) continue;
+                            for (const auto& field : sd.fields) {
+                                if (field.name == node.field) {
+                                    inferred = { field.type.empty() ? "unknown" : field.type };
+                                    break;
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
         } else if constexpr (std::is_same_v<T, FunctionCallExpr>) {
             // action or builtin
             auto aIt = tc_.actions_.find(node.name);
@@ -90,7 +111,94 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
             for (auto& a : stmt.args) expr_.check(a, ctx);
         } else if constexpr (std::is_same_v<T, LetStmt>) {
             if (scopes.lookup(stmt.name)) DiagBuilder(result_, Severity::Error, "Variable redeclaration: " + stmt.name, "TC030", ctx.actionName()).emit();
-            VarInfo vi; vi.type = expr_.check(stmt.value, ctx); vi.isConst = stmt.isConst; vi.assigned=true; scopes.declare(stmt.name, vi);
+            VarInfo vi; vi.type = expr_.check(stmt.value, ctx); vi.isConst = stmt.isConst; vi.assigned=true;
+            if (!stmt.declaredType.empty()) {
+                std::string decl = stmt.declaredType;
+                std::transform(decl.begin(), decl.end(), decl.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+                decl.erase(std::remove_if(decl.begin(), decl.end(), [](unsigned char c){ return std::isspace(c) != 0; }), decl.end());
+                if (ctx.program) {
+                    for (const auto& alias : ctx.program->typeAliases) {
+                        std::string aliasName = alias.name;
+                        std::transform(aliasName.begin(), aliasName.end(), aliasName.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+                        aliasName.erase(std::remove_if(aliasName.begin(), aliasName.end(), [](unsigned char c){ return std::isspace(c) != 0; }), aliasName.end());
+                        if (aliasName == decl) {
+                            decl = alias.targetType;
+                            std::transform(decl.begin(), decl.end(), decl.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+                            decl.erase(std::remove_if(decl.begin(), decl.end(), [](unsigned char c){ return std::isspace(c) != 0; }), decl.end());
+                            break;
+                        }
+                    }
+                }
+                const std::string declNormalized = decl;
+                bool known = true;
+                std::string expected = "unknown";
+                if (decl == "auto") {
+                    expected = vi.type.name;
+                } else if (decl == "any") {
+                    expected = "unknown";
+                } else if (decl == "int") {
+                    expected = "int";
+                } else if (decl == "double" || decl == "float") {
+                    expected = "double";
+                } else if (decl == "bool") {
+                    expected = "bool";
+                } else if (decl == "string" || decl == "str" || decl == "char") {
+                    expected = "string";
+                } else if (decl == "array" || decl.rfind("array<", 0) == 0) {
+                    expected = "array<any>";
+                } else if (decl == "map" || decl.rfind("map<", 0) == 0 || decl == "dictionary") {
+                    expected = "map<any,any>";
+                } else if (ctx.program) {
+                    bool matchedStruct = false;
+                    for (const auto& sd : ctx.program->structs) {
+                        std::string structName = sd.name;
+                        std::transform(structName.begin(), structName.end(), structName.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+                        structName.erase(std::remove_if(structName.begin(), structName.end(), [](unsigned char c){ return std::isspace(c) != 0; }), structName.end());
+                        if (structName == declNormalized) {
+                            expected = "struct:" + sd.name;
+                            matchedStruct = true;
+                            break;
+                        }
+                    }
+                    if (!matchedStruct) {
+                        for (const auto& en : ctx.program->enums) {
+                            std::string enumName = en.name;
+                            std::transform(enumName.begin(), enumName.end(), enumName.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+                            enumName.erase(std::remove_if(enumName.begin(), enumName.end(), [](unsigned char c){ return std::isspace(c) != 0; }), enumName.end());
+                            if (enumName == declNormalized) {
+                                expected = "enum:" + en.name;
+                                matchedStruct = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!matchedStruct) {
+                        known = false;
+                        DiagBuilder(result_, Severity::Error, "Unknown declared type: " + stmt.declaredType, "TC041", ctx.actionName()).emit();
+                    }
+                } else {
+                    known = false;
+                    DiagBuilder(result_, Severity::Error, "Unknown declared type: " + stmt.declaredType, "TC041", ctx.actionName()).emit();
+                }
+                auto is_compatible = [&](const std::string& exp, const std::string& actual) {
+                    if (exp == "unknown" || actual == "unknown") return true;
+                    if (exp == actual) return true;
+                    if (exp == "array<any>" && actual.rfind("array", 0) == 0) return true;
+                    if (exp == "map<any,any>" && actual.rfind("map", 0) == 0) return true;
+                    if (exp.rfind("struct:", 0) == 0 && actual.rfind("dict:", 0) == 0) return true;
+                    if (exp.rfind("struct:", 0) == 0 && (actual.rfind("map", 0) == 0 || actual == "map<any,any>")) return true;
+                    return false;
+                };
+                if (known && !is_compatible(expected, vi.type.name)) {
+                    DiagBuilder(result_, Severity::Error,
+                        "Type mismatch in declaration: " + stmt.name,
+                        "TC042", ctx.actionName()).emit();
+                }
+                if (known && expected != "unknown") {
+                    vi.type = TypeInfo{expected};
+                }
+            }
+            scopes.declare(stmt.name, vi);
         } else if constexpr (std::is_same_v<T, ReturnStmt>) {
             if (retType == "void") {
                 if (stmt.value) expr_.check(*stmt.value, ctx);
@@ -134,9 +242,23 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
         } else if constexpr (std::is_same_v<T, ForInStmt>) {
             auto guard = scopes.push();
             VarInfo vi; vi.assigned=true; scopes.declare(stmt.var, vi);
+            if (stmt.valueVar) {
+                VarInfo vv; vv.assigned=true; scopes.declare(*stmt.valueVar, vv);
+            }
             expr_.check(stmt.iterable, ctx); // iterable validation later
             CheckContext inner = ctx; inner.loop = LoopCtx::InLoop; inner.scopes = ctx.scopes;
             check_block(*stmt.body, inner, scopes, retType);
+        } else if constexpr (std::is_same_v<T, TryCatchStmt>) {
+            {
+                auto guardTry = scopes.push();
+                check_block(*stmt.tryBlk, ctx, scopes, retType);
+            }
+            {
+                auto guardCatch = scopes.push();
+                VarInfo errVar; errVar.type = {"string"}; errVar.assigned = true;
+                scopes.declare(stmt.catchVar, errVar);
+                check_block(*stmt.catchBlk, ctx, scopes, retType);
+            }
         } else if constexpr (std::is_same_v<T, SwitchStmt>) {
             expr_.check(stmt.selector, ctx);
             for (auto& c : stmt.cases) { auto guardC = scopes.push(); check_block(*c.body, ctx, scopes, retType); }
@@ -180,6 +302,12 @@ void TypeChecker::pass_collect(const Program& program) {
 void TypeChecker::pass_check_program(const Program& program, TCResult& out) {
     std::unordered_set<std::string> seen;
     for (auto& a : program.actions) if (!seen.insert(a.name).second) DiagBuilder(out, Severity::Error, "Duplicate action: " + a.name, "TC100", a.name).emit();
+    std::unordered_set<std::string> seenStruct;
+    for (auto& s : program.structs) if (!seenStruct.insert(s.name).second) DiagBuilder(out, Severity::Error, "Duplicate struct: " + s.name, "TC104", s.name).emit();
+    std::unordered_set<std::string> seenEnum;
+    for (auto& e : program.enums) if (!seenEnum.insert(e.name).second) DiagBuilder(out, Severity::Error, "Duplicate enum: " + e.name, "TC105", e.name).emit();
+    std::unordered_set<std::string> seenAlias;
+    for (auto& a : program.typeAliases) if (!seenAlias.insert(a.name).second) DiagBuilder(out, Severity::Error, "Duplicate type alias: " + a.name, "TC106", a.name).emit();
     std::unordered_set<std::string> seenE;
     for (auto& e : program.entities) {
         if (!seenE.insert(e.name).second) DiagBuilder(out, Severity::Error, "Duplicate entity: " + e.name, "TC101", e.name).emit();
@@ -223,17 +351,17 @@ void TypeChecker::init_builtins() {
     add("env",1,1,"string"); add("username",0,0,"string"); add("machine_guid",0,0,"string"); add("computer_name",0,0,"string"); add("volume_serial",0,0,"string"); add("hwid",0,0,"string"); add("rand_int",0,2,"int"); add("uuid",0,0,"string");
     add("args_count",0,0,"int"); add("args_get",1,1,"string");
     add("exec",1,1,"int"); add("run_file",1,1,"void"); add("run_bat",1,1,"void"); add("read_line",0,0,"string"); add("input",0,1,"string"); add("prompt",1,1,"string");
-    add("toint",1,1,"int"); add("toInt",1,1,"int"); add("tostr",1,1,"string"); add("toString",1,1,"string"); add("tofloat",1,1,"string");
+    add("toint",1,1,"int"); add("toInt",1,1,"int"); add("tostr",1,1,"string"); add("toString",1,1,"string"); add("tofloat",1,1,"double"); add("tobool",1,1,"bool");
     add("string.lstrip",1,1,"string"); add("string.rstrip",1,1,"string"); add("string.strip",1,1,"string"); add("string.lower",1,1,"string"); add("string.upper",1,1,"string");
     // Filesystem
     add("read_text",1,1,"string"); add("write_text",2,2,"void"); add("append_text",2,2,"void"); add("file_exists",1,1,"bool"); add("mkdirs",1,1,"void"); add("copy_file",2,2,"bool"); add("move_file",2,2,"bool"); add("delete_file",1,1,"bool");
     add("list_files",1,1,"unknown"); add("cwd",0,0,"string"); add("chdir",1,1,"bool");
     add("path_join",1,-1,"string"); add("path_dirname",1,1,"string"); add("path_basename",1,1,"string"); add("path_ext",1,1,"string");
     // Collections
-    add("list_new",0,-1,"unknown"); add("list_push",2,2,"void"); add("list_get",2,2,"unknown"); add("list_len",1,1,"int"); add("list_join",2,2,"string"); add("list_clear",1,1,"void"); add("list_remove_at",2,2,"void");
-    add("dict_new",0,-1,"unknown"); add("dict_set",3,-1,"void"); add("dict_get",2,-1,"unknown"); add("dict_has",2,-1,"bool"); add("dict_keys",1,1,"unknown"); add("dict_values",1,1,"unknown");
+    add("list_new",0,-1,"array<any>"); add("list_push",2,2,"void"); add("list_get",2,2,"unknown"); add("list_len",1,1,"int"); add("list_join",2,2,"string"); add("list_clear",1,1,"void"); add("list_remove_at",2,2,"void");
+    add("dict_new",0,-1,"map<any,any>"); add("dict_set",3,-1,"void"); add("dict_get",2,-1,"unknown"); add("dict_has",2,-1,"bool"); add("dict_keys",1,1,"array<any>"); add("dict_values",1,1,"array<any>");
     add("dict_get_or",3,-1,"unknown"); add("dict_remove",2,-1,"bool"); add("dict_clear",1,1,"void"); add("dict_size",1,1,"int");
-    add("dict_merge",2,2,"void"); add("dict_clone",1,1,"unknown"); add("dict_items",1,1,"unknown"); add("dict_entries",1,1,"unknown");
+    add("dict_merge",2,2,"void"); add("dict_clone",1,1,"map<any,any>"); add("dict_items",1,1,"array<any>"); add("dict_entries",1,1,"array<any>");
     add("dict_set_path",3,3,"void"); add("dict_get_path",2,3,"unknown"); add("dict_has_path",2,2,"bool"); add("dict_remove_path",2,2,"bool");
     add("table_new",0,0,"unknown"); add("table_put",4,4,"void"); add("table_get",3,4,"unknown"); add("table_has",3,3,"bool");
     add("table_remove",3,3,"bool"); add("table_rows",1,1,"unknown"); add("table_columns",1,1,"unknown"); add("table_row_keys",2,2,"unknown");

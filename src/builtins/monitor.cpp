@@ -52,6 +52,28 @@ std::mutex g_monitorsMutex;
 std::unordered_map<int, std::unique_ptr<MonRecord>> g_monitors; // id -> record
 int g_nextMonId = 1;
 
+static void stop_all_monitors() {
+    std::unordered_map<int, std::unique_ptr<MonRecord>> local;
+    {
+        std::lock_guard<std::mutex> lg(g_monitorsMutex);
+        local.swap(g_monitors);
+    }
+    for (auto& kv : local) {
+        auto& rec = kv.second;
+        if (!rec) continue;
+        rec->running = false;
+        if (rec->worker.joinable()) rec->worker.join();
+    }
+}
+
+struct MonitorShutdownCleanup {
+    ~MonitorShutdownCleanup() {
+        stop_all_monitors();
+    }
+};
+
+MonitorShutdownCleanup g_monitorShutdownCleanup;
+
 static uint64_t file_time_to_uint64(const std::filesystem::file_time_type& ft) {
     using namespace std::chrono;
     auto sctp = time_point_cast<system_clock::duration>(ft - std::filesystem::file_time_type::clock::now()

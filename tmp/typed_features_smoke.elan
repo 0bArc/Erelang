@@ -1,0 +1,21 @@
+@erelang
+
+public action main {
+  int age = 18
+  auto score = static_cast<int>("42")
+  Array<string> names = ["A", "B"]
+  Map<string, any> meta = { "Age": age }
+
+  try {
+    print "age={age}, score={score}, len={names:len()}"
+  } catch (err) {
+    print "caught: {err}"
+  }
+
+  match age {
+    case 18 { print "adult" }
+    default { print "other" }
+  }
+}
+
+run main

@@ -1,0 +1,9 @@
+@erelang
+public action main {
+  let d = {"name":"alex", "age":18}
+  for (k, v in d) {
+    print k
+    print v
+  }
+}
+run main

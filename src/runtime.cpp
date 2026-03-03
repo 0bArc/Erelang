@@ -1319,6 +1319,9 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
     if (nameStr == "toString") {
         return argS(0);
     }
+    if (nameStr == "tobool") {
+        return is_truthy(argS(0)) ? std::string("true") : std::string("false");
+    }
     if (nameStr == "string.lstrip") {
         std::string s = argS(0);
         size_t i = 0;
@@ -1526,6 +1529,9 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
     if (nameStr == "list_new") {
         int id = g_nextListId++;
         g_lists[id] = {};
+        for (const auto& a : args) {
+            g_lists[id].push_back(eval_string(*a, env));
+        }
         return std::string("list:") + std::to_string(id);
     }
     if (nameStr == "list_push") {
@@ -1569,6 +1575,12 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
     if (nameStr == "dict_new") {
         int id = g_nextDictId++;
         g_dicts[id] = {};
+        // Optional key/value varargs: dict_new("k1", v1, "k2", v2, ...)
+        for (std::size_t i = 0; i + 1 < args.size(); i += 2) {
+            std::string key = eval_string(*args[i], env);
+            std::string value = eval_string(*args[i + 1], env);
+            g_dicts[id][key] = value;
+        }
         return std::string("dict:") + std::to_string(id);
     }
     auto join_builtin_path = [&](size_t from, size_t toExclusive) -> std::string {
@@ -2838,6 +2850,16 @@ std::string Runtime::eval_string(const Expr& e, const Env& env) const {
         std::string ls = eval_string(*b.left, env);
         std::string rs = eval_string(*b.right, env);
         int64_t li = to_int(ls), ri = to_int(rs);
+        auto is_explicit_string_expr = [](const ExprPtr& expr) -> bool {
+            if (!expr) return false;
+            if (std::holds_alternative<ExprString>(expr->node)) return true;
+            if (std::holds_alternative<FunctionCallExpr>(expr->node)) {
+                const auto& fc = std::get<FunctionCallExpr>(expr->node);
+                if (fc.name == "tostr" || fc.name == "toString") return true;
+                if (fc.name.rfind("string.", 0) == 0) return true;
+            }
+            return false;
+        };
         // Lightweight unit arithmetic: pattern <int><unit>, same unit on both sides
         auto parseUnit = [](const std::string& s) -> std::optional<std::pair<long long,std::string>> {
             if (s.empty() || !std::isdigit(static_cast<unsigned char>(s[0]))) return std::nullopt;
@@ -2871,11 +2893,18 @@ std::string Runtime::eval_string(const Expr& e, const Env& env) const {
         switch (b.op) {
             case BinOp::Add: {
                 if (auto r = unitAddSub(BinOp::Add); !r.empty()) return r;
-                if ((is_char_like(ls) && is_int_string(rs)) || (is_int_string(ls) && is_char_like(rs))) {
+                const bool leftIsInt = is_int_string(ls);
+                const bool rightIsInt = is_int_string(rs);
+                if ((is_char_like(ls) && rightIsInt) || (leftIsInt && is_char_like(rs))) {
                     throw std::runtime_error("Illegal operation: char + int");
                 }
-                if (is_int_string(ls) && is_int_string(rs)) return std::to_string(li + ri);
-                if (!is_int_string(ls) && !is_int_string(rs)) return ls + rs;
+                if (leftIsInt && rightIsInt) {
+                    if (is_explicit_string_expr(b.left) || is_explicit_string_expr(b.right)) return ls + rs;
+                    return std::to_string(li + ri);
+                }
+                if (!leftIsInt && !rightIsInt) return ls + rs;
+                if (!leftIsInt && rightIsInt && is_explicit_string_expr(b.right)) return ls + rs;
+                if (leftIsInt && !rightIsInt && is_explicit_string_expr(b.left)) return ls + rs;
                 throw std::runtime_error("Illegal operation: string + int");
             }
             case BinOp::Sub: {
@@ -2920,6 +2949,11 @@ std::string Runtime::eval_string(const Expr& e, const Env& env) const {
             auto fit = oit->second->fields.find(m.field);
             if (fit != oit->second->fields.end()) return fit->second;
         }
+        auto sv = env.vars.find(m.objectName);
+        if (sv != env.vars.end() && sv->second.rfind("struct:", 0) == 0) {
+            auto fit = env.vars.find(m.objectName + "." + m.field);
+            if (fit != env.vars.end()) return fit->second;
+        }
         auto it = env.vars.find(m.objectName + "." + m.field);
         if (it != env.vars.end()) return it->second;
         return {};
@@ -2947,6 +2981,13 @@ const Hook* Runtime::find_hook(const Program& program, std::string_view name) co
 
 const Entity* Runtime::find_entity(const Program& program, std::string_view name) const {
     for (const auto& e : program.entities) if (e.name == name) return &e;
+    return nullptr;
+}
+
+static const StructDecl* find_struct_decl(const Program& program, std::string_view name) {
+    for (const auto& s : program.structs) {
+        if (s.name == name) return &s;
+    }
     return nullptr;
 }
 
@@ -2994,6 +3035,42 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
     }
     if (std::holds_alternative<LetStmt>(s)) {
         const auto& st = std::get<LetStmt>(s);
+        if (!st.declaredType.empty()) {
+            if (const StructDecl* sd = find_struct_decl(program, st.declaredType)) {
+                env.vars[st.name] = std::string("struct:") + sd->name;
+                for (const auto& f : sd->fields) {
+                    env.vars[st.name + "." + f.name] = std::string{};
+                }
+
+                const std::string initValue = eval_string(*st.value, env);
+                if (initValue.rfind("dict:", 0) == 0) {
+                    const int id = to_int(initValue.substr(5));
+                    auto dit = g_dicts.find(id);
+                    if (dit != g_dicts.end()) {
+                        for (const auto& f : sd->fields) {
+                            auto fit = dit->second.find(f.name);
+                            if (fit != dit->second.end()) {
+                                env.vars[st.name + "." + f.name] = fit->second;
+                            }
+                        }
+                    }
+                } else if (std::holds_alternative<ExprIdent>(st.value->node)) {
+                    const auto& sourceName = std::get<ExprIdent>(st.value->node).name;
+                    auto sit = env.vars.find(sourceName);
+                    if (sit != env.vars.end() && sit->second == (std::string("struct:") + sd->name)) {
+                        for (const auto& f : sd->fields) {
+                            auto srcField = env.vars.find(sourceName + "." + f.name);
+                            if (srcField != env.vars.end()) {
+                                env.vars[st.name + "." + f.name] = srcField->second;
+                            }
+                        }
+                    }
+                }
+
+                if (globalNames_.count(st.name)) globalVars_[st.name] = env.vars[st.name];
+                return;
+            }
+        }
         // Support object construction on right-hand side: let x = new Type(args)
         if (std::holds_alternative<NewExpr>(st.value->node)) {
             const auto& ne = std::get<NewExpr>(st.value->node);
@@ -3113,8 +3190,14 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
     }
     if (std::holds_alternative<ForInStmt>(s)) {
         const auto& st = std::get<ForInStmt>(s);
+        if (!st.usedColon) {
+            throw std::runtime_error("For-each iteration must use ':' syntax");
+        }
         std::string iter = eval_string(*st.iterable, env);
         if (iter.rfind("list:", 0) == 0) {
+            if (st.valueVar) {
+                throw std::runtime_error("List iteration supports only one variable: for (item : list)");
+            }
             int id = to_int(iter.substr(5));
             auto it = g_lists.find(id);
             if (it != g_lists.end()) {
@@ -3128,10 +3211,25 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
             auto it = g_dicts.find(id);
             if (it != g_dicts.end()) {
                 for (const auto& kv : it->second) {
-                    env.vars[st.var] = kv.first;
+                    if (st.valueVar) {
+                        env.vars[st.var] = kv.first;
+                        env.vars[*st.valueVar] = kv.second;
+                    } else {
+                        env.vars[st.var] = kv.first;
+                    }
                     exec_block(*st.body, program, ctx, env);
                 }
             }
+        }
+        return;
+    }
+    if (std::holds_alternative<TryCatchStmt>(s)) {
+        const auto& st = std::get<TryCatchStmt>(s);
+        try {
+            exec_block(*st.tryBlk, program, ctx, env);
+        } catch (const std::exception& ex) {
+            env.vars[st.catchVar] = ex.what();
+            exec_block(*st.catchBlk, program, ctx, env);
         }
         return;
     }
@@ -3152,7 +3250,15 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 throw std::runtime_error("Cannot assign to builtin module alias: " + st.objectName + "." + st.varOrField);
             }
             auto it = env.objects.find(st.objectName);
-            if (it == env.objects.end()) throw std::runtime_error("Unknown object: " + st.objectName);
+            if (it == env.objects.end()) {
+                auto structIt = env.vars.find(st.objectName);
+                if (structIt != env.vars.end() && structIt->second.rfind("struct:", 0) == 0) {
+                    std::string val = eval_string(*st.value, env);
+                    env.vars[st.objectName + "." + st.varOrField] = val;
+                    return;
+                }
+                throw std::runtime_error("Unknown object: " + st.objectName);
+            }
             std::string val = eval_string(*st.value, env);
             it->second->fields[st.varOrField] = val;
             if (st.objectName == "self") {

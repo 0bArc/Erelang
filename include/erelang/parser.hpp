@@ -41,7 +41,7 @@ struct WaitAllStmt {};
 struct PauseStmt {};
 struct InputStmt { std::string name; };
 struct FireStmt { std::string name; };
-struct LetStmt { bool isConst{false}; std::string name; ExprPtr value; };
+struct LetStmt { bool isConst{false}; std::string name; ExprPtr value; std::string declaredType; };
 struct ReturnStmt { std::optional<ExprPtr> value; };
 struct SetStmt { bool isMember{false}; std::string varOrField; std::string objectName; ExprPtr value; };
 struct MethodCallStmt { std::string objectName; std::string method; std::vector<ExprPtr> args; };
@@ -55,9 +55,10 @@ struct ForStmt {
     std::shared_ptr<Block> step; // optional single-statement block
     std::shared_ptr<Block> body;
 };
-struct ForInStmt { std::string var; ExprPtr iterable; std::shared_ptr<Block> body; };
+struct ForInStmt { std::string var; std::optional<std::string> valueVar; bool usedColon{false}; ExprPtr iterable; std::shared_ptr<Block> body; };
+struct TryCatchStmt { std::shared_ptr<Block> tryBlk; std::string catchVar; std::shared_ptr<Block> catchBlk; };
 
-using Statement = std::variant<PrintStmt, SleepStmt, ActionCallStmt, std::shared_ptr<ParallelStmt>, WaitAllStmt, PauseStmt, InputStmt, FireStmt, LetStmt, ReturnStmt, SetStmt, MethodCallStmt, IfStmt, SwitchStmt, WhileStmt, ForStmt, ForInStmt>;
+using Statement = std::variant<PrintStmt, SleepStmt, ActionCallStmt, std::shared_ptr<ParallelStmt>, WaitAllStmt, PauseStmt, InputStmt, FireStmt, LetStmt, ReturnStmt, SetStmt, MethodCallStmt, IfStmt, SwitchStmt, WhileStmt, ForStmt, ForInStmt, TryCatchStmt>;
 
 struct Block { std::vector<Statement> stmts; };
 
@@ -75,6 +76,7 @@ struct Action {
     bool exported{false};
     std::vector<Attribute> attributes;
     std::string sourcePath; // file where declared
+    bool isAsync{false};
 };
 
 struct Hook { std::string name; Block body; std::string sourcePath; std::vector<Attribute> attributes; };
@@ -98,11 +100,19 @@ struct ImportDecl {
     bool pluginGlob{false};
 };
 
+struct StructFieldDecl { std::string name; std::string type; };
+struct StructDecl { std::string name; std::vector<StructFieldDecl> fields; };
+struct EnumDecl { std::string name; std::vector<std::string> members; };
+struct TypeAliasDecl { std::string name; std::string targetType; };
+
 struct Program {
     std::vector<Action> actions;
     std::vector<Hook> hooks;
     std::vector<Entity> entities;
     std::vector<ImportDecl> imports; // module paths
+    std::vector<StructDecl> structs;
+    std::vector<EnumDecl> enums;
+    std::vector<TypeAliasDecl> typeAliases;
     std::vector<std::string> pluginAliases; // aliases referencing /plugins/* glob
     std::vector<GlobalDecl> globals;
     std::vector<Attribute> directives; // file-level @directives
@@ -134,9 +144,14 @@ private:
     WhileStmt parse_while();
     ForStmt parse_for();
     ForInStmt parse_for_in_after_lparen();
+    TryCatchStmt parse_try_catch();
     IfStmt parse_if();
     SwitchStmt parse_switch();
+    StructDecl parse_struct();
+    EnumDecl parse_enum();
+    TypeAliasDecl parse_type_alias();
     std::vector<Attribute> parse_attributes();
+    std::string parse_type_annotation();
     ExprPtr parse_expression();
     ExprPtr parse_coalesce();
     ExprPtr parse_or();

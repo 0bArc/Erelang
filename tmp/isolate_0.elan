@@ -1,0 +1,5 @@
+@erelang
+public action main {
+	print 1
+}
+run main

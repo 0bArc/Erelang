@@ -1,0 +1,6 @@
+@erelang
+public action main {
+	let d = {"name": "alex"}
+	print 1
+}
+run main

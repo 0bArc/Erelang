@@ -1,0 +1,11 @@
+@erelang
+
+public action main {
+  let array = [1,2,3]
+  for (i, v : array) {
+    print i
+    print v
+  }
+}
+
+run main

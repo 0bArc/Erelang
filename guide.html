@@ -8,269 +8,62 @@
   <meta http-equiv="Referrer-Policy" content="no-referrer">
   <meta http-equiv="Permissions-Policy" content="accelerometer=(), camera=(), geolocation=(), gyroscope=(), microphone=(), payment=(), usb=()">
   <meta name="color-scheme" content="dark">
-  
-  <style>
+  <meta name="description" content="Official technical documentation for Erelang and the Erevos platform. A modern, block-based scripting language with native Windows GUI integration, security-hardened runtime, and a robust plugin system.">
+<meta name="keywords" content="Erelang, Erevos, Scripting Language, Win32 GUI, C++20 Runtime, Block-based Language, Software Documentation">
+<meta name="author" content="Erevos Team">
+<link rel="canonical" href="https://your-domain.com/guide-portal.html">
+
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://your-domain.com/guide-portal.html">
+<meta property="og:title" content="Erevos Guide Portal | Erelang Technical Reference">
+<meta property="og:description" content="Explore the full technical map of Erevos: Lexer, Parser, Runtime Engine, and Windows GUI bridge.">
+<meta property="og:image" content="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%230b0f14'/><text y='50%' x='50%' fill='%234bc0ff' text-anchor='middle' font-family='serif' font-size='20'>E</text></svg>">
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "Erevos Guide Portal",
+  "description": "Unified documentation for Erelang language basics, runtime architecture, and Windows GUI integration.",
+  "proficiencyLevel": "Advanced",
+  "contentReferenceTime": "2026-03-03T14:00:00Z",
+  "author": {
+    "@type": "Organization",
+    "name": "Erevos"
+  }
+}
+</script>
+        <style>
     :root {
-      --bg: #0b0f14;
-      --bg-2: #101923;
-      --paper: #131c27;
-      --paper-2: #172433;
-      --ink: #e9eef4;
-      --muted: #9aabc0;
-      --accent: #4bc0ff;
-      --line: #233648;
-      --line-soft: #1a2938;
-      --code-bg: #0a1118;
-      --code-ink: #dff0ff;
-      --chip: #1a2f43;
-      --shadow: 0 12px 34px rgba(0, 0, 0, 0.45);
+      --bg:#0b0c10; --panel:#111318; --panel2:#151922; --line:#343946; --line-soft:#232734;
+      --text:#dde6ff; --muted:#a2acc5; --link:#8ab4ff; --accent:#66a3ff; --ok:#7ddc6d;
+      --code:#0a0d13; --code-line:#1f2431;
     }
-
-    * { box-sizing: border-box; }
-
-    html, body {
-      margin: 0;
-      padding: 0;
-      background:
-        radial-gradient(1200px 700px at 90% -10%, #17324a 0%, transparent 45%),
-        radial-gradient(900px 700px at -20% 10%, #14283c 0%, transparent 42%),
-        linear-gradient(180deg, var(--bg) 0%, var(--bg-2) 100%);
-      color: var(--ink);
-      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
-      line-height: 1.72;
-      min-height: 100%;
-    }
-
-    a { color: inherit; }
-
-    .wrap {
-      max-width: 1500px;
-      margin: 0 auto;
-      padding: 22px;
-      display: grid;
-      grid-template-columns: 320px minmax(0, 1fr);
-      gap: 20px;
-    }
-
-    .sidebar {
-      position: sticky;
-      top: 16px;
-      align-self: start;
-      max-height: calc(100vh - 32px);
-      overflow: auto;
-      background: rgba(19, 28, 39, 0.9);
-      border: 1px solid var(--line);
-      border-radius: 16px;
-      box-shadow: var(--shadow);
-      padding: 16px;
-      backdrop-filter: blur(6px);
-    }
-
-    .brand {
-      margin-bottom: 12px;
-      padding-bottom: 10px;
-      border-bottom: 1px solid var(--line);
-    }
-
-    .brand h1 {
-      margin: 0;
-      font-size: 1.2rem;
-      letter-spacing: 0.02em;
-    }
-
-    .brand p {
-      margin: 6px 0 0;
-      font-size: 0.82rem;
-      color: var(--muted);
-    }
-
-    .toc-group { margin-top: 12px; }
-
-    .toc-group h2 {
-      margin: 0 0 8px;
-      font-size: 0.74rem;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      color: #88a0ba;
-    }
-
-    .toc-item {
-      display: block;
-      text-decoration: none;
-      padding: 5px 8px;
-      border-radius: 8px;
-      color: #d0def0;
-      font-size: 0.88rem;
-      transition: background .15s ease, transform .15s ease, color .15s ease;
-    }
-
-    .toc-item:hover {
-      background: #1a2f43;
-      color: #ecf7ff;
-      transform: translateX(2px);
-    }
-
-    .toc-item.level-2 { padding-left: 20px; font-size: 0.84rem; color: #b2c5dc; }
-    .toc-item.level-3 { padding-left: 32px; font-size: 0.8rem; color: #93aaca; }
-
-    .content {
-      min-width: 0;
-      display: grid;
-      gap: 16px;
-    }
-
-    .hero, .card {
-      background: linear-gradient(180deg, var(--paper) 0%, var(--paper-2) 100%);
-      border: 1px solid var(--line);
-      border-radius: 18px;
-      box-shadow: var(--shadow);
-    }
-
-    .hero {
-      padding: 24px;
-      position: relative;
-      overflow: hidden;
-    }
-
-    .hero::after {
-      content: "";
-      position: absolute;
-      right: -60px;
-      top: -60px;
-      width: 240px;
-      height: 240px;
-      background: radial-gradient(circle, rgba(75,192,255,.18) 0%, rgba(75,192,255,0) 72%);
-      pointer-events: none;
-    }
-
-    .hero h1 {
-      margin: 0;
-      font-size: clamp(1.7rem, 3.8vw, 2.8rem);
-      line-height: 1.1;
-      letter-spacing: -0.012em;
-      font-family: "Palatino Linotype", "Book Antiqua", serif;
-    }
-
-    .hero p {
-      margin: 12px 0 0;
-      max-width: 76ch;
-      color: var(--muted);
-    }
-
-    .security {
-      margin-top: 14px;
-      font-size: .9rem;
-      color: #cde8ff;
-      border-left: 4px solid var(--accent);
-      background: rgba(11, 34, 54, .35);
-      padding: 10px 12px;
-      border-radius: 8px;
-    }
-
-    .card { padding: 22px; }
-
-    .card h2.section-title {
-      margin-top: 0;
-      margin-bottom: 8px;
-      font-size: 1.25rem;
-      letter-spacing: .01em;
-    }
-
-    .doc {
-      max-width: 100ch;
-      margin: 0 auto;
-    }
-
-    .doc h1, .doc h2, .doc h3, .doc h4, .doc h5, .doc h6 {
-      scroll-margin-top: 20px;
-      line-height: 1.26;
-      margin-top: 1.35em;
-      margin-bottom: .5em;
-      color: #f0f6ff;
-      font-family: "Palatino Linotype", "Book Antiqua", serif;
-    }
-
-    .doc h1 {
-      font-size: 1.86rem;
-      border-bottom: 1px solid var(--line);
-      padding-bottom: .28em;
-    }
-    .doc h2 { font-size: 1.42rem; }
-    .doc h3 { font-size: 1.18rem; color: #d4e8ff; }
-
-    .doc p {
-      margin: .54em 0;
-      color: #d8e5f4;
-      overflow-wrap: anywhere;
-    }
-
-    .doc ul, .doc ol {
-      margin: .55em 0 .76em;
-      padding-left: 1.5em;
-    }
-
-    .doc li { margin: .3em 0; color: #d8e5f4; }
-
-    .doc strong { color: #ffffff; font-weight: 700; }
-    .doc em { color: #d6edff; }
-
-    .doc code {
-      background: var(--chip);
-      border: 1px solid #33526c;
-      border-radius: 6px;
-      padding: .08em .36em;
-      color: #f2f8ff;
-      font-family: "Consolas", "Cascadia Mono", monospace;
-      font-size: .92em;
-    }
-
-    .doc pre.code {
-      margin: .82em 0 1.02em;
-      padding: 14px 16px;
-      border-radius: 12px;
-      border: 1px solid #2a4258;
-      background: var(--code-bg);
-      color: var(--code-ink);
-      overflow: auto;
-      box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
-    }
-
-    .doc pre.code code {
-      background: transparent;
-      border: 0;
-      color: inherit;
-      padding: 0;
-      border-radius: 0;
-      font-size: .93rem;
-      white-space: pre;
-      display: block;
-    }
-
-    .doc hr {
-      border: 0;
-      border-top: 1px dashed #2a4258;
-      margin: 1.2em 0;
-    }
-
-    .jump {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      text-decoration: none;
-      background: #12324a;
-      border: 1px solid #2f5f82;
-      color: #dff2ff;
-      padding: 8px 12px;
-      border-radius: 10px;
-      font-size: .9rem;
-      font-weight: 600;
-      margin-top: 10px;
-    }
-
-    @media (max-width: 1024px) {
-      .wrap { grid-template-columns: 1fr; }
-      .sidebar { position: relative; top: 0; max-height: none; }
-    }
+    *{box-sizing:border-box}
+    html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:Segoe UI,Tahoma,Arial,sans-serif;line-height:1.5}
+    a{color:var(--link);text-decoration:none} a:hover{text-decoration:underline}
+    .wrap{max-width:1600px;margin:0 auto;padding:8px;display:grid;grid-template-columns:310px minmax(0,1fr);gap:8px}
+    .sidebar{position:sticky;top:8px;max-height:calc(100vh - 16px);overflow:auto;background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line)}
+    .brand{padding:10px;border-bottom:1px solid var(--line)} .brand h1{margin:0;font-size:1.2rem;font-weight:600} .brand p{margin:4px 0 0;color:var(--muted);font-size:.82rem}
+    .toc-group{padding:8px 10px;border-bottom:1px solid var(--line-soft)} .toc-group h2{margin:0 0 6px;font-size:.78rem;color:#c8d6ff;text-transform:uppercase;letter-spacing:.04em}
+    .toc-item{display:block;padding:2px 6px;border:1px solid transparent;color:var(--link)} .toc-item:hover{background:#151a24;border-color:#2f3a54;text-decoration:none}
+    .toc-item.level-2{padding-left:16px;font-size:.9rem}.toc-item.level-3{padding-left:26px;font-size:.84rem;color:#a9c3ff}
+    .content{display:grid;gap:8px}.hero,.card{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line)}
+    .hero{padding:14px}.hero h1{margin:0 0 6px;font:600 2.05rem/1.1 Georgia,serif;color:#eaf1ff}.hero p{margin:8px 0;color:#c5d0ea}
+    .security{border-left:4px solid var(--accent);background:#131b2b;padding:8px 10px}
+    .jump{display:inline-block;margin-top:10px;padding:4px 8px;border:1px solid #2f4166;background:#121a2b}
+    .ref-index{padding:10px}.ref-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+    .ref-col h3{margin:0 0 6px;font:600 1.4rem/1 Georgia,serif;color:#cfe0ff;border-bottom:1px solid var(--line);padding-bottom:6px}
+    .ref-col ul{list-style:none;margin:0;padding:0}.ref-col li{margin:3px 0;color:#c2d2f7}.since{color:var(--ok);font-size:.8em}
+    .doc{max-width:118ch;margin:0 auto;padding:2px 2px 14px}.card{padding:12px}.card h2.section-title{margin:0 0 6px;font:600 1.3rem Georgia,serif}
+    .doc h1,.doc h2,.doc h3{font-family:Georgia,serif;color:#e8efff}.doc h1{border-bottom:1px solid var(--line)} .doc h2{border-bottom:1px solid var(--line-soft)}
+    .doc p,.doc li{color:#d8e2f8}.doc code{background:#0f1420;border:1px solid #2a3751;padding:.05em .32em;border-radius:2px;color:#dce8ff;font-family:Consolas,Cascadia Mono,monospace}
+    .doc pre{background:var(--code);border:1px solid var(--line);border-left:4px solid #46639e;padding:10px;overflow:auto;position:relative}
+    .doc pre code{border:none;background:transparent;padding:0;display:block;white-space:pre}
+    .tok-comment{color:#7f8ba3}.tok-string{color:#d7ba7d}.tok-number{color:#b5cea8}.tok-kw{color:#569cd6;font-weight:600}
+    .tok-type{color:#4ec9b0}.tok-const{color:#9cdcfe}.tok-builtin{color:#c586c0}.tok-directive{color:#dcdcaa}.tok-member{color:#80cbc4}.tok-op{color:#9aa6c0}
+    .doc table{border-collapse:collapse;width:100%;font-size:.92rem}.doc th,.doc td{border:1px solid var(--line);padding:6px 8px}.doc th{background:#171d2b}
+    @media (max-width:1100px){.wrap{grid-template-columns:1fr}.sidebar{position:static;max-height:none}.ref-grid{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
@@ -329,8 +122,9 @@
 <a class="toc-item level-3" href="#full-plugin-alias-seeding">Plugin alias seeding</a>
 <a class="toc-item level-3" href="#full-windows-gui-bridge">Windows GUI bridge</a>
 <a class="toc-item level-2" href="#full-builtins">Builtins</a>
-<a class="toc-item level-3" href="#full-builtins-inside-runtimecpp">Builtins inside `runtime.cpp`</a>
-<a class="toc-item level-3" href="#full-external-builtin-modules-srcbuiltinscpp">External builtin modules (`src/builtins/*.cpp`)</a>
+<a class="toc-item level-3" href="#full-builtins-index">Builtins Summary</a>
+<a class="toc-item level-3" href="#full-builtins-string-methods">String Methods</a>
+<a class="toc-item level-3" href="#full-builtins-ui-window">UI / Window Methods</a>
 <a class="toc-item level-2" href="#full-plugin-system">Plugin System</a>
 <a class="toc-item level-3" href="#full-discovery-and-manifest-parsing-srcpluginscpp">Discovery and manifest parsing (`src/plugins.cpp`)</a>
 <a class="toc-item level-3" href="#full-creation-kit-srccreationkitcpp">Creation Kit (`src/creation_kit.cpp`)</a>
@@ -360,6 +154,44 @@
           no JavaScript execution, no form endpoints, anti-XSS by HTML-encoding all source markdown before rendering.
         </p>
         <a class="jump" href="#full-doc">Jump to Full Technical Guide</a>
+      
+      <section class="card ref-index" aria-label="Reference Index">
+        <div class="ref-grid">
+          <div class="ref-col">
+            <h3>Language</h3>
+            <ul>
+              <li>Core Syntax</li>
+              <li>Actions, Entities, Hooks <span class="since">(stable)</span></li>
+              <li>Directives and Attributes</li>
+              <li>Control Flow</li>
+              <li>Imports and Modules</li>
+              <li>Plugin Manifest Model</li>
+            </ul>
+          </div>
+          <div class="ref-col">
+            <h3>Libraries</h3>
+            <ul>
+              <li>String Methods: <code>:lstrip</code>, <code>:strip</code>, <code>:upper</code></li>
+              <li>Collections and Tables <span class="since">(rich)</span></li>
+              <li>Filesystem and Path</li>
+              <li>Network + Diagnostics</li>
+              <li>Threads and Monitor</li>
+              <li>UI and Window Toolkit</li>
+            </ul>
+          </div>
+          <div class="ref-col">
+            <h3>Tooling</h3>
+            <ul>
+              <li>CLI Runner and Compiler</li>
+              <li>C ABI Embedding Layer</li>
+              <li>Creation Kit</li>
+              <li>VSIX Grammar + Completion</li>
+              <li>Source-Mapped Builtins Table</li>
+              <li>Reference Coverage from <code>src/*.cpp</code></li>
+            </ul>
+          </div>
+        </div>
+      </section>
       </header>
 
       <section class="card" id="classic-doc">
@@ -393,33 +225,30 @@
 <li><strong>Setup:</strong></li>
 </ul>
 <pre class="code"><code>
-  cmake -S . -B build -G &quot;MinGW Makefiles&quot;
-  cmake --build build --config Release
-</code></pre>
+  cmake <span class="tok-op">-</span>S <span class="tok-op">.</span> <span class="tok-op">-</span>B build <span class="tok-op">-</span>G <span class="tok-string">&quot;MinGW Makefiles&quot;</span>
+  cmake <span class="tok-op">-</span><span class="tok-op">-</span>build build <span class="tok-op">-</span><span class="tok-op">-</span>config Release</code></pre>
 <ul>
 <li><strong>Run Example:</strong></li>
 </ul>
 <pre class="code"><code>
-  ./build/erelang.exe examples/program.0bs
-</code></pre>
+  <span class="tok-op">.</span><span class="tok-op">/</span>build<span class="tok-op">/</span>erelang.exe examples<span class="tok-op">/</span>program.elan</code></pre>
 <ul>
 <li><strong>VS Code:</strong> Install and build the Erelang extension for syntax, completions, and commands.</li>
 </ul>
 <h2 id="classic-3-language-basics">3. Language Basics</h2>
 <ul>
-<li><strong>File extension:</strong> <code>.0bs</code></li>
+<li><strong>File extension:</strong> <code>.elan</code> (legacy <code>.0bs</code> is deprecated)</li>
 <li><strong>Entry point:</strong> <code>run &lt;actionName&gt;</code></li>
 <li><strong>Blocks:</strong> Use <code>{ ... }</code> for actions, hooks, entities.</li>
 <li><strong>Minimal Example:</strong></li>
 </ul>
 <pre class="code"><code>
-  @erelang
-  public action main {
-    let num = 1
-    print num + 2
-  }
-  run main
-</code></pre>
+  <span class="tok-directive">@erelang</span>
+  <span class="tok-kw">public</span> <span class="tok-kw">action</span> main <span class="tok-op">{</span>
+    <span class="tok-kw">let</span> num <span class="tok-op">=</span> <span class="tok-number">1</span>
+    <span class="tok-kw">print</span> num <span class="tok-op">+</span> <span class="tok-number">2</span>
+  <span class="tok-op">}</span>
+  <span class="tok-kw">run</span> main</code></pre>
 <ul>
 <li><strong>Variables:</strong> <code>let x = 2 + 3 * 4</code></li>
 <li><strong>Print:</strong> <code>print &quot;Hello {x}&quot;</code></li>
@@ -431,60 +260,54 @@
 <li><strong>If/Else:</strong></li>
 </ul>
 <pre class="code"><code>
-  if (score &gt;= 90) { print &quot;A&quot; } else { print &quot;Other&quot; }
-</code></pre>
+  <span class="tok-kw">if</span> <span class="tok-op">(</span>score <span class="tok-op">&gt;</span><span class="tok-op">=</span> <span class="tok-number">90</span><span class="tok-op">)</span> <span class="tok-op">{</span> <span class="tok-kw">print</span> <span class="tok-string">&quot;A&quot;</span> <span class="tok-op">}</span> <span class="tok-kw">else</span> <span class="tok-op">{</span> <span class="tok-kw">print</span> <span class="tok-string">&quot;Other&quot;</span> <span class="tok-op">}</span></code></pre>
 <ul>
 <li><strong>Switch:</strong></li>
 </ul>
 <pre class="code"><code>
-  switch state {
-    case &quot;idle&quot; { print &quot;Waiting&quot; }
-    default { print &quot;Unknown&quot; }
-  }
-</code></pre>
+  <span class="tok-kw">switch</span> state <span class="tok-op">{</span>
+    <span class="tok-kw">case</span> <span class="tok-string">&quot;idle&quot;</span> <span class="tok-op">{</span> <span class="tok-kw">print</span> <span class="tok-string">&quot;Waiting&quot;</span> <span class="tok-op">}</span>
+    <span class="tok-kw">default</span> <span class="tok-op">{</span> <span class="tok-kw">print</span> <span class="tok-string">&quot;Unknown&quot;</span> <span class="tok-op">}</span>
+  <span class="tok-op">}</span></code></pre>
 <ul>
 <li><strong>Loops:</strong></li>
 </ul>
 <pre class="code"><code>
-  for (let i = 0; i &lt; 5; i = i + 1) { print i }
-  while (remaining &gt; 0) { print remaining; remaining = remaining - 1 }
-</code></pre>
+  <span class="tok-kw">for</span> <span class="tok-op">(</span><span class="tok-kw">let</span> i <span class="tok-op">=</span> <span class="tok-number">0</span>; i <span class="tok-op">&lt;</span> <span class="tok-number">5</span>; i <span class="tok-op">=</span> i <span class="tok-op">+</span> <span class="tok-number">1</span><span class="tok-op">)</span> <span class="tok-op">{</span> <span class="tok-kw">print</span> i <span class="tok-op">}</span>
+  <span class="tok-kw">while</span> <span class="tok-op">(</span>remaining <span class="tok-op">&gt;</span> <span class="tok-number">0</span><span class="tok-op">)</span> <span class="tok-op">{</span> <span class="tok-kw">print</span> remaining; remaining <span class="tok-op">=</span> remaining <span class="tok-op">-</span> <span class="tok-number">1</span> <span class="tok-op">}</span></code></pre>
 <h2 id="classic-5-data-structures">5. Data Structures</h2>
 <ul>
 <li><strong>Lists:</strong></li>
 </ul>
 <pre class="code"><code>
-  let xs = list_new()
-  list_push(xs, &quot;alpha&quot;)
-  print list_len(xs)
-</code></pre>
+  <span class="tok-kw">let</span> xs <span class="tok-op">=</span> <span class="tok-builtin">list_new</span><span class="tok-op">(</span><span class="tok-op">)</span>
+  <span class="tok-builtin">list_push</span><span class="tok-op">(</span>xs<span class="tok-op">,</span> <span class="tok-string">&quot;alpha&quot;</span><span class="tok-op">)</span>
+  <span class="tok-kw">print</span> <span class="tok-builtin">list_len</span><span class="tok-op">(</span>xs<span class="tok-op">)</span></code></pre>
 <ul>
 <li><strong>Dictionaries:</strong></li>
 </ul>
 <pre class="code"><code>
-  let d = dict_new()
-  dict_set(d, &quot;name&quot;, &quot;Erelang&quot;)
-  print dict_get(d, &quot;name&quot;)
-</code></pre>
+  <span class="tok-kw">let</span> d <span class="tok-op">=</span> <span class="tok-builtin">dict_new</span><span class="tok-op">(</span><span class="tok-op">)</span>
+  <span class="tok-builtin">dict_set</span><span class="tok-op">(</span>d<span class="tok-op">,</span> <span class="tok-string">&quot;name&quot;</span><span class="tok-op">,</span> <span class="tok-string">&quot;Erelang&quot;</span><span class="tok-op">)</span>
+  <span class="tok-kw">print</span> <span class="tok-builtin">dict_get</span><span class="tok-op">(</span>d<span class="tok-op">,</span> <span class="tok-string">&quot;name&quot;</span><span class="tok-op">)</span></code></pre>
 <h2 id="classic-6-entities-and-oop">6. Entities and OOP</h2>
 <ul>
 <li><strong>Entities:</strong></li>
 </ul>
 <pre class="code"><code>
-  public entity Person {
-    public field name: str
-    public field age: int
-    public action init(name: str, age: int) {
-      self.name = name
-      self.age = age
-    }
-    public action describe(): str {
-      return &quot;{name} ({age})&quot;
-    }
-  }
-  let p = new Person(&quot;Erelang&quot;, 27)
-  print p.describe()
-</code></pre>
+  <span class="tok-kw">public</span> <span class="tok-kw">entity</span> Person <span class="tok-op">{</span>
+    <span class="tok-kw">public</span> <span class="tok-kw">field</span> name: <span class="tok-type">str</span>
+    <span class="tok-kw">public</span> <span class="tok-kw">field</span> age: <span class="tok-type">int</span>
+    <span class="tok-kw">public</span> <span class="tok-kw">action</span> init<span class="tok-op">(</span>name: <span class="tok-type">str</span><span class="tok-op">,</span> age: <span class="tok-type">int</span><span class="tok-op">)</span> <span class="tok-op">{</span>
+      self.name <span class="tok-op">=</span> name
+      self.age <span class="tok-op">=</span> age
+    <span class="tok-op">}</span>
+    <span class="tok-kw">public</span> <span class="tok-kw">action</span> describe<span class="tok-op">(</span><span class="tok-op">)</span>: <span class="tok-type">str</span> <span class="tok-op">{</span>
+      <span class="tok-kw">return</span> <span class="tok-string">&quot;{name} ({age})&quot;</span>
+    <span class="tok-op">}</span>
+  <span class="tok-op">}</span>
+  <span class="tok-kw">let</span> p <span class="tok-op">=</span> <span class="tok-kw">new</span> Person<span class="tok-op">(</span><span class="tok-string">&quot;Erelang&quot;</span><span class="tok-op">,</span> <span class="tok-number">27</span><span class="tok-op">)</span>
+  <span class="tok-kw">print</span> p.describe<span class="tok-op">(</span><span class="tok-op">)</span></code></pre>
 <h2 id="classic-7-built-in-functions-modules">7. Built-in Functions &amp; Modules</h2>
 <ul>
 <li><strong>System:</strong> <code>now_ms()</code>, <code>env(name)</code>, <code>username()</code>, <code>hwid()</code></li>
@@ -500,66 +323,59 @@
 <li><strong>Parallel block:</strong></li>
 </ul>
 <pre class="code"><code>
-  parallel {
-    print &quot;A&quot;
-    print &quot;B&quot;
-  }
-  wait all
-</code></pre>
+  <span class="tok-kw">parallel</span> <span class="tok-op">{</span>
+    <span class="tok-kw">print</span> <span class="tok-string">&quot;A&quot;</span>
+    <span class="tok-kw">print</span> <span class="tok-string">&quot;B&quot;</span>
+  <span class="tok-op">}</span>
+  <span class="tok-kw">wait</span> <span class="tok-kw">all</span></code></pre>
 <ul>
 <li><strong>Threads:</strong></li>
 </ul>
 <pre class="code"><code>
-  let handle = thread_run(&quot;worker&quot;)
-  thread_join(handle)
-</code></pre>
+  <span class="tok-kw">let</span> handle <span class="tok-op">=</span> <span class="tok-builtin">thread_run</span><span class="tok-op">(</span><span class="tok-string">&quot;worker&quot;</span><span class="tok-op">)</span>
+  <span class="tok-builtin">thread_join</span><span class="tok-op">(</span>handle<span class="tok-op">)</span></code></pre>
 <h2 id="classic-9-plugins-extensibility">9. Plugins &amp; Extensibility</h2>
 <ul>
 <li><strong>Plugin Example:</strong></li>
 </ul>
 <pre class="code"><code>
-  @plugin(&quot;example.logger&quot;)
-  public action log(msg: str) { print &quot;[logger] {msg}&quot; }
-  hook onLoad { print &quot;[logger] ready&quot; }
-  hook onUnload { print &quot;[logger] bye&quot; }
-</code></pre>
+  @plugin<span class="tok-op">(</span><span class="tok-string">&quot;example.logger&quot;</span><span class="tok-op">)</span>
+  <span class="tok-kw">public</span> <span class="tok-kw">action</span> log<span class="tok-op">(</span>msg: <span class="tok-type">str</span><span class="tok-op">)</span> <span class="tok-op">{</span> <span class="tok-kw">print</span> <span class="tok-string">&quot;[logger] {msg}&quot;</span> <span class="tok-op">}</span>
+  <span class="tok-kw">hook</span> onLoad <span class="tok-op">{</span> <span class="tok-kw">print</span> <span class="tok-string">&quot;[logger] ready&quot;</span> <span class="tok-op">}</span>
+  <span class="tok-kw">hook</span> onUnload <span class="tok-op">{</span> <span class="tok-kw">print</span> <span class="tok-string">&quot;[logger] bye&quot;</span> <span class="tok-op">}</span></code></pre>
 <ul>
 <li><strong>Importing Plugins:</strong></li>
 </ul>
 <pre class="code"><code>
-  import &quot;@example.logger&quot;
-  log(&quot;ready&quot;)
-</code></pre>
+  <span class="tok-kw">import</span> <span class="tok-string">&quot;@example.logger&quot;</span>
+  log<span class="tok-op">(</span><span class="tok-string">&quot;ready&quot;</span><span class="tok-op">)</span></code></pre>
 <h2 id="classic-10-windows-gui-helpers">10. Windows GUI Helpers</h2>
 <ul>
 <li><strong>Direct API:</strong></li>
 </ul>
 <pre class="code"><code>
-  let win = win_window_create(&quot;Demo&quot;, 400, 240)
-  win_button_create(win, &quot;ok&quot;, &quot;OK&quot;, -1, -1, 120, 32)
-  win_show(win)
-  win_loop(&quot;onEvent&quot;)
-</code></pre>
+  <span class="tok-kw">let</span> win <span class="tok-op">=</span> <span class="tok-builtin">win_window_create</span><span class="tok-op">(</span><span class="tok-string">&quot;Demo&quot;</span><span class="tok-op">,</span> <span class="tok-number">400</span><span class="tok-op">,</span> <span class="tok-number">240</span><span class="tok-op">)</span>
+  <span class="tok-builtin">win_button_create</span><span class="tok-op">(</span>win<span class="tok-op">,</span> <span class="tok-string">&quot;ok&quot;</span><span class="tok-op">,</span> <span class="tok-string">&quot;OK&quot;</span><span class="tok-op">,</span> <span class="tok-op">-</span><span class="tok-number">1</span><span class="tok-op">,</span> <span class="tok-op">-</span><span class="tok-number">1</span><span class="tok-op">,</span> <span class="tok-number">120</span><span class="tok-op">,</span> <span class="tok-number">32</span><span class="tok-op">)</span>
+  <span class="tok-builtin">win_show</span><span class="tok-op">(</span>win<span class="tok-op">)</span>
+  <span class="tok-builtin">win_loop</span><span class="tok-op">(</span><span class="tok-string">&quot;onEvent&quot;</span><span class="tok-op">)</span></code></pre>
 <ul>
 <li><strong>Gui Wrapper:</strong></li>
 </ul>
 <pre class="code"><code>
-  import &quot;lib/gui_class.0bs&quot;
-  let ui = new Gui()
-  ui.init(&quot;Window Demo&quot;, 420, 260)
-  ui.label(&quot;Welcome&quot;)
-  ui.button(&quot;ok&quot;, &quot;OK&quot;, &quot;onButton&quot;)
-  ui.show()
-  ui.loop(&quot;onEvent&quot;)
-</code></pre>
+  <span class="tok-kw">import</span> <span class="tok-string">&quot;lib/gui_class.elan&quot;</span>
+  <span class="tok-kw">let</span> ui <span class="tok-op">=</span> <span class="tok-kw">new</span> Gui<span class="tok-op">(</span><span class="tok-op">)</span>
+  ui.init<span class="tok-op">(</span><span class="tok-string">&quot;Window Demo&quot;</span><span class="tok-op">,</span> <span class="tok-number">420</span><span class="tok-op">,</span> <span class="tok-number">260</span><span class="tok-op">)</span>
+  ui.label<span class="tok-op">(</span><span class="tok-string">&quot;Welcome&quot;</span><span class="tok-op">)</span>
+  ui.button<span class="tok-op">(</span><span class="tok-string">&quot;ok&quot;</span><span class="tok-op">,</span> <span class="tok-string">&quot;OK&quot;</span><span class="tok-op">,</span> <span class="tok-string">&quot;onButton&quot;</span><span class="tok-op">)</span>
+  ui.show<span class="tok-op">(</span><span class="tok-op">)</span>
+  ui.loop<span class="tok-op">(</span><span class="tok-string">&quot;onEvent&quot;</span><span class="tok-op">)</span></code></pre>
 <h2 id="classic-11-tooling-vs-code-extension">11. Tooling &amp; VS Code Extension</h2>
 <ul>
 <li><strong>VS Code extension:</strong> Syntax highlighting, completions, run/compile commands, code lenses.</li>
 <li><strong>Build &amp; update:</strong></li>
 </ul>
 <pre class="code"><code>
-  tools/build-and-update-extension.ps1 -Force
-</code></pre>
+  tools<span class="tok-op">/</span>build<span class="tok-op">-</span>and<span class="tok-op">-</span>update<span class="tok-op">-</span>extension.ps1 <span class="tok-op">-</span>Force</code></pre>
 <ul>
 <li><strong>Extension source:</strong> <code>vscode/erelang-vscode/</code>, <code>erelang-language/</code></li>
 </ul>
@@ -568,8 +384,7 @@
 <li><strong>Compile to EXE:</strong></li>
 </ul>
 <pre class="code"><code>
-  ./build/erelang.exe --compile examples/program.0bs --output program.exe
-</code></pre>
+  <span class="tok-op">.</span><span class="tok-op">/</span>build<span class="tok-op">/</span>erelang.exe <span class="tok-op">-</span><span class="tok-op">-</span>compile examples<span class="tok-op">/</span>program.elan <span class="tok-op">-</span><span class="tok-op">-</span>output program.exe</code></pre>
 <ul>
 <li><strong>Manifest:</strong> <code>manifest.erelang</code> is generated for dependencies.</li>
 </ul>
@@ -823,56 +638,267 @@
 <li>Supports custom layout engine and parsed <code>erelang.ui</code> document loader (<code>ui_load</code>).</li>
 <li>Routes <code>WM_COMMAND</code>/<code>WM_HSCROLL</code> to runtime action callbacks via <code>handle_gui_click</code>.</li>
 </ul>
-<h2 id="full-builtins">Builtins</h2>
-<h3 id="full-builtins-inside-runtimecpp">Builtins inside <code>runtime.cpp</code></h3>
-<p>Core/system:</p>
-<ul>
-<li><code>now_ms</code>, <code>now_iso</code>, <code>env</code>, <code>username</code>, <code>computer_name</code>, <code>machine_guid</code>, <code>volume_serial</code>, <code>hwid</code>, <code>uuid</code>, <code>rand_int</code>.</li>
-<li>deterministic helpers via CLI seed flags: <code>advance_time</code>, deterministic <code>now_ms</code>.</li>
-<li>metadata/helpers: <code>dev_meta</code>, <code>audit</code>, language info builtins.</li>
-</ul>
-<p>CLI helpers:</p>
-<ul>
-<li><code>args_count</code>, <code>args_get</code>.</li>
-<li><code>exec</code>, <code>run_file</code>, <code>run_bat</code>, <code>read_line</code>, <code>prompt</code>.</li>
-</ul>
-<p>Filesystem/path:</p>
-<ul>
-<li><code>read_text</code>, <code>write_text</code>, <code>append_text</code>, <code>file_exists</code>, <code>mkdirs</code>, <code>copy_file</code>, <code>move_file</code>, <code>delete_file</code>, <code>list_files</code>, <code>cwd</code>, <code>chdir</code>, <code>path_join</code>, <code>path_dirname</code>, <code>path_basename</code>, <code>path_ext</code>.</li>
-</ul>
-<p>Containers:</p>
-<ul>
-<li>list: <code>list_new</code>, <code>list_push</code>, <code>list_get</code>, <code>list_len</code>, <code>list_join</code>, <code>list_clear</code>, <code>list_remove_at</code>.</li>
-<li>dict: <code>dict_new</code>, <code>dict_set</code>, <code>dict_get</code>, <code>dict_has</code>, <code>dict_keys</code>, <code>dict_values</code>, <code>dict_get_or</code>, <code>dict_remove</code>, <code>dict_clear</code>, <code>dict_size</code>, <code>dict_merge</code>, <code>dict_clone</code>, <code>dict_items</code>, <code>dict_entries</code>, path variants.</li>
-<li>table-over-dict: <code>table_new</code>, <code>table_put</code>, <code>table_get</code>, <code>table_has</code>, <code>table_remove</code>, <code>table_rows</code>, <code>table_columns</code>, <code>table_row_keys</code>, <code>table_clear_row</code>, <code>table_count_row</code>.</li>
-</ul>
-<p>Plugin-core queries:</p>
-<ul>
-<li><code>plugin_core</code>, <code>plugin_core_files</code>, <code>plugin_core_keys</code>.</li>
-</ul>
-<p>UI/Win32:</p>
-<ul>
-<li><code>win_*</code> and <code>ui_*</code> sets (window/control create/read/write/events/layout/message loop, UI file loader).</li>
-</ul>
-<h3 id="full-external-builtin-modules-srcbuiltinscpp">External builtin modules (<code>src/builtins/*.cpp</code>)</h3>
-<ul>
-<li><code>math.cpp</code>: integer math + trig + <code>collatz_*</code> sweep stats.</li>
-<li><code>network.cpp</code>: <code>http_get</code>, <code>http_download</code>, <code>hls_download_best</code>, URL encode, Windows <code>ipconfig</code> actions, network debug log/state helpers.</li>
-<li><code>system.cpp</code>: process execution wrappers (<code>system.cmd</code>, <code>system.execute</code>, output + last exit code, <code>system.ip.flush</code>).</li>
-<li><code>crypto.cpp</code>: FNV-1a hash and xorshift-based random-bytes hex.</li>
-<li><code>data.cpp</code>: in-memory key/value stores with simple file save/load.</li>
-<li><code>regex.cpp</code>: match/find/replace via <code>std::regex</code>.</li>
-<li><code>perm.cpp</code>: in-memory permission grant/revoke/query/list.</li>
-<li><code>binary.cpp</code>: binary buffer handles and byte/hex ops.</li>
-<li><code>threads.cpp</code>: thread lifecycle manager with states, join timeout, detach policy gating, GC/purge/remove/state builtins.</li>
-<li><code>monitor.cpp</code>: file-monitor handles with polling, hash/mtime/size change tracking.</li>
-<li><code>render.cpp</code>: currently empty translation unit.</li>
-</ul>
-<p>Dispatch behavior:</p>
-<ul>
-<li>Runtime calls external dispatchers in sequence and returns first non-empty result.</li>
-<li>Void side-effect builtins often return empty string.</li>
-</ul>
+<h2 id="full-builtins">Builtins Reference (Source-Mapped)</h2>
+<p>This section is generated from <code>src/typechecker.cpp</code> signatures and <code>src/runtime.cpp</code> runtime-dispatched methods. It includes all currently discoverable methods, including <code>string.upper</code>, <code>string.lstrip</code>, and <code>string.strip</code>.</p>
+<h3 id="full-builtins-index">Summary</h3>
+<table><thead><tr><th>Metric</th><th>Value</th></tr></thead><tbody>
+<tr><td>Total methods</td><td>207</td></tr>
+<tr><td>Typed signatures (typechecker)</td><td>194</td></tr>
+<tr><td>Runtime-only methods</td><td>13</td></tr>
+</tbody></table>
+<h3 id="full-builtins-binary-buffers">Binary Buffers</h3>
+<table><thead><tr><th>Method</th><th>Args</th><th>Returns</th><th>Source</th></tr></thead><tbody>
+<tr><td><code>bin_from_hex</code></td><td>1</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>bin_get_u8</code></td><td>2</td><td><code>int</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>bin_hex</code></td><td>1</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>bin_len</code></td><td>1</td><td><code>int</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>bin_new</code></td><td>0</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>bin_push_u8</code></td><td>2</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+</tbody></table>
+<h3 id="full-builtins-collections">Collections</h3>
+<table><thead><tr><th>Method</th><th>Args</th><th>Returns</th><th>Source</th></tr></thead><tbody>
+<tr><td><code>dict_clear</code></td><td>1</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>dict_clone</code></td><td>1</td><td><code>unknown</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>dict_entries</code></td><td>1</td><td><code>unknown</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>dict_get</code></td><td>2+</td><td><code>unknown</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>dict_get_or</code></td><td>3+</td><td><code>unknown</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>dict_get_path</code></td><td>2-3</td><td><code>unknown</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>dict_has</code></td><td>2+</td><td><code>bool</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>dict_has_path</code></td><td>2</td><td><code>bool</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>dict_items</code></td><td>1</td><td><code>unknown</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>dict_keys</code></td><td>1</td><td><code>unknown</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>dict_merge</code></td><td>2</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>dict_new</code></td><td>0+</td><td><code>unknown</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>dict_remove</code></td><td>2+</td><td><code>bool</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>dict_remove_path</code></td><td>2</td><td><code>bool</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>dict_set</code></td><td>3+</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>dict_set_path</code></td><td>3</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>dict_size</code></td><td>1</td><td><code>int</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>dict_values</code></td><td>1</td><td><code>unknown</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>list_clear</code></td><td>1</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>list_files</code></td><td>1</td><td><code>unknown</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>list_get</code></td><td>2</td><td><code>unknown</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>list_join</code></td><td>2</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>list_len</code></td><td>1</td><td><code>int</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>list_new</code></td><td>0+</td><td><code>unknown</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>list_push</code></td><td>2</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>list_remove_at</code></td><td>2</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>table_clear_row</code></td><td>2</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>table_columns</code></td><td>1</td><td><code>unknown</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>table_count_row</code></td><td>2</td><td><code>int</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>table_get</code></td><td>3-4</td><td><code>unknown</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>table_has</code></td><td>3</td><td><code>bool</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>table_new</code></td><td>0</td><td><code>unknown</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>table_put</code></td><td>4</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>table_remove</code></td><td>3</td><td><code>bool</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>table_row_keys</code></td><td>2</td><td><code>unknown</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>table_rows</code></td><td>1</td><td><code>unknown</code></td><td><code>typechecker.cpp</code></td></tr>
+</tbody></table>
+<h3 id="full-builtins-core-cli">Core / CLI</h3>
+<table><thead><tr><th>Method</th><th>Args</th><th>Returns</th><th>Source</th></tr></thead><tbody>
+<tr><td><code>advance_time</code></td><td>?</td><td><code>runtime</code></td><td><code>runtime.cpp (runtime-only)</code></td></tr>
+<tr><td><code>args_count</code></td><td>0</td><td><code>int</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>args_get</code></td><td>1</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>audit</code></td><td>?</td><td><code>runtime</code></td><td><code>runtime.cpp (runtime-only)</code></td></tr>
+<tr><td><code>computer_name</code></td><td>0</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>dev_meta</code></td><td>?</td><td><code>runtime</code></td><td><code>runtime.cpp (runtime-only)</code></td></tr>
+<tr><td><code>env</code></td><td>1</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>exec</code></td><td>1</td><td><code>int</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>hwid</code></td><td>0</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>input</code></td><td>0-1</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>is_float</code></td><td>?</td><td><code>runtime</code></td><td><code>runtime.cpp (runtime-only)</code></td></tr>
+<tr><td><code>is_int</code></td><td>?</td><td><code>runtime</code></td><td><code>runtime.cpp (runtime-only)</code></td></tr>
+<tr><td><code>is_str</code></td><td>?</td><td><code>runtime</code></td><td><code>runtime.cpp (runtime-only)</code></td></tr>
+<tr><td><code>language_about</code></td><td>0</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>language_limitations</code></td><td>0</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>language_name</code></td><td>0</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>language_version</code></td><td>0</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>machine_guid</code></td><td>0</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>now_iso</code></td><td>0</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>now_ms</code></td><td>0</td><td><code>int</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>prompt</code></td><td>1</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>rand_int</code></td><td>0-2</td><td><code>int</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>read_line</code></td><td>0</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>run_bat</code></td><td>1</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>run_file</code></td><td>1</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>tofloat</code></td><td>1</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>toint</code></td><td>1</td><td><code>int</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>toInt</code></td><td>1</td><td><code>int</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>tostr</code></td><td>1</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>toString</code></td><td>1</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>username</code></td><td>0</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>uuid</code></td><td>0</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>volume_serial</code></td><td>0</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+</tbody></table>
+<h3 id="full-builtins-crypto">Crypto</h3>
+<table><thead><tr><th>Method</th><th>Args</th><th>Returns</th><th>Source</th></tr></thead><tbody>
+<tr><td><code>hash_fnv1a</code></td><td>1</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+</tbody></table>
+<h3 id="full-builtins-data-store">Data Store</h3>
+<table><thead><tr><th>Method</th><th>Args</th><th>Returns</th><th>Source</th></tr></thead><tbody>
+<tr><td><code>data_get</code></td><td>2</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>data_has</code></td><td>2</td><td><code>bool</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>data_keys</code></td><td>1</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>data_load</code></td><td>1</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>data_new</code></td><td>0</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>data_save</code></td><td>2</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>data_set</code></td><td>3</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+</tbody></table>
+<h3 id="full-builtins-math">Math</h3>
+<table><thead><tr><th>Method</th><th>Args</th><th>Returns</th><th>Source</th></tr></thead><tbody>
+<tr><td><code>abs</code></td><td>1</td><td><code>int</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>add</code></td><td>2</td><td><code>int</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>collatz_avg_steps</code></td><td>0</td><td><code>int</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>collatz_best_n</code></td><td>0</td><td><code>int</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>collatz_best_steps</code></td><td>0</td><td><code>int</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>collatz_len</code></td><td>1</td><td><code>int</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>collatz_sweep</code></td><td>1</td><td><code>int</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>collatz_total_steps</code></td><td>0</td><td><code>int</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>cos</code></td><td>1</td><td><code>int</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>div</code></td><td>2</td><td><code>int</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>max</code></td><td>2</td><td><code>int</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>min</code></td><td>2</td><td><code>int</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>mod</code></td><td>2</td><td><code>int</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>mul</code></td><td>2</td><td><code>int</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>pow</code></td><td>2</td><td><code>int</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>sin</code></td><td>1</td><td><code>int</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>sqrt</code></td><td>1</td><td><code>int</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>sub</code></td><td>2</td><td><code>int</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>tan</code></td><td>1</td><td><code>int</code></td><td><code>typechecker.cpp</code></td></tr>
+</tbody></table>
+<h3 id="full-builtins-network">Network</h3>
+<table><thead><tr><th>Method</th><th>Args</th><th>Returns</th><th>Source</th></tr></thead><tbody>
+<tr><td><code>hls_download_best</code></td><td>2</td><td><code>bool</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>http_download</code></td><td>2</td><td><code>bool</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>http_get</code></td><td>1</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>network.debug.clear</code></td><td>0</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>network.debug.disable</code></td><td>0</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>network.debug.enable</code></td><td>0-1</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>network.debug.last</code></td><td>0</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>network.debug.log_tail</code></td><td>0-1</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>network.debug.status</code></td><td>0</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>network.ip.flush</code></td><td>0</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>network.ip.registerdns</code></td><td>0</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>network.ip.release</code></td><td>0-1</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>network.ip.renew</code></td><td>0-1</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>url_encode</code></td><td>1</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+</tbody></table>
+<h3 id="full-builtins-other">Other</h3>
+<table><thead><tr><th>Method</th><th>Args</th><th>Returns</th><th>Source</th></tr></thead><tbody>
+<tr><td><code>append_text</code></td><td>2</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>chdir</code></td><td>1</td><td><code>bool</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>copy_file</code></td><td>2</td><td><code>bool</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>cwd</code></td><td>0</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>delete_file</code></td><td>1</td><td><code>bool</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>file_exists</code></td><td>1</td><td><code>bool</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>mkdirs</code></td><td>1</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>move_file</code></td><td>2</td><td><code>bool</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>random_bytes</code></td><td>1</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>read_text</code></td><td>1</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>write_text</code></td><td>2</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+</tbody></table>
+<h3 id="full-builtins-path">Path</h3>
+<table><thead><tr><th>Method</th><th>Args</th><th>Returns</th><th>Source</th></tr></thead><tbody>
+<tr><td><code>path_basename</code></td><td>1</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>path_dirname</code></td><td>1</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>path_ext</code></td><td>1</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>path_join</code></td><td>1+</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+</tbody></table>
+<h3 id="full-builtins-permissions">Permissions</h3>
+<table><thead><tr><th>Method</th><th>Args</th><th>Returns</th><th>Source</th></tr></thead><tbody>
+<tr><td><code>perm_grant</code></td><td>1</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>perm_has</code></td><td>1</td><td><code>bool</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>perm_list</code></td><td>0</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>perm_revoke</code></td><td>1</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+</tbody></table>
+<h3 id="full-builtins-plugin">Plugin</h3>
+<table><thead><tr><th>Method</th><th>Args</th><th>Returns</th><th>Source</th></tr></thead><tbody>
+<tr><td><code>plugin_core</code></td><td>2</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>plugin_core_files</code></td><td>1</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>plugin_core_keys</code></td><td>2</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+</tbody></table>
+<h3 id="full-builtins-regex">Regex</h3>
+<table><thead><tr><th>Method</th><th>Args</th><th>Returns</th><th>Source</th></tr></thead><tbody>
+<tr><td><code>regex_find</code></td><td>2</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>regex_match</code></td><td>2</td><td><code>bool</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>regex_replace</code></td><td>3</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+</tbody></table>
+<h3 id="full-builtins-string-methods">String Methods</h3>
+<table><thead><tr><th>Method</th><th>Args</th><th>Returns</th><th>Source</th></tr></thead><tbody>
+<tr><td><code>string.lower</code></td><td>1</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>string.lstrip</code></td><td>1</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>string.rstrip</code></td><td>1</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>string.strip</code></td><td>1</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>string.upper</code></td><td>1</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+</tbody></table>
+<h3 id="full-builtins-threading-monitor">Threading / Monitor</h3>
+<table><thead><tr><th>Method</th><th>Args</th><th>Returns</th><th>Source</th></tr></thead><tbody>
+<tr><td><code>monitor_add</code></td><td>1-2</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>monitor_info</code></td><td>1</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>monitor_last_change</code></td><td>1</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>monitor_list</code></td><td>0</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>monitor_remove</code></td><td>1</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>monitor_set_interval</code></td><td>2</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>thread_count</code></td><td>0</td><td><code>int</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>thread_done</code></td><td>1</td><td><code>bool</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>thread_gc</code></td><td>0</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>thread_gc_all</code></td><td>0</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>thread_join</code></td><td>1</td><td><code>bool</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>thread_join_timeout</code></td><td>2</td><td><code>bool</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>thread_list</code></td><td>0</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>thread_purge</code></td><td>0</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>thread_remove</code></td><td>1-2</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>thread_run</code></td><td>1-2</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>thread_state</code></td><td>1</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>thread_wait_all</code></td><td>0</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>thread_yield</code></td><td>0</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+</tbody></table>
+<h3 id="full-builtins-ui-window">UI / Window</h3>
+<table><thead><tr><th>Method</th><th>Args</th><th>Returns</th><th>Source</th></tr></thead><tbody>
+<tr><td><code>ui_button</code></td><td>3-6</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>ui_checkbox</code></td><td>3-7</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>ui_label</code></td><td>2-4</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>ui_load</code></td><td>1-4</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>ui_newline</code></td><td>1</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>ui_radio</code></td><td>3-8</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>ui_same_line</code></td><td>1</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>ui_separator</code></td><td>1-3</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>ui_slider</code></td><td>5-8</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>ui_spacer</code></td><td>1-3</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>ui_textbox</code></td><td>2-6</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>ui_window_create</code></td><td>3-8</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>win_auto_scale</code></td><td>1</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>win_button_create</code></td><td>7</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>win_checkbox_create</code></td><td>7</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>win_close</code></td><td>1</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>win_get_check</code></td><td>2</td><td><code>bool</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>win_get_slider</code></td><td>2</td><td><code>int</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>win_get_text</code></td><td>2</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>win_label_create</code></td><td>6</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>win_layout_config</code></td><td>?</td><td><code>runtime</code></td><td><code>runtime.cpp (runtime-only)</code></td></tr>
+<tr><td><code>win_layout_newline</code></td><td>?</td><td><code>runtime</code></td><td><code>runtime.cpp (runtime-only)</code></td></tr>
+<tr><td><code>win_layout_pop_width</code></td><td>?</td><td><code>runtime</code></td><td><code>runtime.cpp (runtime-only)</code></td></tr>
+<tr><td><code>win_layout_push_width</code></td><td>?</td><td><code>runtime</code></td><td><code>runtime.cpp (runtime-only)</code></td></tr>
+<tr><td><code>win_layout_reset</code></td><td>?</td><td><code>runtime</code></td><td><code>runtime.cpp (runtime-only)</code></td></tr>
+<tr><td><code>win_layout_same</code></td><td>?</td><td><code>runtime</code></td><td><code>runtime.cpp (runtime-only)</code></td></tr>
+<tr><td><code>win_layout_stack</code></td><td>?</td><td><code>runtime</code></td><td><code>runtime.cpp (runtime-only)</code></td></tr>
+<tr><td><code>win_loop</code></td><td>1</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>win_message_box</code></td><td>3-4</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>win_move</code></td><td>3</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>win_on</code></td><td>3</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>win_radiobutton_create</code></td><td>7-8</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>win_resize</code></td><td>3</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>win_set_check</code></td><td>3</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>win_set_scale</code></td><td>2</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>win_set_slider</code></td><td>3</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>win_set_text</code></td><td>3</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>win_set_title</code></td><td>2</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>win_show</code></td><td>1</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>win_slider_create</code></td><td>9</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>win_textbox_create</code></td><td>6</td><td><code>void</code></td><td><code>typechecker.cpp</code></td></tr>
+<tr><td><code>win_window_create</code></td><td>3</td><td><code>string</code></td><td><code>typechecker.cpp</code></td></tr>
+</tbody></table>
+
 <h2 id="full-plugin-system">Plugin System</h2>
 <h3 id="full-discovery-and-manifest-parsing-srcpluginscpp">Discovery and manifest parsing (<code>src/plugins.cpp</code>)</h3>
 <ul>
@@ -944,7 +970,7 @@
 <p>Import resolution includes:</p>
 <ul>
 <li>local relative/absolute files</li>
-<li>extension fallback <code>.0bs</code> / <code>.obsecret</code></li>
+<li>extension fallback <code>.elan</code> / <code>.obsecret</code></li>
 <li>registered module materialization to temp files</li>
 </ul>
 <h2 id="full-erodsl-helpers-srcerodslspeccpp">EroDSL Helpers (<code>src/erodsl/spec.cpp</code>)</h2>
@@ -1023,3 +1049,13 @@
   </div>
 </body>
 </html>
+
+
+
+
+
+
+
+
+
+

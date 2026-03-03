@@ -1,6 +1,21 @@
 {
   "comments": { "lineComment": "//" },
   "brackets": [["{","}"],["(",")"],["[","]"]],
+  "indentationRules": {
+    "increaseIndentPattern": "^((?!//).)*(\\{[^}"'`]*|\\([^)"'`]*|\\[[^\]"'`]*)$",
+    "decreaseIndentPattern": "^\\s*[\}\]\)].*$"
+  },
+  "onEnterRules": [
+    {
+      "beforeText": "^\\s*[^\\S\\r\\n]*\\{\\s*$",
+      "afterText": "^\\s*\\}",
+      "action": { "indent": "indentOutdent" }
+    },
+    {
+      "beforeText": "^\\s*[^\\S\\r\\n]*\\{\\s*$",
+      "action": { "indent": "indent" }
+    }
+  ],
   "autoClosingPairs": [
     {"open": "{", "close": "}"},
     {"open": "(", "close": ")"},

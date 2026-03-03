@@ -1,0 +1,6 @@
+@erelang
+public action main {
+  let d = {"name": "alex", "age": 18}
+  print dict_get(d, "name")
+}
+run main

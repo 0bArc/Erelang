@@ -1,0 +1,14 @@
+@erelang
+
+public action main {
+  let dictionary = {
+    "name": "alex"
+    "age": 18
+  }
+
+  for (k in dictionary) {
+    print k
+  }
+}
+
+run main

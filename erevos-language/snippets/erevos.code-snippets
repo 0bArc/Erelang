@@ -16,5 +16,48 @@
       "}"
     ],
     "description": "Create an entity"
+  },
+  "Array Literal": {
+    "prefix": "arr",
+    "body": [
+      "let ${1:array} = [${2:1,2,3}]"
+    ],
+    "description": "Create an array/list literal"
+  },
+  "Dictionary Literal": {
+    "prefix": "dict",
+    "body": [
+      "let ${1:dictionary} = {",
+      "  \"${2:key}\": ${3:value}",
+      "}"
+    ],
+    "description": "Create a dictionary literal"
+  },
+  "For Each Array": {
+    "prefix": "forarr",
+    "body": [
+      "for (${1:v} : ${2:array}) {",
+      "  ${0}",
+      "}"
+    ],
+    "description": "Iterate array/list values with colon syntax"
+  },
+  "For Each Dict Key": {
+    "prefix": "fordictk",
+    "body": [
+      "for (${1:k} : ${2:dictionary}) {",
+      "  ${0}",
+      "}"
+    ],
+    "description": "Iterate dictionary keys with colon syntax"
+  },
+  "For Each Dict Pair": {
+    "prefix": "fordictkv",
+    "body": [
+      "for (${1:k}, ${2:v} : ${3:dictionary}) {",
+      "  ${0}",
+      "}"
+    ],
+    "description": "Iterate dictionary key/value pairs with colon syntax"
   }
 }

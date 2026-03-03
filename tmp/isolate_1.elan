@@ -1,0 +1,6 @@
+@erelang
+public action main {
+	let a = list_new(1,2,3)
+	print list_len(a)
+}
+run main

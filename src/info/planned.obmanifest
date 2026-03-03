@@ -1,7 +1,7 @@
 # erelang / Erelang Planned Manifest
 name=erelang / Erelang
 author=Unknown Author
-version=1.3.0
+version=0.0.1
 website=https://example.com/
 description=Erelang (erelang) scripting engine with native Win32 GUI helpers and rich built-ins.
 # Comma separated immediate feature highlights (already present)

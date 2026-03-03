@@ -1,0 +1,14 @@
+@erelang
+
+import "../lib/debugger.0bs"
+
+hook onStart { print "=== Debugger ===" }
+hook onEnd { print "=== End ===" }
+
+public action debug_main {
+  return
+}
+
+
+run debug_main
+

@@ -112,3 +112,9 @@ BOILERPLATE.md
 
 plugins.md
 syntax.md
+
+
+.github/*
+.github
+
+.vscode

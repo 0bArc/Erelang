@@ -1,0 +1,1024 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Erevos Guide Portal</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; connect-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; manifest-src 'none'; worker-src 'none'; media-src 'none'">
+  <meta http-equiv="Referrer-Policy" content="no-referrer">
+  <meta http-equiv="Permissions-Policy" content="accelerometer=(), camera=(), geolocation=(), gyroscope=(), microphone=(), payment=(), usb=()">
+  <meta name="color-scheme" content="dark">
+  <style>
+    :root {
+      --bg: #0b0f14;
+      --bg-2: #101923;
+      --paper: #131c27;
+      --paper-2: #172433;
+      --ink: #e9eef4;
+      --muted: #9aabc0;
+      --accent: #4bc0ff;
+      --line: #233648;
+      --line-soft: #1a2938;
+      --code-bg: #0a1118;
+      --code-ink: #dff0ff;
+      --chip: #1a2f43;
+      --shadow: 0 12px 34px rgba(0, 0, 0, 0.45);
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      background:
+        radial-gradient(1200px 700px at 90% -10%, #17324a 0%, transparent 45%),
+        radial-gradient(900px 700px at -20% 10%, #14283c 0%, transparent 42%),
+        linear-gradient(180deg, var(--bg) 0%, var(--bg-2) 100%);
+      color: var(--ink);
+      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+      line-height: 1.72;
+      min-height: 100%;
+    }
+
+    a { color: inherit; }
+
+    .wrap {
+      max-width: 1500px;
+      margin: 0 auto;
+      padding: 22px;
+      display: grid;
+      grid-template-columns: 320px minmax(0, 1fr);
+      gap: 20px;
+    }
+
+    .sidebar {
+      position: sticky;
+      top: 16px;
+      align-self: start;
+      max-height: calc(100vh - 32px);
+      overflow: auto;
+      background: rgba(19, 28, 39, 0.9);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+      padding: 16px;
+      backdrop-filter: blur(6px);
+    }
+
+    .brand {
+      margin-bottom: 12px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 1.2rem;
+      letter-spacing: 0.02em;
+    }
+
+    .brand p {
+      margin: 6px 0 0;
+      font-size: 0.82rem;
+      color: var(--muted);
+    }
+
+    .toc-group { margin-top: 12px; }
+
+    .toc-group h2 {
+      margin: 0 0 8px;
+      font-size: 0.74rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #88a0ba;
+    }
+
+    .toc-item {
+      display: block;
+      text-decoration: none;
+      padding: 5px 8px;
+      border-radius: 8px;
+      color: #d0def0;
+      font-size: 0.88rem;
+      transition: background .15s ease, transform .15s ease, color .15s ease;
+    }
+
+    .toc-item:hover {
+      background: #1a2f43;
+      color: #ecf7ff;
+      transform: translateX(2px);
+    }
+
+    .toc-item.level-2 { padding-left: 20px; font-size: 0.84rem; color: #b2c5dc; }
+    .toc-item.level-3 { padding-left: 32px; font-size: 0.8rem; color: #93aaca; }
+
+    .content {
+      min-width: 0;
+      display: grid;
+      gap: 16px;
+    }
+
+    .hero, .card {
+      background: linear-gradient(180deg, var(--paper) 0%, var(--paper-2) 100%);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+    }
+
+    .hero {
+      padding: 24px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      right: -60px;
+      top: -60px;
+      width: 240px;
+      height: 240px;
+      background: radial-gradient(circle, rgba(75,192,255,.18) 0%, rgba(75,192,255,0) 72%);
+      pointer-events: none;
+    }
+
+    .hero h1 {
+      margin: 0;
+      font-size: clamp(1.7rem, 3.8vw, 2.8rem);
+      line-height: 1.1;
+      letter-spacing: -0.012em;
+      font-family: "Palatino Linotype", "Book Antiqua", serif;
+    }
+
+    .hero p {
+      margin: 12px 0 0;
+      max-width: 76ch;
+      color: var(--muted);
+    }
+
+    .security {
+      margin-top: 14px;
+      font-size: .9rem;
+      color: #cde8ff;
+      border-left: 4px solid var(--accent);
+      background: rgba(11, 34, 54, .35);
+      padding: 10px 12px;
+      border-radius: 8px;
+    }
+
+    .card { padding: 22px; }
+
+    .card h2.section-title {
+      margin-top: 0;
+      margin-bottom: 8px;
+      font-size: 1.25rem;
+      letter-spacing: .01em;
+    }
+
+    .doc {
+      max-width: 100ch;
+      margin: 0 auto;
+    }
+
+    .doc h1, .doc h2, .doc h3, .doc h4, .doc h5, .doc h6 {
+      scroll-margin-top: 20px;
+      line-height: 1.26;
+      margin-top: 1.35em;
+      margin-bottom: .5em;
+      color: #f0f6ff;
+      font-family: "Palatino Linotype", "Book Antiqua", serif;
+    }
+
+    .doc h1 {
+      font-size: 1.86rem;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: .28em;
+    }
+    .doc h2 { font-size: 1.42rem; }
+    .doc h3 { font-size: 1.18rem; color: #d4e8ff; }
+
+    .doc p {
+      margin: .54em 0;
+      color: #d8e5f4;
+      overflow-wrap: anywhere;
+    }
+
+    .doc ul, .doc ol {
+      margin: .55em 0 .76em;
+      padding-left: 1.5em;
+    }
+
+    .doc li { margin: .3em 0; color: #d8e5f4; }
+
+    .doc strong { color: #ffffff; font-weight: 700; }
+    .doc em { color: #d6edff; }
+
+    .doc code {
+      background: var(--chip);
+      border: 1px solid #33526c;
+      border-radius: 6px;
+      padding: .08em .36em;
+      color: #f2f8ff;
+      font-family: "Consolas", "Cascadia Mono", monospace;
+      font-size: .92em;
+    }
+
+    .doc pre.code {
+      margin: .82em 0 1.02em;
+      padding: 14px 16px;
+      border-radius: 12px;
+      border: 1px solid #2a4258;
+      background: var(--code-bg);
+      color: var(--code-ink);
+      overflow: auto;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+    }
+
+    .doc pre.code code {
+      background: transparent;
+      border: 0;
+      color: inherit;
+      padding: 0;
+      border-radius: 0;
+      font-size: .93rem;
+      white-space: pre;
+      display: block;
+    }
+
+    .doc hr {
+      border: 0;
+      border-top: 1px dashed #2a4258;
+      margin: 1.2em 0;
+    }
+
+    .jump {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      text-decoration: none;
+      background: #12324a;
+      border: 1px solid #2f5f82;
+      color: #dff2ff;
+      padding: 8px 12px;
+      border-radius: 10px;
+      font-size: .9rem;
+      font-weight: 600;
+      margin-top: 10px;
+    }
+
+    @media (max-width: 1024px) {
+      .wrap { grid-template-columns: 1fr; }
+      .sidebar { position: relative; top: 0; max-height: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <aside class="sidebar" aria-label="Guide Navigation">
+      <div class="brand">
+        <h1>Erevos Guide Portal</h1>
+        <p>Unified docs from <code>erevos_full_guide.md</code> and <code>erevos.fullguide.md</code></p>
+      </div>
+
+      <div class="toc-group">
+        <h2>Quick Links</h2>
+        <a class="toc-item level-1" href="#top">Top</a>
+        <a class="toc-item level-1" href="#classic-doc">Classic Guide Source</a>
+        <a class="toc-item level-1" href="#full-doc">Full Technical Source</a>
+      </div>
+
+      <div class="toc-group">
+        <h2>Classic Guide TOC</h2>
+<a class="toc-item level-1" href="#classic-erelang-the-complete-guide">Erelang: The Complete Guide</a>
+<a class="toc-item level-2" href="#classic-table-of-contents">Table of Contents</a>
+<a class="toc-item level-2" href="#classic-1-introduction">1. Introduction</a>
+<a class="toc-item level-2" href="#classic-2-getting-started">2. Getting Started</a>
+<a class="toc-item level-2" href="#classic-3-language-basics">3. Language Basics</a>
+<a class="toc-item level-2" href="#classic-4-control-flow">4. Control Flow</a>
+<a class="toc-item level-2" href="#classic-5-data-structures">5. Data Structures</a>
+<a class="toc-item level-2" href="#classic-6-entities-and-oop">6. Entities and OOP</a>
+<a class="toc-item level-2" href="#classic-7-built-in-functions-modules">7. Built-in Functions &amp; Modules</a>
+<a class="toc-item level-2" href="#classic-8-concurrency-parallelism">8. Concurrency &amp; Parallelism</a>
+<a class="toc-item level-2" href="#classic-9-plugins-extensibility">9. Plugins &amp; Extensibility</a>
+<a class="toc-item level-2" href="#classic-10-windows-gui-helpers">10. Windows GUI Helpers</a>
+<a class="toc-item level-2" href="#classic-11-tooling-vs-code-extension">11. Tooling &amp; VS Code Extension</a>
+<a class="toc-item level-2" href="#classic-12-packaging-distribution">12. Packaging &amp; Distribution</a>
+<a class="toc-item level-2" href="#classic-13-troubleshooting-diagnostics">13. Troubleshooting &amp; Diagnostics</a>
+<a class="toc-item level-2" href="#classic-14-further-resources">14. Further Resources</a>
+      </div>
+
+      <div class="toc-group">
+        <h2>Full Guide TOC</h2>
+<a class="toc-item level-1" href="#full-erevosfullguidemd">erevos.fullguide.md</a>
+<a class="toc-item level-2" href="#full-scope">Scope</a>
+<a class="toc-item level-2" href="#full-high-level-architecture">High-Level Architecture</a>
+<a class="toc-item level-2" href="#full-build-and-outputs-cmakeliststxt">Build and Outputs (`CMakeLists.txt`)</a>
+<a class="toc-item level-2" href="#full-public-api-and-data-model-includeerelang">Public API and Data Model (`include/erelang/*`)</a>
+<a class="toc-item level-2" href="#full-language-frontend">Language Frontend</a>
+<a class="toc-item level-3" href="#full-lexer-srclexercpp">Lexer (`src/lexer.cpp`)</a>
+<a class="toc-item level-3" href="#full-parser-srcparsercpp">Parser (`src/parser.cpp`)</a>
+<a class="toc-item level-3" href="#full-type-checker-srctypecheckercpp">Type Checker (`src/typechecker.cpp`)</a>
+<a class="toc-item level-3" href="#full-optimizer-srcoptimizercpp">Optimizer (`src/optimizer.cpp`)</a>
+<a class="toc-item level-2" href="#full-runtime-execution-engine-srcruntimecpp">Runtime Execution Engine (`src/runtime.cpp`)</a>
+<a class="toc-item level-3" href="#full-core-runtime-state">Core runtime state</a>
+<a class="toc-item level-3" href="#full-evaluation-model">Evaluation model</a>
+<a class="toc-item level-3" href="#full-statement-execution-execstmt">Statement execution (`exec_stmt`)</a>
+<a class="toc-item level-3" href="#full-program-lifecycle-run">Program lifecycle (`run`)</a>
+<a class="toc-item level-3" href="#full-single-action-execution-runsingleaction">Single-action execution (`run_single_action`)</a>
+<a class="toc-item level-3" href="#full-plugin-alias-seeding">Plugin alias seeding</a>
+<a class="toc-item level-3" href="#full-windows-gui-bridge">Windows GUI bridge</a>
+<a class="toc-item level-2" href="#full-builtins">Builtins</a>
+<a class="toc-item level-3" href="#full-builtins-inside-runtimecpp">Builtins inside `runtime.cpp`</a>
+<a class="toc-item level-3" href="#full-external-builtin-modules-srcbuiltinscpp">External builtin modules (`src/builtins/*.cpp`)</a>
+<a class="toc-item level-2" href="#full-plugin-system">Plugin System</a>
+<a class="toc-item level-3" href="#full-discovery-and-manifest-parsing-srcpluginscpp">Discovery and manifest parsing (`src/plugins.cpp`)</a>
+<a class="toc-item level-3" href="#full-creation-kit-srccreationkitcpp">Creation Kit (`src/creation_kit.cpp`)</a>
+<a class="toc-item level-2" href="#full-module-system-srcmodulescpp">Module System (`src/modules.cpp`)</a>
+<a class="toc-item level-2" href="#full-cli-and-executables">CLI and Executables</a>
+<a class="toc-item level-3" href="#full-srcmaincpp-obc">`src/main.cpp` (`obc`)</a>
+<a class="toc-item level-3" href="#full-srcobsmaincpp-erelang-runner">`src/obs_main.cpp` (`erelang` runner)</a>
+<a class="toc-item level-3" href="#full-srcbuildlaunchercpp">`src/build_launcher.cpp`</a>
+<a class="toc-item level-2" href="#full-c-abi-layer-srccabiexportscpp">C ABI Layer (`src/cabi_exports.cpp`)</a>
+<a class="toc-item level-2" href="#full-erodsl-helpers-srcerodslspeccpp">EroDSL Helpers (`src/erodsl/spec.cpp`)</a>
+<a class="toc-item level-2" href="#full-policy-system">Policy System</a>
+<a class="toc-item level-2" href="#full-file-by-file-coverage-src">File-by-File Coverage (`src/`)</a>
+<a class="toc-item level-2" href="#full-known-gaps-and-notable-mismatches">Known Gaps and Notable Mismatches</a>
+<a class="toc-item level-2" href="#full-included-and-stuff-coverage">Included &quot;And Stuff&quot; Coverage</a>
+      </div>
+    </aside>
+
+    <main class="content" id="top">
+      <header class="hero">
+        <h1>Erelang Documentation Hub</h1>
+        <p>
+          This page embeds both guide sources in one readable, print-friendly, security-hardened HTML reference.
+          Content is rendered as static escaped HTML (no runtime script execution, no dynamic HTML injection).
+        </p>
+        <p class="security">
+          Security hardening active: strict CSP (<code>script-src 'none'</code>), no external assets,
+          no JavaScript execution, no form endpoints, anti-XSS by HTML-encoding all source markdown before rendering.
+        </p>
+        <a class="jump" href="#full-doc">Jump to Full Technical Guide</a>
+      </header>
+
+      <section class="card" id="classic-doc">
+        <h2 class="section-title">Guide Source: <code>erevos_full_guide.md</code></h2>
+        <article class="doc" aria-label="Classic Guide">
+<h1 id="classic-erelang-the-complete-guide">Erelang: The Complete Guide</h1>
+<hr>
+<h2 id="classic-table-of-contents">Table of Contents</h2>
+<ol>
+<li>Introduction</li>
+<li>Getting Started</li>
+<li>Language Basics</li>
+<li>Control Flow</li>
+<li>Data Structures</li>
+<li>Entities and OOP</li>
+<li>Built-in Functions &amp; Modules</li>
+<li>Concurrency &amp; Parallelism</li>
+<li>Plugins &amp; Extensibility</li>
+<li>Windows GUI Helpers</li>
+<li>Tooling &amp; VS Code Extension</li>
+<li>Packaging &amp; Distribution</li>
+<li>Troubleshooting &amp; Diagnostics</li>
+<li>Further Resources</li>
+</ol>
+<hr>
+<h2 id="classic-1-introduction">1. Introduction</h2>
+<p>Erelang (erelang) is a modern, block-based scripting language designed for clarity, safety, and rapid development. It powers the erelang platform, offering a minimal core, explicit syntax, and strong Windows integration.</p>
+<h2 id="classic-2-getting-started">2. Getting Started</h2>
+<ul>
+<li><strong>Prerequisites:</strong> Windows 10+, CMake, MinGW-w64 or MSVC, PowerShell, VS Code (with Erelang extension).</li>
+<li><strong>Setup:</strong></li>
+</ul>
+<pre class="code"><code>
+  cmake -S . -B build -G &quot;MinGW Makefiles&quot;
+  cmake --build build --config Release
+</code></pre>
+<ul>
+<li><strong>Run Example:</strong></li>
+</ul>
+<pre class="code"><code>
+  ./build/erelang.exe examples/program.0bs
+</code></pre>
+<ul>
+<li><strong>VS Code:</strong> Install and build the Erelang extension for syntax, completions, and commands.</li>
+</ul>
+<h2 id="classic-3-language-basics">3. Language Basics</h2>
+<ul>
+<li><strong>File extension:</strong> <code>.0bs</code></li>
+<li><strong>Entry point:</strong> <code>run &lt;actionName&gt;</code></li>
+<li><strong>Blocks:</strong> Use <code>{ ... }</code> for actions, hooks, entities.</li>
+<li><strong>Minimal Example:</strong></li>
+</ul>
+<pre class="code"><code>
+  @erelang
+  public action main {
+    let num = 1
+    print num + 2
+  }
+  run main
+</code></pre>
+<ul>
+<li><strong>Variables:</strong> <code>let x = 2 + 3 * 4</code></li>
+<li><strong>Print:</strong> <code>print &quot;Hello {x}&quot;</code></li>
+<li><strong>Sleep:</strong> <code>sleep 250ms</code></li>
+<li><strong>String interpolation:</strong> <code>print &quot;Hello {name}&quot;</code></li>
+</ul>
+<h2 id="classic-4-control-flow">4. Control Flow</h2>
+<ul>
+<li><strong>If/Else:</strong></li>
+</ul>
+<pre class="code"><code>
+  if (score &gt;= 90) { print &quot;A&quot; } else { print &quot;Other&quot; }
+</code></pre>
+<ul>
+<li><strong>Switch:</strong></li>
+</ul>
+<pre class="code"><code>
+  switch state {
+    case &quot;idle&quot; { print &quot;Waiting&quot; }
+    default { print &quot;Unknown&quot; }
+  }
+</code></pre>
+<ul>
+<li><strong>Loops:</strong></li>
+</ul>
+<pre class="code"><code>
+  for (let i = 0; i &lt; 5; i = i + 1) { print i }
+  while (remaining &gt; 0) { print remaining; remaining = remaining - 1 }
+</code></pre>
+<h2 id="classic-5-data-structures">5. Data Structures</h2>
+<ul>
+<li><strong>Lists:</strong></li>
+</ul>
+<pre class="code"><code>
+  let xs = list_new()
+  list_push(xs, &quot;alpha&quot;)
+  print list_len(xs)
+</code></pre>
+<ul>
+<li><strong>Dictionaries:</strong></li>
+</ul>
+<pre class="code"><code>
+  let d = dict_new()
+  dict_set(d, &quot;name&quot;, &quot;Erelang&quot;)
+  print dict_get(d, &quot;name&quot;)
+</code></pre>
+<h2 id="classic-6-entities-and-oop">6. Entities and OOP</h2>
+<ul>
+<li><strong>Entities:</strong></li>
+</ul>
+<pre class="code"><code>
+  public entity Person {
+    public field name: str
+    public field age: int
+    public action init(name: str, age: int) {
+      self.name = name
+      self.age = age
+    }
+    public action describe(): str {
+      return &quot;{name} ({age})&quot;
+    }
+  }
+  let p = new Person(&quot;Erelang&quot;, 27)
+  print p.describe()
+</code></pre>
+<h2 id="classic-7-built-in-functions-modules">7. Built-in Functions &amp; Modules</h2>
+<ul>
+<li><strong>System:</strong> <code>now_ms()</code>, <code>env(name)</code>, <code>username()</code>, <code>hwid()</code></li>
+<li><strong>Filesystem:</strong> <code>read_text</code>, <code>write_text</code>, <code>file_exists</code>, <code>list_files</code></li>
+<li><strong>Math/Crypto:</strong> <code>add</code>, <code>sub</code>, <code>hash_fnv1a</code>, <code>random_bytes</code></li>
+<li><strong>Network:</strong> <code>http_get</code>, <code>http_download</code></li>
+<li><strong>Threads:</strong> <code>thread_run</code>, <code>thread_join</code>, <code>thread_wait_all</code></li>
+<li><strong>Monitoring:</strong> <code>monitor_add</code>, <code>monitor_info</code></li>
+<li><strong>GUI:</strong> <code>win_window_create</code>, <code>win_button_create</code>, <code>win_show</code>, <code>win_loop</code></li>
+</ul>
+<h2 id="classic-8-concurrency-parallelism">8. Concurrency &amp; Parallelism</h2>
+<ul>
+<li><strong>Parallel block:</strong></li>
+</ul>
+<pre class="code"><code>
+  parallel {
+    print &quot;A&quot;
+    print &quot;B&quot;
+  }
+  wait all
+</code></pre>
+<ul>
+<li><strong>Threads:</strong></li>
+</ul>
+<pre class="code"><code>
+  let handle = thread_run(&quot;worker&quot;)
+  thread_join(handle)
+</code></pre>
+<h2 id="classic-9-plugins-extensibility">9. Plugins &amp; Extensibility</h2>
+<ul>
+<li><strong>Plugin Example:</strong></li>
+</ul>
+<pre class="code"><code>
+  @plugin(&quot;example.logger&quot;)
+  public action log(msg: str) { print &quot;[logger] {msg}&quot; }
+  hook onLoad { print &quot;[logger] ready&quot; }
+  hook onUnload { print &quot;[logger] bye&quot; }
+</code></pre>
+<ul>
+<li><strong>Importing Plugins:</strong></li>
+</ul>
+<pre class="code"><code>
+  import &quot;@example.logger&quot;
+  log(&quot;ready&quot;)
+</code></pre>
+<h2 id="classic-10-windows-gui-helpers">10. Windows GUI Helpers</h2>
+<ul>
+<li><strong>Direct API:</strong></li>
+</ul>
+<pre class="code"><code>
+  let win = win_window_create(&quot;Demo&quot;, 400, 240)
+  win_button_create(win, &quot;ok&quot;, &quot;OK&quot;, -1, -1, 120, 32)
+  win_show(win)
+  win_loop(&quot;onEvent&quot;)
+</code></pre>
+<ul>
+<li><strong>Gui Wrapper:</strong></li>
+</ul>
+<pre class="code"><code>
+  import &quot;lib/gui_class.0bs&quot;
+  let ui = new Gui()
+  ui.init(&quot;Window Demo&quot;, 420, 260)
+  ui.label(&quot;Welcome&quot;)
+  ui.button(&quot;ok&quot;, &quot;OK&quot;, &quot;onButton&quot;)
+  ui.show()
+  ui.loop(&quot;onEvent&quot;)
+</code></pre>
+<h2 id="classic-11-tooling-vs-code-extension">11. Tooling &amp; VS Code Extension</h2>
+<ul>
+<li><strong>VS Code extension:</strong> Syntax highlighting, completions, run/compile commands, code lenses.</li>
+<li><strong>Build &amp; update:</strong></li>
+</ul>
+<pre class="code"><code>
+  tools/build-and-update-extension.ps1 -Force
+</code></pre>
+<ul>
+<li><strong>Extension source:</strong> <code>vscode/erelang-vscode/</code>, <code>erelang-language/</code></li>
+</ul>
+<h2 id="classic-12-packaging-distribution">12. Packaging &amp; Distribution</h2>
+<ul>
+<li><strong>Compile to EXE:</strong></li>
+</ul>
+<pre class="code"><code>
+  ./build/erelang.exe --compile examples/program.0bs --output program.exe
+</code></pre>
+<ul>
+<li><strong>Manifest:</strong> <code>manifest.erelang</code> is generated for dependencies.</li>
+</ul>
+<h2 id="classic-13-troubleshooting-diagnostics">13. Troubleshooting &amp; Diagnostics</h2>
+<ul>
+<li><strong>Type checker errors:</strong> <code>TC***</code> codes for missing actions, type mismatches, etc.</li>
+<li><strong>Runtime errors:</strong> Most built-ins return empty strings on failure; check <code>policy.cfg</code> for permissions.</li>
+<li><strong>Debugging:</strong> Use <code>--debug</code> and the <code>debug/</code> example scripts.</li>
+<li><strong>Logs:</strong> See <code>logs/</code> for runtime and error logs.</li>
+</ul>
+<h2 id="classic-14-further-resources">14. Further Resources</h2>
+<ul>
+<li>[docs/guide.md](docs/guide.md): Language manual</li>
+<li>[docs/tutorial.md](docs/tutorial.md): Step-by-step tutorial</li>
+<li>[docs/erelang.md](docs/erelang.md): Project overview</li>
+<li>[syntax.md](syntax.md): Syntax reference</li>
+<li>[implemented.manifest](implemented.manifest): Feature checklist</li>
+<li>[examples/](examples/): Working code samples</li>
+<li>[README.md](README.md): Project summary</li>
+</ul>
+<hr>
+<p>Happy scripting with Erelang!</p>
+        </article>
+      </section>
+
+      <section class="card" id="full-doc">
+        <h2 class="section-title">Guide Source: <code>erevos.fullguide.md</code></h2>
+        <article class="doc" aria-label="Full Technical Guide">
+<h1 id="full-erevosfullguidemd">erevos.fullguide.md</h1>
+<h2 id="full-scope">Scope</h2>
+<p>This guide is a full technical map of the code currently in this repository, centered on all code in <code>src/</code> and the directly-related &quot;and stuff&quot; around it (<code>include/</code>, <code>CMakeLists.txt</code>, runtime/plugin wiring).</p>
+<p>It covers:</p>
+<ul>
+<li>Build targets and how binaries are composed.</li>
+<li>Lexer/parser/typechecker/optimizer behavior.</li>
+<li>Runtime execution model and statement semantics.</li>
+<li>Builtins (core and external modules).</li>
+<li>Plugin loading, plugin manifest parsing, creation kit tooling.</li>
+<li>C ABI surface and module system.</li>
+<li>File-by-file notes for every file in <code>src</code>.</li>
+<li>Known placeholders, mismatches, and implementation gaps visible in code.</li>
+</ul>
+<p>Date baseline: 2026-03-03.</p>
+<h2 id="full-high-level-architecture">High-Level Architecture</h2>
+<p>The project builds around a C++20 scripting runtime and toolchain for Erelang.</p>
+<p>Main stages:</p>
+<ol>
+<li>Lex source into <code>Token</code>s (<code>lexer.cpp</code>).</li>
+<li>Parse tokens into <code>Program</code> AST (<code>parser.cpp</code>).</li>
+<li>Type-check with diagnostics (<code>typechecker.cpp</code>).</li>
+<li>Optional constant-fold optimization (<code>optimizer.cpp</code>).</li>
+<li>Execute with interpreter runtime (<code>runtime.cpp</code>).</li>
+</ol>
+<p>Runtime supports:</p>
+<ul>
+<li>Actions, hooks, entities, globals.</li>
+<li>Dynamic list/dict/table handles.</li>
+<li>Windows-native UI controls (<code>win_*</code> and <code>ui_*</code>).</li>
+<li>Plugin metadata injection and hook dispatch.</li>
+<li>Builtin dispatch split between runtime TU and builtin component files.</li>
+</ul>
+<h2 id="full-build-and-outputs-cmakeliststxt">Build and Outputs (<code>CMakeLists.txt</code>)</h2>
+<p>Primary targets:</p>
+<ul>
+<li><code>erelang</code> (static library): all compiler/runtime components.</li>
+<li><code>obc</code> (CLI compiler/runner style frontend from <code>src/main.cpp</code>).</li>
+<li><code>erelang_runner</code> (output name <code>erelang</code>, from <code>src/obs_main.cpp</code>).</li>
+<li><code>build</code> (Windows GUI build launcher from <code>src/build_launcher.cpp</code>).</li>
+</ul>
+<p>Optional runtime DLL modes:</p>
+<ul>
+<li><code>BUILD_SHARED_RUNTIME=ON</code>: builds <code>erelang_shared</code> (<code>erelang.dll</code>).</li>
+<li><code>SPLIT_RUNTIME_DLLS=ON</code>: legacy split-component DLL build.</li>
+</ul>
+<p>Notable build behaviors:</p>
+<ul>
+<li>Release favors size (<code>-Os</code>, section GC, strip).</li>
+<li>Post-build creates aliases: <code>obs.exe</code> from runner, <code>libobskript.a</code> alias for static lib on Windows.</li>
+<li>Post-build tries creating <code>debug.exe</code> by running <code>erelang --make-debug</code>.</li>
+<li>Optional embed payload mode (<code>ERELANG_EMBED_PAYLOAD</code>) extracts static lib + headers into runner resources.</li>
+<li>VS Code extension packaging is invoked best-effort if extension dir exists.</li>
+</ul>
+<h2 id="full-public-api-and-data-model-includeerelang">Public API and Data Model (<code>include/erelang/*</code>)</h2>
+<p>Core AST (<code>parser.hpp</code>):</p>
+<ul>
+<li>Expressions: string, number, bool, ident, binary/unary, <code>new</code>, member access, function call.</li>
+<li>Statements: print/sleep/call/parallel/wait/pause/input/fire/let/return/set/method call/if/switch/while/for/for-in.</li>
+<li>Decls: action/hook/entity/global/import.</li>
+<li>Visibility: <code>public</code>/<code>private</code>.</li>
+<li>Program directives: <code>strict</code>, <code>debug</code>, <code>runTarget</code>, plugin aliases.</li>
+</ul>
+<p>Runtime (<code>runtime.hpp</code>):</p>
+<ul>
+<li><code>Runtime::run</code>, <code>run_single_action</code>, <code>eval_builtin_call</code>, GUI click callback.</li>
+<li>Plugin records include metadata, core properties, hook bindings, optional DSL spec.</li>
+<li>Runtime stores global vars, current program pointer, interpolation expression cache.</li>
+</ul>
+<p>Lexer API (<code>lexer.hpp</code>):</p>
+<ul>
+<li>Rich <code>TokenKind</code> set: operators, durations, unit numbers, doc comments, strict/bitwise-ish tokens.</li>
+<li><code>LexerOptions</code> toggles comments/durations/units/poly identifiers/custom keyword set.</li>
+</ul>
+<p>Type checker API (<code>typechecker.hpp</code>):</p>
+<ul>
+<li>Multi-pass checker with diagnostics (<code>TCxxx</code> codes).</li>
+<li>Scope manager and expression/statement visitors.</li>
+</ul>
+<p>Other headers:</p>
+<ul>
+<li><code>modules.hpp</code>: embedded/dynamic module registration and loading (<code>.odll</code>).</li>
+<li><code>plugins.hpp</code>: plugin manifest discovery result model.</li>
+<li><code>cabi.h</code>: C ABI (<code>ob_run_file</code>, <code>ob_collect_files</code>, <code>ob_free_string</code>).</li>
+<li><code>version.hpp</code>: version 1.3.0 + feature macros.</li>
+<li><code>policy.hpp</code>: allow/deny and quotas (default permissive).</li>
+<li><code>runtime_internals.hpp</code>: exposes shared list/dict handle maps for builtin modules.</li>
+</ul>
+<p>Legacy compatibility:</p>
+<ul>
+<li><code>include/obskript/*</code> thin wrappers include <code>erelang/*</code> + alias namespace (<code>obskript = erelang</code>).</li>
+</ul>
+<h2 id="full-language-frontend">Language Frontend</h2>
+<h3 id="full-lexer-srclexercpp">Lexer (<code>src/lexer.cpp</code>)</h3>
+<p>Implements:</p>
+<ul>
+<li>Normal tokenization for punctuation/operators/keywords/literals.</li>
+<li><code>#include</code> preprocessing at line start; converts include lines into <code>import</code> + optional <code>as</code> alias tokens.</li>
+<li>Nested block comments <code>/* ... */</code>, doc comments <code>///</code> and <code>/** */</code> when enabled.</li>
+<li>Raw strings <code>r&quot;...&quot;</code>, escaped normal strings/chars.</li>
+<li>Numeric lexing with hex/bin/oct/decimal/exponent forms.</li>
+<li>Duration tokens (e.g. <code>2m30s</code>) when enabled.</li>
+<li>Unit-number tokens (e.g. <code>9.81m/s^2</code>) when enabled.</li>
+<li>Poly identifiers with <code>#tag</code> split into token text + <code>tag</code> field.</li>
+</ul>
+<p>Observations:</p>
+<ul>
+<li>Contains an unused function <code>canEXPR()</code> with no return path.</li>
+<li>Handles many operator token kinds that parser currently does not fully consume.</li>
+</ul>
+<h3 id="full-parser-srcparsercpp">Parser (<code>src/parser.cpp</code>)</h3>
+<p>Implements recursive descent:</p>
+<ul>
+<li>Expression precedence: coalesce -&gt; or -&gt; and -&gt; equality -&gt; relational -&gt; additive -&gt; multiplicative -&gt; unary -&gt; primary.</li>
+<li>Supports:</li>
+<li>entity construction (<code>new Type(...)</code>)</li>
+<li>member access and dotted function call paths</li>
+<li>for, while, if/else-if, switch/case/default</li>
+<li>parallel blocks and <code>wait all</code></li>
+<li><code>pause</code>, <code>input</code>, <code>fire</code></li>
+<li>declarations: action/entity/hook/global/import/run</li>
+<li>directives and attributes (<code>@...</code>)</li>
+</ul>
+<p>Key semantics:</p>
+<ul>
+<li>Duration literal parser converts to milliseconds.</li>
+<li><code>run &lt;action&gt;</code> sets <code>Program::runTarget</code>.</li>
+<li>Entity members can be fields or action methods with modifiers/attributes.</li>
+<li>Plugin glob import <code>/plugins/*/project.elp</code> marks <code>pluginGlob</code> and adds plugin alias.</li>
+</ul>
+<p>Strictness behavior:</p>
+<ul>
+<li>Action parsing enforces explicit visibility (<code>public</code> or <code>private</code>) and throws if missing.</li>
+</ul>
+<h3 id="full-type-checker-srctypecheckercpp">Type Checker (<code>src/typechecker.cpp</code>)</h3>
+<p>Passes:</p>
+<ol>
+<li>Collect symbols + builtin signature map.</li>
+<li>Check duplicates, run target existence, statement and expression semantics.</li>
+<li>Emit unused warnings for actions/entities/methods/variables.</li>
+</ol>
+<p>Checks include:</p>
+<ul>
+<li>Use-before-declare.</li>
+<li>Redeclaration and const assignment checks.</li>
+<li>Return type compatibility and missing returns.</li>
+<li>Bool condition requirements for <code>if/while/for</code>.</li>
+<li>Unknown action/builtin call diagnostics and parameter count checks.</li>
+</ul>
+<p>Builtin signatures are hardcoded and broad, including GUI/data/network/crypto/thread/monitor/plugin-core helpers.</p>
+<h3 id="full-optimizer-srcoptimizercpp">Optimizer (<code>src/optimizer.cpp</code>)</h3>
+<ul>
+<li>Constant folds integer binary/unary expressions.</li>
+<li>Walks all action/method blocks recursively.</li>
+<li>Runs fixpoint passes until no more folds.</li>
+<li>Tracks <code>folds</code>, <code>nodesReplaced</code>, <code>passes</code>.</li>
+</ul>
+<h2 id="full-runtime-execution-engine-srcruntimecpp">Runtime Execution Engine (<code>src/runtime.cpp</code>)</h2>
+<h3 id="full-core-runtime-state">Core runtime state</h3>
+<ul>
+<li>Global string map <code>globalVars_</code> and set <code>globalNames_</code>.</li>
+<li>Dynamic list store: <code>list:&lt;id&gt;</code> -&gt; vector string.</li>
+<li>Dynamic dict store: <code>dict:&lt;id&gt;</code> -&gt; map string-&gt;string.</li>
+<li>Current program pointer for callbacks/thread builtins.</li>
+<li>Plugin records and alias-injected objects/vars.</li>
+</ul>
+<h3 id="full-evaluation-model">Evaluation model</h3>
+<p>All runtime values are string-backed at execution time.</p>
+<p><code>eval_string</code> handles:</p>
+<ul>
+<li>interpolation in string literals with <code>{...}</code>:</li>
+<li>local env vars</li>
+<li>globals</li>
+<li>parsed interpolation expression cache (mini parse via synthetic action)</li>
+<li>primitive expression evaluation</li>
+<li>binary arithmetic/comparison/logical/coalesce</li>
+<li>unit add/sub for matching suffixed unit strings</li>
+<li>member access and builtin function call expressions</li>
+</ul>
+<h3 id="full-statement-execution-execstmt">Statement execution (<code>exec_stmt</code>)</h3>
+<p>Supports all AST statements:</p>
+<ul>
+<li><code>print</code>, <code>sleep</code>, parallel spawning and <code>wait all</code>, <code>pause</code>, <code>input</code>.</li>
+<li><code>let</code> with entity construction (<code>new</code>) and optional <code>init</code> method call.</li>
+<li><code>return</code> stores return flag + value in <code>ExecContext</code>.</li>
+<li>hook firing (<code>fire</code>), control flow (<code>if/while/for/for-in/switch</code>).</li>
+<li>assignment to vars/member fields with strict checks for builtin alias assignment.</li>
+<li>method calls on:</li>
+<li>builtin module aliases</li>
+<li>list/dict handle objects (dynamic methods)</li>
+<li>native Window-backed methods</li>
+<li>scripted entity methods with visibility + <code>@hidden</code> enforcement</li>
+<li>direct action call dispatch with fallback to builtin call by name.</li>
+</ul>
+<h3 id="full-program-lifecycle-run">Program lifecycle (<code>run</code>)</h3>
+<p>Execution order:</p>
+<ol>
+<li>Resolve entry action (<code>runTarget</code> or <code>main</code>).</li>
+<li>Seed globals and directives into root env.</li>
+<li>Seed plugin alias objects and builtin module aliases.</li>
+<li>Dispatch plugin hooks in order: <code>datahook</code>, <code>onload</code>, <code>onstart</code>.</li>
+<li>Run script hook <code>onStart</code> if present.</li>
+<li>Run entry action.</li>
+<li>Run <code>onEnd</code> (or alias <code>onExit</code>).</li>
+<li>Dispatch plugin teardown hooks reverse order: <code>onend</code>, <code>onexit</code>, <code>onunload</code>.</li>
+</ol>
+<h3 id="full-single-action-execution-runsingleaction">Single-action execution (<code>run_single_action</code>)</h3>
+<ul>
+<li>Runs one action without full lifecycle.</li>
+<li>Lazily initializes globals + startup hooks once if needed.</li>
+<li>Persists global mutations.</li>
+</ul>
+<h3 id="full-plugin-alias-seeding">Plugin alias seeding</h3>
+<p>For each plugin alias from imports:</p>
+<ul>
+<li>Creates pseudo object <code>alias:slug</code> with fields (<code>id</code>, <code>name</code>, <code>version</code>, hook metadata, core values, language DSL metadata).</li>
+<li>Adds <code>alias.slugs</code>, <code>alias.count</code>, <code>alias.core.files</code>, and per-file core keys vars.</li>
+</ul>
+<h3 id="full-windows-gui-bridge">Windows GUI bridge</h3>
+<ul>
+<li>Registers Win32 window class once per process instance.</li>
+<li>Creates native windows and controls.</li>
+<li>Supports custom layout engine and parsed <code>erelang.ui</code> document loader (<code>ui_load</code>).</li>
+<li>Routes <code>WM_COMMAND</code>/<code>WM_HSCROLL</code> to runtime action callbacks via <code>handle_gui_click</code>.</li>
+</ul>
+<h2 id="full-builtins">Builtins</h2>
+<h3 id="full-builtins-inside-runtimecpp">Builtins inside <code>runtime.cpp</code></h3>
+<p>Core/system:</p>
+<ul>
+<li><code>now_ms</code>, <code>now_iso</code>, <code>env</code>, <code>username</code>, <code>computer_name</code>, <code>machine_guid</code>, <code>volume_serial</code>, <code>hwid</code>, <code>uuid</code>, <code>rand_int</code>.</li>
+<li>deterministic helpers via CLI seed flags: <code>advance_time</code>, deterministic <code>now_ms</code>.</li>
+<li>metadata/helpers: <code>dev_meta</code>, <code>audit</code>, language info builtins.</li>
+</ul>
+<p>CLI helpers:</p>
+<ul>
+<li><code>args_count</code>, <code>args_get</code>.</li>
+<li><code>exec</code>, <code>run_file</code>, <code>run_bat</code>, <code>read_line</code>, <code>prompt</code>.</li>
+</ul>
+<p>Filesystem/path:</p>
+<ul>
+<li><code>read_text</code>, <code>write_text</code>, <code>append_text</code>, <code>file_exists</code>, <code>mkdirs</code>, <code>copy_file</code>, <code>move_file</code>, <code>delete_file</code>, <code>list_files</code>, <code>cwd</code>, <code>chdir</code>, <code>path_join</code>, <code>path_dirname</code>, <code>path_basename</code>, <code>path_ext</code>.</li>
+</ul>
+<p>Containers:</p>
+<ul>
+<li>list: <code>list_new</code>, <code>list_push</code>, <code>list_get</code>, <code>list_len</code>, <code>list_join</code>, <code>list_clear</code>, <code>list_remove_at</code>.</li>
+<li>dict: <code>dict_new</code>, <code>dict_set</code>, <code>dict_get</code>, <code>dict_has</code>, <code>dict_keys</code>, <code>dict_values</code>, <code>dict_get_or</code>, <code>dict_remove</code>, <code>dict_clear</code>, <code>dict_size</code>, <code>dict_merge</code>, <code>dict_clone</code>, <code>dict_items</code>, <code>dict_entries</code>, path variants.</li>
+<li>table-over-dict: <code>table_new</code>, <code>table_put</code>, <code>table_get</code>, <code>table_has</code>, <code>table_remove</code>, <code>table_rows</code>, <code>table_columns</code>, <code>table_row_keys</code>, <code>table_clear_row</code>, <code>table_count_row</code>.</li>
+</ul>
+<p>Plugin-core queries:</p>
+<ul>
+<li><code>plugin_core</code>, <code>plugin_core_files</code>, <code>plugin_core_keys</code>.</li>
+</ul>
+<p>UI/Win32:</p>
+<ul>
+<li><code>win_*</code> and <code>ui_*</code> sets (window/control create/read/write/events/layout/message loop, UI file loader).</li>
+</ul>
+<h3 id="full-external-builtin-modules-srcbuiltinscpp">External builtin modules (<code>src/builtins/*.cpp</code>)</h3>
+<ul>
+<li><code>math.cpp</code>: integer math + trig + <code>collatz_*</code> sweep stats.</li>
+<li><code>network.cpp</code>: <code>http_get</code>, <code>http_download</code>, <code>hls_download_best</code>, URL encode, Windows <code>ipconfig</code> actions, network debug log/state helpers.</li>
+<li><code>system.cpp</code>: process execution wrappers (<code>system.cmd</code>, <code>system.execute</code>, output + last exit code, <code>system.ip.flush</code>).</li>
+<li><code>crypto.cpp</code>: FNV-1a hash and xorshift-based random-bytes hex.</li>
+<li><code>data.cpp</code>: in-memory key/value stores with simple file save/load.</li>
+<li><code>regex.cpp</code>: match/find/replace via <code>std::regex</code>.</li>
+<li><code>perm.cpp</code>: in-memory permission grant/revoke/query/list.</li>
+<li><code>binary.cpp</code>: binary buffer handles and byte/hex ops.</li>
+<li><code>threads.cpp</code>: thread lifecycle manager with states, join timeout, detach policy gating, GC/purge/remove/state builtins.</li>
+<li><code>monitor.cpp</code>: file-monitor handles with polling, hash/mtime/size change tracking.</li>
+<li><code>render.cpp</code>: currently empty translation unit.</li>
+</ul>
+<p>Dispatch behavior:</p>
+<ul>
+<li>Runtime calls external dispatchers in sequence and returns first non-empty result.</li>
+<li>Void side-effect builtins often return empty string.</li>
+</ul>
+<h2 id="full-plugin-system">Plugin System</h2>
+<h3 id="full-discovery-and-manifest-parsing-srcpluginscpp">Discovery and manifest parsing (<code>src/plugins.cpp</code>)</h3>
+<ul>
+<li>Scans built-in plugin root (<code>&lt;exe&gt;/plugins</code>) and user plugin root.</li>
+<li>User plugin root:</li>
+<li>Windows: <code>%LOCALAPPDATA%\Erelang\Plugins</code> fallback <code>%APPDATA%...</code></li>
+<li>Unix-like: <code>XDG_DATA_HOME</code> or <code>~/.local/share/erelang/plugins</code></li>
+<li>Requires <code>project.elp</code>.</li>
+<li>Parses nested XML-like blocks:</li>
+<li><code>&lt;plugin&gt;</code>, <code>&lt;erelang_manifest&gt;</code>, <code>&lt;content&gt;</code>, optional <code>&lt;language&gt;</code>, <code>&lt;hooks&gt;</code>, <code>&lt;dependencies&gt;</code></li>
+<li>Collects script/core/asset includes; parses <code>.core</code> key/value files.</li>
+<li>Supports hook binding maps and DSL extension keyword alias maps.</li>
+<li>Duplicate plugin <code>id</code> is overridden by later-discovered source.</li>
+</ul>
+<h3 id="full-creation-kit-srccreationkitcpp">Creation Kit (<code>src/creation_kit.cpp</code>)</h3>
+<p>Interactive CLI utility:</p>
+<ul>
+<li>Plugin template wizard (manifest + bootstrap script + README).</li>
+<li>Syntax profile editor from baseline <code>syntax.json</code> and output <code>syntax.override.json</code>.</li>
+<li>Runtime policy override editor (<code>policy.override.cfg</code>).</li>
+</ul>
+<h2 id="full-module-system-srcmodulescpp">Module System (<code>src/modules.cpp</code>)</h2>
+<ul>
+<li>Maintains registry of embedded <code>ModuleDef</code> values.</li>
+<li><code>resolve_imports</code> currently a simple pass-through placeholder.</li>
+<li>Windows dynamic load support scans <code>.odll</code> files and calls exported <code>ErelangGetModule</code>.</li>
+<li>Loaded DLL handles are retained for process lifetime.</li>
+</ul>
+<h2 id="full-cli-and-executables">CLI and Executables</h2>
+<h3 id="full-srcmaincpp-obc"><code>src/main.cpp</code> (<code>obc</code>)</h3>
+<ul>
+<li>Loads plugins and registers DSL specs from plugins.</li>
+<li>Recursively loads imports and <code>#include</code> dependencies.</li>
+<li>Merges loaded modules into final main program.</li>
+<li>Static checks (warn if no main/run target).</li>
+<li>Runs via <code>Runtime</code>.</li>
+<li>Supports <code>--creation-kit</code> / <code>kit</code> command branch.</li>
+</ul>
+<h3 id="full-srcobsmaincpp-erelang-runner"><code>src/obs_main.cpp</code> (<code>erelang</code> runner)</h3>
+<p>Major modes:</p>
+<ul>
+<li>run script: <code>erelang &lt;file&gt; [--debug]</code>.</li>
+<li>compile standalone exe: <code>--compile ...</code> (static default, dynamic optional).</li>
+<li>make debugger exe: <code>--make-debug</code>.</li>
+<li>list builtins/help/about/bootstrap/version.</li>
+</ul>
+<p>Compile flow (<code>--compile</code>):</p>
+<ul>
+<li>Collect reachable files (and optional <code>.olib</code>/<code>.ol</code> library manifests/files).</li>
+<li>Generate temporary bootstrap C++ project with embedded source map.</li>
+<li>Configure/build temp CMake app and copy <code>app.exe</code> to output.</li>
+<li>Copy <code>.odll</code> files and write <code>manifest.erelang</code> metadata.</li>
+<li>Best-effort strip and temp cleanup.</li>
+</ul>
+<h3 id="full-srcbuildlaunchercpp"><code>src/build_launcher.cpp</code></h3>
+<ul>
+<li>Windows GUI app for build/rebuild/clean with log output.</li>
+<li>Uses <code>cmake</code> commands via <code>_popen</code>/<code>system</code> flow.</li>
+<li>Dark-themed owner-draw UI controls and status indicator.</li>
+<li>Supports <code>--json</code> placeholder backend mode.</li>
+</ul>
+<h2 id="full-c-abi-layer-srccabiexportscpp">C ABI Layer (<code>src/cabi_exports.cpp</code>)</h2>
+<p>Exports:</p>
+<ul>
+<li><code>ob_run_file</code>: end-to-end load/import/typecheck/optimize/run for one entry file.</li>
+<li><code>ob_collect_files</code>: callback over transitive dependency files.</li>
+<li><code>ob_free_string</code>: frees ABI-allocated error string.</li>
+</ul>
+<p>Import resolution includes:</p>
+<ul>
+<li>local relative/absolute files</li>
+<li>extension fallback <code>.0bs</code> / <code>.obsecret</code></li>
+<li>registered module materialization to temp files</li>
+</ul>
+<h2 id="full-erodsl-helpers-srcerodslspeccpp">EroDSL Helpers (<code>src/erodsl/spec.cpp</code>)</h2>
+<ul>
+<li>Default spec id/name/version and default extensions.</li>
+<li>Canonical keyword set and alias application.</li>
+<li>Builds lexer options from spec.</li>
+<li>Normalizes extension strings.</li>
+</ul>
+<h2 id="full-policy-system">Policy System</h2>
+<ul>
+<li><code>include/erelang/policy.hpp</code>: header-implemented singleton with load/is_allowed and quotas.</li>
+<li><code>src/policy.cpp</code>: additional implementation also present.</li>
+</ul>
+<p>Practical effect:</p>
+<ul>
+<li>Builtin calls are policy-gated early in runtime.</li>
+<li>Monitor/thread modules also check policy explicitly by builtin name.</li>
+</ul>
+<h2 id="full-file-by-file-coverage-src">File-by-File Coverage (<code>src/</code>)</h2>
+<ul>
+<li><code>src/ast.cpp</code>: AST wrapper stub (<code>ast_wrap_program</code>).</li>
+<li><code>src/build_launcher.cpp</code>: Win32 build GUI app.</li>
+<li><code>src/cabi_exports.cpp</code>: C ABI run/collect bridge.</li>
+<li><code>src/creation_kit.cpp</code>: interactive plugin/syntax/policy generator/editor.</li>
+<li><code>src/error.cpp</code>: placeholder for diagnostics formatting.</li>
+<li><code>src/ffi.cpp</code>: stub FFI call returning <code>{ &quot;&quot;, false }</code>.</li>
+<li><code>src/gc.cpp</code>: placeholder GC TU.</li>
+<li><code>src/language_profile.cpp</code>: compatibility TU for legacy symbols.</li>
+<li><code>src/lexer.cpp</code>: tokenization/preprocessing implementation.</li>
+<li><code>src/main.cpp</code>: <code>obc</code> frontend and loader.</li>
+<li><code>src/modules.cpp</code>: module registry and dynamic <code>.odll</code> loading.</li>
+<li><code>src/obs_main.cpp</code>: main runner CLI and compiler packager.</li>
+<li><code>src/optimizer.cpp</code>: constant folding optimizer.</li>
+<li><code>src/parser.cpp</code>: parser and AST construction.</li>
+<li><code>src/plugins.cpp</code>: plugin discovery and manifest parser.</li>
+<li><code>src/policy.cpp</code>: extra policy manager implementation.</li>
+<li><code>src/runtime.cpp</code>: interpreter runtime, builtins, GUI bridge.</li>
+<li><code>src/stdlib.cpp</code>: stdlib placeholder dispatch stub.</li>
+<li><code>src/symboltable.cpp</code>: symbol table placeholder TU.</li>
+<li><code>src/typechecker.cpp</code>: semantic checks and diagnostics.</li>
+<li><code>src/erodsl/spec.cpp</code>: DSL spec + keyword alias helpers.</li>
+<li><code>src/builtins/binary.cpp</code>: binary handle builtins.</li>
+<li><code>src/builtins/crypto.cpp</code>: hash/random builtins.</li>
+<li><code>src/builtins/data.cpp</code>: key/value store builtins.</li>
+<li><code>src/builtins/math.cpp</code>: math + collatz builtins.</li>
+<li><code>src/builtins/monitor.cpp</code>: monitor subsystem builtins.</li>
+<li><code>src/builtins/network.cpp</code>: HTTP/HLS/network system builtins.</li>
+<li><code>src/builtins/perm.cpp</code>: permission set builtins.</li>
+<li><code>src/builtins/regex.cpp</code>: regex builtins.</li>
+<li><code>src/builtins/render.cpp</code>: empty TU.</li>
+<li><code>src/builtins/system.cpp</code>: process/system builtins.</li>
+<li><code>src/builtins/threads.cpp</code>: managed thread builtins.</li>
+<li><code>src/info/planned.obmanifest</code>: project metadata + roadmap.</li>
+</ul>
+<h2 id="full-known-gaps-and-notable-mismatches">Known Gaps and Notable Mismatches</h2>
+<ul>
+<li>Multiple source files are explicit placeholders/stubs (<code>ast</code>, <code>error</code>, <code>gc</code>, <code>ffi</code>, <code>stdlib</code>, <code>symboltable</code>, <code>render</code>).</li>
+<li><code>lexer.cpp</code> has an unused incomplete helper <code>canEXPR()</code>.</li>
+<li>Policy manager logic exists both header-inline and in <code>src/policy.cpp</code> (duplication risk).</li>
+<li>Builtin inventories differ somewhat between typechecker signatures and runtime/dispatch implementations.</li>
+<li>Runtime values are string-based; no strict runtime typed value model yet.</li>
+<li>Most GUI paths are Windows-only (<code>#ifdef _WIN32</code>).</li>
+</ul>
+<h2 id="full-included-and-stuff-coverage">Included &quot;And Stuff&quot; Coverage</h2>
+<p>Also reviewed and tied into this guide:</p>
+<ul>
+<li><code>include/erelang/*.hpp</code> public API model.</li>
+<li><code>include/obskript/*.hpp</code> compatibility wrappers.</li>
+<li><code>CMakeLists.txt</code> target graph and build behavior.</li>
+<li><code>README.md</code>/manifest context where it aligns with actual code paths.</li>
+</ul>
+        </article>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

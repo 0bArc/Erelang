@@ -1,0 +1,6 @@
+public action main {
+    let rs = r"C:\Users\Admin"
+    print(rs)
+}
+
+run main

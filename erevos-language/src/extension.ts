@@ -27,6 +27,7 @@ const BUILT_INS = [
   'table_new','table_put','table_get','table_has','table_remove','table_rows','table_columns','table_row_keys','table_clear_row','table_count_row',
   // Network
   'http_get','http_download','hls_download_best','url_encode','network.ip.flush','network.ip.release','network.ip.renew','network.ip.registerdns',
+  'network.debug.enable','network.debug.disable','network.debug.status','network.debug.last','network.debug.clear','network.debug.log_tail',
   // Language meta
   'language_name','language_version','language_about','language_limitations',
   // Windowing / UI
@@ -93,8 +94,6 @@ function collectModuleAliases(document: vscode.TextDocument): Map<string, string
     aliasToMethods.set(alias, methods);
   }
 
-  if (!aliasToMethods.has('fs')) aliasToMethods.set('fs', MODULE_METHODS_BY_SPEC['builtin/erefs']);
-  if (!aliasToMethods.has('path')) aliasToMethods.set('path', MODULE_METHODS_BY_SPEC['builtin/erepath']);
   return aliasToMethods;
 }
 

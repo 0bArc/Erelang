@@ -2653,7 +2653,13 @@ std::optional<ExprPtr> Runtime::parse_interpolation_expr(std::string_view exprTe
         script += key;
         script += "\n}";
 
-        Lexer lexer(script);
+        LexerOptions lxopts;
+        lxopts.enableDurations = true;
+        lxopts.enableUnits = true;
+        lxopts.enablePolyIdentifiers = true;
+        lxopts.emitDocComments = false;
+        lxopts.emitComments = false;
+        Lexer lexer(script, lxopts);
         Parser parser(lexer.lex());
         Program program = parser.parse();
         for (const auto& action : program.actions) {

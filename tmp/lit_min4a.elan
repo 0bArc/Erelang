@@ -1,0 +1,6 @@
+public action main {
+    let u = 100kb
+    print(u)
+}
+
+run main

@@ -1,0 +1,21 @@
+public action main {
+    let h = 0xFF
+    let b = 0b1010
+    let o = 0o777
+
+    network.debug.enable("tmp/lit_min5.network.log")
+
+    let query = url_encode("hex={h}&bin={b}&oct={o}")
+    let body = http_get("https://httpbin.org/get?{query}")
+    let ok = http_download("https://example.com", "tmp/lit_min5_download.html")
+    let netLast = network.debug.last()
+
+    print("hex: {h}")
+    print("bin: {b}")
+    print("oct: {o}")
+    print("download_ok: {ok}")
+    print(body)
+    print(netLast)
+}
+
+run main

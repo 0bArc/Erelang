@@ -1,0 +1,7 @@
+#include <module.elan>
+
+public action main {
+    module_ping()
+}
+
+run main

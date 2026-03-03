@@ -1,0 +1,6 @@
+public action main {
+    let d1 = 10s
+    print(d1)
+}
+
+run main

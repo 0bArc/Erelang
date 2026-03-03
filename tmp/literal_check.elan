@@ -1,0 +1,25 @@
+public action main {
+    let d1 = 10s
+    let d2 = 5m30s
+    let u1 = 9.81m/s^2
+    let u2 = 100kb/s
+    let #tagName = "tag"
+    let #core.file = "core"
+    let rs = r"C:\Users\Admin"
+    let h = 0xFF
+    let b = 0b1010
+    let o = 0o777
+
+    print d1
+    print d2
+    print u1
+    print u2
+    print #tagName
+    print #core.file
+    print rs
+    print h
+    print b
+    print o
+}
+
+run main

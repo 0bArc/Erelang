@@ -44,6 +44,44 @@ static int64_t parse_duration_ms(const std::string& s) {
     return static_cast<int64_t>(totalMs + 0.5);
 }
 
+static int64_t parse_numeric_literal(const std::string& text) {
+    if (text.empty()) {
+        throw std::runtime_error("Empty numeric literal");
+    }
+
+    if (text.size() > 2 && text[0] == '0' && (text[1] == 'b' || text[1] == 'B')) {
+        int64_t value = 0;
+        for (size_t i = 2; i < text.size(); ++i) {
+            const char ch = text[i];
+            if (ch != '0' && ch != '1') {
+                throw std::runtime_error("Invalid binary literal: " + text);
+            }
+            value = (value << 1) + static_cast<int64_t>(ch - '0');
+        }
+        return value;
+    }
+
+    if (text.size() > 2 && text[0] == '0' && (text[1] == 'o' || text[1] == 'O')) {
+        int64_t value = 0;
+        for (size_t i = 2; i < text.size(); ++i) {
+            const char ch = text[i];
+            if (ch < '0' || ch > '7') {
+                throw std::runtime_error("Invalid octal literal: " + text);
+            }
+            value = (value * 8) + static_cast<int64_t>(ch - '0');
+        }
+        return value;
+    }
+
+    if (text.find('.') != std::string::npos || text.find('e') != std::string::npos || text.find('E') != std::string::npos) {
+        const double dv = std::stod(text);
+        return static_cast<int64_t>(dv);
+    }
+
+    size_t idx = 0;
+    return std::stoll(text, &idx, 0);
+}
+
 const Token& Parser::peek(size_t offset) const {
     size_t idx = pos_ + offset;
     if (idx >= tokens_.size()) return tokens_.back();
@@ -178,7 +216,7 @@ ExprPtr Parser::parse_primary() {
         return std::make_shared<Expr>(Expr{ ne });
     }
     if (t.kind == TokenKind::String || t.kind == TokenKind::Char || t.kind == TokenKind::RawString) { consume(); return std::make_shared<Expr>(Expr{ ExprString{ t.text } }); }
-    if (t.kind == TokenKind::Number) { consume(); return std::make_shared<Expr>(Expr{ ExprNumber{ std::stoll(t.text) } }); }
+    if (t.kind == TokenKind::Number) { consume(); return std::make_shared<Expr>(Expr{ ExprNumber{ parse_numeric_literal(t.text) } }); }
     if (t.kind == TokenKind::Duration) { consume(); return std::make_shared<Expr>(Expr{ ExprNumber{ parse_duration_ms(t.text) } }); }
     if (t.kind == TokenKind::UnitNumber) { consume(); return std::make_shared<Expr>(Expr{ ExprString{ t.text } }); }
     if (t.kind == TokenKind::Word || t.kind == TokenKind::Keyword) {
@@ -402,7 +440,7 @@ Statement Parser::parse_statement() {
         if (nameTok.kind != TokenKind::Word) throw std::runtime_error("Expected action name after run");
         return ActionCallStmt{ ident_text(nameTok), {} };
     }
-    // member assignment or method call like obj.field = expr or obj.method(...)
+    // member assignment or dotted call like obj.field = expr or a.b.c(...)
     if (peek().kind == TokenKind::Word || peek().kind == TokenKind::Keyword) {
         const Token& objTok = peek();
         if (peek(1).kind == TokenKind::Dot) {
@@ -415,14 +453,21 @@ Statement Parser::parse_statement() {
                 auto val = parse_expression();
                 return SetStmt{ true, ident_text(mem), ident_text(objTok), val };
             }
-            // method call
-            MethodCallStmt mc; mc.objectName = ident_text(objTok); mc.method = ident_text(mem);
+            // method call (single-dot) or dotted function-style call (multi-dot)
+            std::string dottedName = ident_text(objTok) + "." + ident_text(mem);
+            while (match(TokenKind::Dot)) {
+                const Token& seg = consume();
+                if (!(seg.kind == TokenKind::Word || seg.kind == TokenKind::Keyword)) throw std::runtime_error("Expected member name after '.'");
+                dottedName += "." + ident_text(seg);
+            }
             if (match(TokenKind::LParen)) {
+                ActionCallStmt call;
+                call.name = dottedName;
                 if (!match(TokenKind::RParen)) {
-                    do { mc.args.push_back(parse_expression()); } while (match(TokenKind::Comma));
+                    do { call.args.push_back(parse_expression()); } while (match(TokenKind::Comma));
                     expect(TokenKind::RParen, ")");
                 }
-                return mc;
+                return call;
             }
             throw std::runtime_error("Expected '=' or '(' after member name");
         }

@@ -1,0 +1,8 @@
+public action main {
+    let #tagName = "tag"
+    let #core.file = "core"
+    print(#tagName)
+    print(#core.file)
+}
+
+run main

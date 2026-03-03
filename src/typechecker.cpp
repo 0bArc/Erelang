@@ -236,6 +236,9 @@ void TypeChecker::init_builtins() {
     // Network
     add("http_get",1,1,"string"); add("http_download",2,2,"bool"); add("hls_download_best",2,2,"bool"); add("url_encode",1,1,"string");
     add("network.ip.flush",0,0,"string"); add("network.ip.release",0,1,"string"); add("network.ip.renew",0,1,"string"); add("network.ip.registerdns",0,0,"string");
+    add("network.debug.enable",0,1,"string"); add("network.debug.disable",0,0,"string");
+    add("network.debug.status",0,0,"string"); add("network.debug.last",0,0,"string");
+    add("network.debug.clear",0,0,"string"); add("network.debug.log_tail",0,1,"string");
     // Language info
     add("language_name",0,0,"string"); add("language_version",0,0,"string"); add("language_about",0,0,"string"); add("language_limitations",0,0,"string");
     // GUI / windowing (Windows only semantics, but we still typecheck symbol existence)

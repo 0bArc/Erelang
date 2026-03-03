@@ -1,0 +1,8 @@
+public action main {
+    let u1 = 9.81m/s^2
+    let u2 = 300kb/s + 100kb/s 
+    print(u1)
+    print(u2)
+}
+
+run main

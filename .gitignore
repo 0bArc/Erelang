@@ -64,7 +64,7 @@ Desktop.ini
 # Devlog and debug output
 devlog/
 examples/debug/
-tmp/
+
 
 # Plugin build artifacts
 plugins/*/build/

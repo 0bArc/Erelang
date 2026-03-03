@@ -1,0 +1,6 @@
+public action main {
+    let u = 9.81m/s^2
+    print(u)
+}
+
+run main

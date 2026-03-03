@@ -104,6 +104,25 @@ std::vector<Token> Lexer::lex() {
                 i = k; // do not consume newline here; it will be handled next loop
                 continue;
             }
+            // Hash-prefixed polymorphic identifiers at line-start (e.g., #tagName, #core.file)
+            if (opts_.enablePolyIdentifiers && j == i + 1 && j < src_.size() && is_word_start(src_[j])) {
+                size_t h = j;
+                while (h < src_.size()) {
+                    char ch = src_[h];
+                    if (is_word_part(ch) || ch == '.') {
+                        ++h;
+                        continue;
+                    }
+                    break;
+                }
+                std::string ident(src_.data() + i, h - i);
+                push(TokenKind::Word, ident);
+                col += static_cast<int>(h - i);
+                i = h;
+                atLineStart = false;
+                continue;
+            }
+
             // Unknown preprocessor line: skip to end-of-line
             size_t m = i;
             while (m < src_.size() && src_[m] != '\n') { ++m; }
@@ -341,17 +360,35 @@ std::vector<Token> Lexer::lex() {
 
             if (opts_.enableDurations) {
                 size_t k = j; bool any = false; size_t last = j;
-                while (k < src_.size()) {
-                    // parse number component (int or float)
-                    size_t nstart = k; bool hadDigit = false;
-                    while (k < src_.size() && isDigit(src_[k])) { ++k; hadDigit = true; }
-                    if (k < src_.size() && src_[k] == '.') { ++k; while (k < src_.size() && isDigit(src_[k])) { ++k; hadDigit = true; } }
-                    if (!hadDigit) break;
-                    // parse unit
-                    size_t adv = 0; if (!isDurUnit(k, adv)) { k = nstart; break; }
-                    k += adv; any = true; last = k;
-                    // next component must start immediately (no separator). If next char is digit, loop continues; else stop.
-                    if (!(k < src_.size() && isDigit(src_[k]))) break;
+                size_t adv = 0;
+                if (isDurUnit(k, adv)) {
+                    any = true;
+                    k += adv;
+                    last = k;
+                    while (k < src_.size()) {
+                        // parse next number component (int or float)
+                        bool hadDigit = false;
+                        while (k < src_.size() && isDigit(src_[k])) { ++k; hadDigit = true; }
+                        if (k < src_.size() && src_[k] == '.') {
+                            ++k;
+                            while (k < src_.size() && isDigit(src_[k])) { ++k; hadDigit = true; }
+                        }
+                        if (!hadDigit) break;
+
+                        // parse required unit for this component
+                        size_t nextAdv = 0;
+                        if (!isDurUnit(k, nextAdv)) break;
+                        k += nextAdv;
+                        last = k;
+                    }
+                }
+                if (any) {
+                    // If followed by unit composition (e.g., m/s^2), prefer UnitNumber tokenization.
+                    if (opts_.enableUnits && last + 1 < src_.size() &&
+                        (src_[last] == '/' || src_[last] == '*') &&
+                        std::isalpha(static_cast<unsigned char>(src_[last + 1])) != 0) {
+                        any = false;
+                    }
                 }
                 if (any) {
                     std::string lexeme(src_.data() + i, last - i);
@@ -429,6 +466,21 @@ std::vector<Token> Lexer::lex() {
             std::string low = word; for (auto& ch : low) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
             if (kw.count(low)) push(TokenKind::Keyword, word); else push(TokenKind::Word, word);
             if (!tag.empty()) out.back().tag = std::move(tag);
+            col += static_cast<int>(j - i);
+            i = j;
+            continue;
+        }
+        if (c == '#' && opts_.enablePolyIdentifiers && i + 1 < src_.size() && is_word_start(src_[i + 1])) {
+            size_t j = i + 1;
+            while (j < src_.size()) {
+                char ch = src_[j];
+                if (is_word_part(ch) || ch == '.') {
+                    ++j;
+                    continue;
+                }
+                break;
+            }
+            push(TokenKind::Word, std::string(src_.data() + i, j - i));
             col += static_cast<int>(j - i);
             i = j;
             continue;

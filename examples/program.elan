@@ -2,13 +2,11 @@
 
 #include <builtin/erefs> as fs
 #include <builtin/erepath> as path
-
+#include <modules/math.elan> as math
 
 public action main {
-    let r = rand_int(100)
+    let r = mul(2,52)
     print r
-    
 }
 
 run main
-

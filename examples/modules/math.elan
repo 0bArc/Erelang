@@ -1,0 +1,14 @@
+@erevos
+
+
+public action sum(x,y) {
+    return x + y
+}
+
+public action mul(x,y) {
+    return x * y
+}
+
+public action min(x,y) {
+    return x - y
+}

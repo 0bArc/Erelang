@@ -30,6 +30,7 @@ endfunction()
 option(ERELANG_EMBED_PAYLOAD "Embed erelang static lib and headers into erelang for out-of-tree portability" OFF)
 option(SPLIT_RUNTIME_DLLS "Build runtime as many small component DLLs instead of one monolithic erelang.dll" OFF)
 option(BUILD_SHARED_RUNTIME "Build erelang as a shared DLL (erelang.dll). OFF = no runtime DLLs produced" OFF)
+option(BUILD_DEBUGGER_EXE "Build debug.exe helper via --make-debug after erelang links" OFF)
 
 # Default to Release if not specified
 if (NOT CMAKE_BUILD_TYPE)
@@ -298,12 +299,13 @@ if (CMAKE_BUILD_TYPE STREQUAL "Release" AND NOT MSVC)
     COMMENT "Stripping symbols from erelang for smaller size")
 endif()
 
-# Always build the debugger exe after erelang links
-add_custom_command(TARGET erelang_runner POST_BUILD
-  COMMAND $<TARGET_FILE:erelang_runner> --make-debug --output $<TARGET_FILE_DIR:erelang_runner>/debug.exe
-  WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-  COMMENT "Building debug.exe via erelang"
-)
+if (BUILD_DEBUGGER_EXE)
+  add_custom_command(TARGET erelang_runner POST_BUILD
+    COMMAND $<TARGET_FILE:erelang_runner> --make-debug --output $<TARGET_FILE_DIR:erelang_runner>/debug.exe
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    COMMENT "Building debug.exe via erelang"
+  )
+endif()
 
 
 if (WIN32 AND BUILD_SHARED_RUNTIME AND NOT SPLIT_RUNTIME_DLLS)

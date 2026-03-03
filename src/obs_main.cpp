@@ -98,7 +98,7 @@ static void print_help() {
                  "  Imports are resolved at compile-time and embedded into the executable.\n"
                  "  Each compiled app writes manifest.erelang next to the exe with build + content metadata.\n"
                  "  By default, the compiled app links statically. Use --dynamic to link against erelang.dll (if available) for a tiny stub.\n"
-                 "  --make-debug builds a debugger exe from examples/debug/debug.0bs.\n"
+                 "  --make-debug builds a debugger exe from examples/lib/debugger.elan.\n"
                  "  --debug when running loads the debug driver and prefers debug_main.\n";
 }
 
@@ -999,15 +999,26 @@ struct ExecutionContext {
             fs::path probe = layout.projectRoot;
             fs::path debugScript;
             for (int depth = 0; depth < 6 && !probe.empty(); ++depth) {
+                const fs::path libDir = probe / "examples" / "lib";
                 const fs::path debugDir = probe / "examples" / "debug";
-                const fs::path candidateElan = debugDir / "debug.elan";
-                const fs::path candidateObs = debugDir / "debug.0bs";
-                if (fs::exists(candidateElan)) {
-                    debugScript = candidateElan;
+                const fs::path candidateLibElan = libDir / "debugger.elan";
+                const fs::path candidateLibObs = libDir / "debugger.0bs";
+                const fs::path candidateDebugElan = debugDir / "debug.elan";
+                const fs::path candidateDebugObs = debugDir / "debug.0bs";
+                if (fs::exists(candidateLibElan)) {
+                    debugScript = candidateLibElan;
                     break;
                 }
-                if (fs::exists(candidateObs)) {
-                    debugScript = candidateObs;
+                if (fs::exists(candidateLibObs)) {
+                    debugScript = candidateLibObs;
+                    break;
+                }
+                if (fs::exists(candidateDebugElan)) {
+                    debugScript = candidateDebugElan;
+                    break;
+                }
+                if (fs::exists(candidateDebugObs)) {
+                    debugScript = candidateDebugObs;
                     break;
                 }
                 probe = probe.parent_path();
@@ -1177,21 +1188,32 @@ int main(int argc, char** argv) {
         {
             fs::path probe = layout.projectRoot;
             for (int depth = 0; depth < 6 && !probe.empty(); ++depth) {
+                const fs::path libDir = probe / "examples" / "lib";
                 const fs::path debugDir = probe / "examples" / "debug";
-                const fs::path candidateElan = debugDir / "debug.elan";
-                const fs::path candidateObs = debugDir / "debug.0bs";
-                if (fs::exists(candidateElan)) {
-                    input = candidateElan;
+                const fs::path candidateLibElan = libDir / "debugger.elan";
+                const fs::path candidateLibObs = libDir / "debugger.0bs";
+                const fs::path candidateDebugElan = debugDir / "debug.elan";
+                const fs::path candidateDebugObs = debugDir / "debug.0bs";
+                if (fs::exists(candidateLibElan)) {
+                    input = candidateLibElan;
                     break;
                 }
-                if (fs::exists(candidateObs)) {
-                    input = candidateObs;
+                if (fs::exists(candidateLibObs)) {
+                    input = candidateLibObs;
+                    break;
+                }
+                if (fs::exists(candidateDebugElan)) {
+                    input = candidateDebugElan;
+                    break;
+                }
+                if (fs::exists(candidateDebugObs)) {
+                    input = candidateDebugObs;
                     break;
                 }
                 probe = probe.parent_path();
             }
             if (input.empty()) {
-                std::cerr << "debug script not found (tried debug.elan, debug.0bs); searched upwards from: " << layout.projectRoot << "\n";
+                std::cerr << "debug script not found (tried examples/lib/debugger.elan, examples/lib/debugger.0bs, examples/debug/debug.elan, examples/debug/debug.0bs); searched upwards from: " << layout.projectRoot << "\n";
                 return 1;
             }
         }

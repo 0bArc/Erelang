@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
 
 // Simple regex patterns for declarations
 const ENTITY_RE = /^\s*(?:public|private)?\s*entity\s+([A-Za-z_][A-Za-z0-9_]*)/;
@@ -56,6 +58,11 @@ interface CollectedSymbols {
   hooks: Set<string>;
 }
 
+interface ImportedSymbols {
+  aliasToActions: Map<string, Set<string>>;
+  allActions: Set<string>;
+}
+
 function normalizeModuleSpec(moduleSpec: string): string {
   const trimmed = moduleSpec.trim();
   if (trimmed.startsWith('<') && trimmed.endsWith('>')) return trimmed.slice(1, -1).toLowerCase();
@@ -97,6 +104,144 @@ function collectModuleAliases(document: vscode.TextDocument): Map<string, string
   return aliasToMethods;
 }
 
+function tryResolveIncludeFile(document: vscode.TextDocument, moduleSpec: string): string | null {
+  const spec = normalizeModuleSpec(moduleSpec);
+  if (!spec || spec.startsWith('builtin/')) return null;
+
+  const docDir = path.dirname(document.uri.fsPath);
+  const exts = ['.elan', '.ere', '.0bs'];
+  const candidates: string[] = [];
+
+  const direct = path.resolve(docDir, spec);
+  candidates.push(direct);
+
+  if (!path.extname(spec)) {
+    for (const ext of exts) {
+      candidates.push(path.resolve(docDir, spec + ext));
+    }
+  }
+
+  if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+    for (const folder of vscode.workspace.workspaceFolders) {
+      candidates.push(path.resolve(folder.uri.fsPath, spec));
+      if (!path.extname(spec)) {
+        for (const ext of exts) {
+          candidates.push(path.resolve(folder.uri.fsPath, spec + ext));
+        }
+      }
+    }
+  }
+
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+        return candidate;
+      }
+    } catch {
+      // Ignore inaccessible candidates.
+    }
+  }
+  return null;
+}
+
+function extractActionsFromFile(filePath: string): Set<string> {
+  const names = new Set<string>();
+  try {
+    const content = fs.readFileSync(filePath, 'utf8');
+    for (const line of content.split(/\r?\n/)) {
+      const m = ACTION_RE.exec(line);
+      if (m) names.add(m[1]);
+    }
+  } catch {
+    // Ignore unreadable files.
+  }
+  return names;
+}
+
+function collectImportedSymbols(document: vscode.TextDocument): ImportedSymbols {
+  const aliasToActions = new Map<string, Set<string>>();
+  const allActions = new Set<string>();
+
+  for (let index = 0; index < document.lineCount; index++) {
+    const text = document.lineAt(index).text;
+    let moduleSpec: string | null = null;
+    let alias: string | null = null;
+
+    const includeMatch = INCLUDE_ALIAS_RE.exec(text);
+    if (includeMatch) {
+      moduleSpec = includeMatch[1];
+      alias = includeMatch[2] ?? defaultAliasFromSpec(includeMatch[1]);
+    } else {
+      const importMatch = IMPORT_ALIAS_RE.exec(text);
+      if (importMatch) {
+        moduleSpec = importMatch[1];
+        alias = importMatch[2] ?? defaultAliasFromSpec(importMatch[1]);
+      }
+    }
+
+    if (!moduleSpec || !alias) continue;
+
+    const builtinMethods = MODULE_METHODS_BY_SPEC[normalizeModuleSpec(moduleSpec)];
+    if (builtinMethods) {
+      aliasToActions.set(alias, new Set(builtinMethods));
+      continue;
+    }
+
+    const resolved = tryResolveIncludeFile(document, moduleSpec);
+    if (!resolved) continue;
+
+    const actions = extractActionsFromFile(resolved);
+    if (actions.size === 0) continue;
+    aliasToActions.set(alias, actions);
+    for (const name of actions) allActions.add(name);
+  }
+
+  return { aliasToActions, allActions };
+}
+
+function provideIncludePathCompletions(document: vscode.TextDocument, linePrefix: string): vscode.CompletionItem[] | null {
+  const includeMatch = /^\s*#include\s*<([^>]*)$/.exec(linePrefix) ?? /^\s*#include\s*"([^"]*)$/.exec(linePrefix);
+  if (!includeMatch) return null;
+
+  const partial = includeMatch[1].replace(/\\/g, '/');
+  const slashIdx = partial.lastIndexOf('/');
+  const dirPart = slashIdx >= 0 ? partial.slice(0, slashIdx + 1) : '';
+  const namePart = slashIdx >= 0 ? partial.slice(slashIdx + 1) : partial;
+
+  const docDir = path.dirname(document.uri.fsPath);
+  const targetDir = path.resolve(docDir, dirPart || '.');
+  let entries: fs.Dirent[] = [];
+  try {
+    entries = fs.readdirSync(targetDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const out: vscode.CompletionItem[] = [];
+  for (const entry of entries) {
+    if (!entry.name.toLowerCase().startsWith(namePart.toLowerCase())) continue;
+
+    if (entry.isDirectory()) {
+      const label = entry.name + '/';
+      const ci = new vscode.CompletionItem(label, vscode.CompletionItemKind.Folder);
+      ci.insertText = dirPart + label;
+      ci.detail = 'folder';
+      out.push(ci);
+      continue;
+    }
+
+    if (!entry.isFile()) continue;
+    const lower = entry.name.toLowerCase();
+    if (!(lower.endsWith('.elan') || lower.endsWith('.ere') || lower.endsWith('.0bs'))) continue;
+
+    const ci = new vscode.CompletionItem(entry.name, vscode.CompletionItemKind.File);
+    ci.insertText = dirPart + entry.name;
+    ci.detail = 'script file';
+    out.push(ci);
+  }
+  return out;
+}
+
 function collect(document: vscode.TextDocument): CollectedSymbols {
   const out: CollectedSymbols = { entities: new Set(), actions: new Set(), fields: new Set(), hooks: new Set() };
   for (let i=0;i<document.lineCount;i++) {
@@ -112,13 +257,17 @@ function collect(document: vscode.TextDocument): CollectedSymbols {
 class ErelangCompletionProvider implements vscode.CompletionItemProvider {
   provideCompletionItems(doc: vscode.TextDocument, pos: vscode.Position): vscode.CompletionItem[] {
     const linePrefix = doc.lineAt(pos.line).text.slice(0, pos.character);
+
+    const includeItems = provideIncludePathCompletions(doc, linePrefix);
+    if (includeItems) return includeItems;
+
     const memberAccess = /([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)?$/.exec(linePrefix);
     if (memberAccess) {
       const objectName = memberAccess[1];
       const partialName = memberAccess[2] ?? '';
-      const aliases = collectModuleAliases(doc);
-      const methods = aliases.get(objectName) ?? [];
-      return methods
+      const imported = collectImportedSymbols(doc);
+      const methods = imported.aliasToActions.get(objectName) ?? new Set<string>();
+      return [...methods]
         .filter((methodName) => partialName.length === 0 || methodName.startsWith(partialName))
         .map((methodName) => {
           const completionItem = new vscode.CompletionItem(methodName, vscode.CompletionItemKind.Method);
@@ -140,6 +289,14 @@ class ErelangCompletionProvider implements vscode.CompletionItemProvider {
     pushAll(col.actions, vscode.CompletionItemKind.Function);
     pushAll(col.fields, vscode.CompletionItemKind.Field);
     pushAll(col.hooks, vscode.CompletionItemKind.Event);
+
+    const imported = collectImportedSymbols(doc);
+    for (const name of imported.allActions) {
+      const ci = new vscode.CompletionItem(name, vscode.CompletionItemKind.Function);
+      ci.detail = 'imported action';
+      items.push(ci);
+    }
+
     for (const b of BUILT_INS) {
       const ci = new vscode.CompletionItem(b, vscode.CompletionItemKind.Function);
       ci.detail = 'builtin';

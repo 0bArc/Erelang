@@ -285,13 +285,13 @@ During event callbacks the runtime injects `id` (control identifier) and `win` (
 
 ## 13. Debugging support
 
-`--debug` loads the driver under `examples/debug/debug.0bs`, adding helpers like `bp("label")` and `trace(expr)`:
+`--debug` loads the driver from `examples/lib/debugger.elan` (with legacy fallback to `examples/debug/debug.0bs`), adding helpers like `bp("label")` and `trace(expr)`:
 
 ```pwsh
 ./build/erelang.exe examples/test.0bs --debug
 ```
 
-Browse `src/erelang_main.cpp` (debug path) and `examples/debug/` to see how hooks are wired.
+Browse `src/obs_main.cpp` (debug path) and `examples/lib/debugger.elan` to see how hooks are wired.
 
 ## 14. Policy controls
 

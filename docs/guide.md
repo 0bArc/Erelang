@@ -363,7 +363,7 @@ erelang .\examples\debug_demo.0bs --debug
 In scripts:
 
 ```
-import "./lib/debugger.0bs"
+import "./lib/debugger.elan"
 
 action main() {
   print "before"

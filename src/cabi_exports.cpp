@@ -71,10 +71,17 @@ OB_API int ob_run_file(const char* main_file, int argc, const char* argv[], int 
         const bool debug = (flags & 0x1) != 0;
         std::optional<fs::path> debugDriver;
         if (debug && projectRoot) {
+            const fs::path libDir = *projectRoot / "examples" / "lib";
             const fs::path debugDir = *projectRoot / "examples" / "debug";
+            const fs::path tryLibElan = libDir / "debugger.elan";
+            const fs::path tryLibObs = libDir / "debugger.0bs";
             const fs::path tryDbgElan = debugDir / "debug.elan";
             const fs::path tryDbgObs = debugDir / "debug.0bs";
-            if (fs::exists(tryDbgElan)) {
+            if (fs::exists(tryLibElan)) {
+                debugDriver = tryLibElan;
+            } else if (fs::exists(tryLibObs)) {
+                debugDriver = tryLibObs;
+            } else if (fs::exists(tryDbgElan)) {
                 debugDriver = tryDbgElan;
             } else if (fs::exists(tryDbgObs)) {
                 debugDriver = tryDbgObs;

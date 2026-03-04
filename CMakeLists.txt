@@ -70,6 +70,7 @@ add_library(erelang STATIC
   src/builtins/binary.cpp
   src/builtins/threads.cpp
   src/builtins/monitor.cpp
+  src/features/serialization.cpp
   src/ast.cpp
   src/typechecker.cpp
   src/error.cpp

@@ -1,0 +1,12 @@
+@erelang
+
+public action main {
+  string line = "print \"Hello\""
+  print string.starts_with(line, "print ")
+  print string.ends_with(line, "\"")
+  print string.find("repeat 12 { print \"Hi\" }", "{")
+  print string.substr("repeat 12 { print \"Hi\" }", 7, 2)
+  print string.len(line)
+}
+
+run main

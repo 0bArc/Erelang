@@ -1,0 +1,18 @@
+@erelang
+
+public action main {
+  string line = "print \"Hello\""
+  if (string.starts_with(line, "print ")) {
+    print "starts:true"
+  } else {
+    print "starts:false"
+  }
+
+  if (string.ends_with(line, "\"")) {
+    print "ends:true"
+  } else {
+    print "ends:false"
+  }
+}
+
+run main

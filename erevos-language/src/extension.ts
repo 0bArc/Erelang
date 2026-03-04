@@ -24,7 +24,7 @@ const MODULE_METHODS_BY_SPEC: Record<string, string[]> = {
 const CHAIN_METHODS = ['lstrip', 'rstrip', 'strip', 'lower', 'upper'];
 const ARRAY_METHODS = ['forEach', 'push', 'get', 'len'];
 const DICTIONARY_METHODS = ['set', 'get', 'has', 'getOr', 'remove', 'clear', 'size', 'keys', 'values', 'merge'];
-const LANGUAGE_KEYWORDS = ['int','double','string','bool','char','auto','Array','Map','constexpr','static','struct','enum','type','match','try','catch','async','await','static_cast'];
+const LANGUAGE_KEYWORDS = ['entity','action','field','let','const','global','int','double','string','bool','char','auto','Array','Map','constexpr','static','struct','enum','type','match','try','catch','async','await','namespace','unsafe','repeat','static_cast','dynamic_cast','reinterpret_cast','sizeof','typeof','decltype','alignof','offsetof','is_base_of'];
 
 function isForeachColonContext(linePrefix: string): boolean {
   const loopPrefix = /\bfor\s*\([^)]*:\s*[A-Za-z_]*$/;
@@ -41,6 +41,10 @@ const BUILT_INS = [
   // Core / time / env
   'print','PRINT','sleep','now_ms','now_iso','env','username','computer_name','machine_guid','uuid','rand_int','hwid','args_count','args_get','input',
   'toint','toInt','tofloat','tostr','toString',
+  'dynamic_cast','reinterpret_cast','to_json','from_json',
+  'sizeof','typeof','decltype','alignof','offsetof','is_base_of',
+  'string.starts_with','string.ends_with','string.find','string.substr','string.len',
+  'ptr_new','ptr_get','ptr_set','ptr_free','ptr_valid','make_unique','make_shared','unique_reset','shared_reset',
   'string.lstrip','string.rstrip','string.strip','string.lower','string.upper',
   // Filesystem
   'read_text','write_text','append_text','file_exists','mkdirs','copy_file','move_file','delete_file','list_files','cwd','chdir',
@@ -426,7 +430,7 @@ class ErelangCompletionProvider implements vscode.CompletionItemProvider {
       seen.add(keyword);
       const ci = new vscode.CompletionItem(keyword, vscode.CompletionItemKind.Keyword);
       ci.detail = 'keyword';
-      ci.sortText = `k_${keyword}`;
+      ci.sortText = `aa_${keyword}`;
       items.push(ci);
     }
 

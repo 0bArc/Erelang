@@ -1,0 +1,62 @@
+@erelang
+
+namespace SelfHostParser {
+  public action parse(token_stream: Map<string, any>) {
+    if (token_stream.kind == "StructDecl") {
+      return {
+        "kind": "StructDecl",
+        "name": token_stream.name,
+        "line": token_stream.line
+      }
+    }
+
+    if (token_stream.kind == "ImplDecl") {
+      auto body_tokens = SelfHostLexer::tokenize(token_stream.body_source)
+      auto body_ast = parse(body_tokens)
+
+      return {
+        "kind": "ImplDecl",
+        "struct_name": token_stream.struct_name,
+        "method_name": token_stream.method_name,
+        "body_ast": body_ast,
+        "body_source": token_stream.body_source,
+        "line": token_stream.line
+      }
+    }
+
+    if (token_stream.kind == "RepeatStmt") {
+      auto body_tokens = SelfHostLexer::tokenize(token_stream.body_source)
+      auto body_ast = parse(body_tokens)
+
+      return {
+        "kind": "RepeatStmt",
+        "count": token_stream.count,
+        "body_ast": body_ast,
+        "line": token_stream.line
+      }
+    }
+
+    if (token_stream.kind == "ImplCall") {
+      return {
+        "kind": "ImplCall",
+        "struct_name": token_stream.struct_name,
+        "method_name": token_stream.method_name,
+        "line": token_stream.line
+      }
+    }
+
+    if (token_stream.kind == "SelfAssign") {
+      return {
+        "kind": "SelfAssign",
+        "field": token_stream.field,
+        "expr": token_stream.expr,
+        "line": token_stream.line
+      }
+    }
+
+    return {
+      "kind": token_stream.kind,
+      "line": token_stream.line
+    }
+  }
+}

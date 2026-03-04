@@ -1,0 +1,27 @@
+@erelang
+
+public action main {
+  auto src = "print \"Hello from self-host bootstrap\""
+  auto line = string.strip(src)
+
+  if (string.starts_with(line, "print ")) {
+    print "PRINT_BRANCH"
+  } else {
+    print "RAW_BRANCH"
+  }
+
+  auto src2 = "repeat 7 { print \"Hi\" }"
+  auto line2 = string.strip(src2)
+  if (string.starts_with(line2, "repeat ") && string.ends_with(line2, "}")) {
+    int open_brace = toint(string.find(line2, "{"))
+    int close_brace = toint(string.find(line2, "}"))
+    print open_brace
+    print close_brace
+    print string.substr(line2, 7, open_brace - 7)
+    print string.substr(line2, open_brace + 1, close_brace - open_brace - 1)
+  } else {
+    print "REPEAT_BRANCH_FAIL"
+  }
+}
+
+run main

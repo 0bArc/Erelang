@@ -1,0 +1,15 @@
+@erelang
+
+namespace SelfHostAst {
+  struct CompileResult {
+    output_path: string
+    generated_code: string
+  }
+
+  public action make_compile_result(output_path: string, generated_code: string) {
+    return {
+      "output_path": output_path,
+      "generated_code": generated_code
+    }
+  }
+}

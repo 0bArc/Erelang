@@ -1,0 +1,15 @@
+@erelang
+
+public action main {
+  print regex_replace("abc123def", "[A-Za-z]+", "")
+  print regex_match("^repeat [0-9]+ \\{ print \".*\" \\}$", "repeat 5 { print \"Hi\" }")
+}
+
+run main@erelang
+
+public action main {
+  print regex_replace("abc123def", "[A-Za-z]+", "")
+  print regex_match("^repeat [0-9]+ \\{ print \".*\" \\}$", "repeat 5 { print \"Hi\" }")
+}
+
+run main

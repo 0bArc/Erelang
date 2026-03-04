@@ -1,0 +1,28 @@
+@erelang
+
+struct ASTNode {
+  kind: string
+  tokens: string
+}
+
+public action tokenize(src: string) {
+  Array<string> out = [src]
+  return out
+}
+
+public action parse(tokens: Array<string>) {
+  return { "kind": "Program", "tokens": to_json(tokens) }
+}
+
+public action eval(ast: ASTNode) {
+  print "AST Kind => {ast.kind}"
+  print "AST Tokens => {ast.tokens}"
+}
+
+public action main {
+  string src = "print 1 + 2"
+  auto ast_map = parse(tokenize(src))
+  eval(static_cast<ASTNode>(ast_map))
+}
+
+run main

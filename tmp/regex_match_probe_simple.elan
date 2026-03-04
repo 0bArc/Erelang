@@ -1,0 +1,9 @@
+@erelang
+
+public action main {
+  print regex_match("abc", "abc")
+  print regex_match("abc", "^a")
+  print regex_match("^a", "abc")
+}
+
+run main

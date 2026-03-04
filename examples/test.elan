@@ -1,0 +1,8 @@
+@erelang
+
+public action main {
+    repeat 5 { print "Hi" }
+}
+
+run main
+

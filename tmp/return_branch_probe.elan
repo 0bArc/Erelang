@@ -1,0 +1,17 @@
+@erelang
+
+namespace ProbeReturn {
+  public action make(v: string) {
+    if (v == "x") {
+      return { "kind": "X" }
+    }
+    return { "kind": "Y" }
+  }
+}
+
+public action main {
+  auto a = ProbeReturn::make("x")
+  print a.kind
+}
+
+run main

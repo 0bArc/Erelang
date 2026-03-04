@@ -1,0 +1,154 @@
+@erelang
+
+#include "./src/ast.elan"
+#include "./src/core.elan"
+#include "./src/lexer.elan"
+#include "./src/parser.elan"
+#include "./src/symboltable.elan"
+#include "./src/typechecker.elan"
+#include "./src/ir.elan"
+#include "./src/optimizer.elan"
+#include "./src/codegen.elan"
+#include "./src/runtime.elan"
+
+namespace SelfHost {
+  public action compile_source(src: string, outputPath: string) {
+    auto symbols = SelfHostSymbolTable::create()
+    auto tokens = SelfHostLexer::tokenize(src)
+    auto ast = SelfHostParser::parse(tokens)
+    auto check = SelfHostTypeChecker::check(ast)
+    if (check.ok != "true") {
+      print "[selfhost:typechecker] {check.message}"
+      return SelfHostAst::make_compile_result(outputPath, "")
+    }
+
+    auto ir = SelfHostIR::lower(ast)
+    auto optimized = SelfHostOptimizer::optimize(ir)
+    auto generated = SelfHostCodeGen::emit(optimized)
+    write_text(outputPath, generated)
+
+    return SelfHostAst::make_compile_result(outputPath, generated)
+  }
+
+  public action execute_source_native(src: string) {
+    return SelfHostRuntime::execute_source_stateless(src)
+  }
+
+  public action execute_program_native(source_text: string) {
+    auto state = SelfHostRuntime::new_state()
+    string remaining = source_text:strip()
+    int in_builtin_struct = 0
+    int in_impl_block = 0
+    int in_impl_method = 0
+    int in_regular_action = 0
+    string impl_struct_name = ""
+    string impl_method_name = ""
+    string impl_method_body = ""
+
+    while (remaining != "") {
+      int nl = toint(remaining:find("\n"))
+      string line = ""
+
+      if (nl < 0) {
+        line = remaining:strip()
+        remaining = ""
+      } else {
+        line = remaining:substr(0, nl):strip()
+        remaining = remaining:substr(nl + 1)
+      }
+
+      if (line != "") {
+        if (in_regular_action == 1) {
+          if (line == "}") {
+            in_regular_action = 0
+          }
+        } else if (in_impl_method == 1) {
+          if (line == "}") {
+            SelfHostRuntime::register_impl(impl_struct_name, impl_method_name, impl_method_body, state)
+            in_impl_method = 0
+            impl_method_name = ""
+            impl_method_body = ""
+          } else {
+            if (impl_method_body == "") {
+              impl_method_body = line
+            } else {
+              impl_method_body = impl_method_body + "\n" + line
+            }
+          }
+        } else if (in_impl_block == 1) {
+          if (line:starts_with("public action ") || line:starts_with("private action ")) {
+            int action_pos = toint(line:find("action "))
+            int lparen = toint(line:find("("))
+            if (action_pos >= 0 && lparen > action_pos + 7) {
+              impl_method_name = line:substr(action_pos + 7, lparen - action_pos - 7):strip()
+              in_impl_method = 1
+              impl_method_body = ""
+            }
+          } else if (line == "}") {
+            in_impl_block = 0
+            impl_struct_name = ""
+          }
+        } else if (line == "Struct {" || line == "struct {") {
+          in_builtin_struct = 1
+          SelfHostRuntime::execute_source_with_state(line, state)
+        } else if ((line:starts_with("Struct ") || line:starts_with("struct ")) && line:ends_with("{")) {
+          in_builtin_struct = 1
+          int struct_decl_len = toint(line:len())
+          string decl_line = line:substr(0, struct_decl_len - 1):strip()
+          SelfHostRuntime::execute_source_with_state(decl_line, state)
+        } else if (in_builtin_struct == 1) {
+          if (line == "}") {
+            in_builtin_struct = 0
+          } else {
+            int colon = toint(line:find(":"))
+            if (colon > 0) {
+              int field_line_len = toint(line:len())
+              string field_name = line:substr(0, colon):strip()
+              string field_type = line:substr(colon + 1, field_line_len - colon - 1):strip()
+              SelfHostRuntime::set_self_field_default(field_name, field_type, state)
+            }
+          }
+        } else if (line:starts_with("impl ") && line:ends_with("{")) {
+          int impl_line_len = toint(line:len())
+          impl_struct_name = line:substr(5, impl_line_len - 6):strip()
+          in_impl_block = 1
+          in_impl_method = 0
+          impl_method_name = ""
+          impl_method_body = ""
+        } else if (line:starts_with("public action ") || line:starts_with("private action ")) {
+          in_regular_action = 1
+        } else {
+          if (!(line:starts_with("@") || line:starts_with("#") || line:starts_with("public action") || line:starts_with("private action") || line == "{" || line == "}" || line:starts_with("run "))) {
+            SelfHostRuntime::execute_source_with_state(line, state)
+          }
+        }
+      }
+    }
+
+    return 0
+  }
+
+  public action compile_file_native(path: string) {
+    string src = read_text(path)
+    return execute_program_native(src)
+  }
+
+  public action main {
+    print "[selfhost:native] executing: print \"Hello from self-host bootstrap\""
+    execute_source_native("print \"Hello from self-host bootstrap\"")
+
+    print "[selfhost:native] executing: print 1 + 2"
+    execute_source_native("print 1 + 2")
+
+    print "[selfhost:native] executing: repeat 5 { print \"Hi\" }"
+    execute_source_native("repeat 5 { print \"Hi\" }")
+
+    print "[selfhost:native] executing file: examples/test.elan"
+    compile_file_native("examples/test.elan")
+
+    print "[selfhost:native] executing Struct+Impl demo"
+    execute_program_native("Struct Weapon\nImpl Weapon.describe { print \"Impl says hi\" }\ncall Weapon.describe\nrepeat 3 { call Weapon.describe }")
+  }
+}
+
+run SelfHost::main

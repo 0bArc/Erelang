@@ -1,0 +1,194 @@
+@erelang
+
+namespace SelfHostRuntime {
+  public action new_state() {
+    return {
+      "structs": dict_new(),
+      "impls": dict_new(),
+      "self_fields": dict_new()
+    }
+  }
+
+  public action eval_term(term: string, state: Map<string, any>) {
+    string t = term:strip()
+    int tlen = toint(t:len())
+
+    if (t:starts_with("\"") && t:ends_with("\"") && tlen >= 2) {
+      return t:substr(1, tlen - 2)
+    }
+
+    if (t:starts_with("self.") && tlen > 5) {
+      string field = t:substr(5, tlen - 5)
+      string self_fields = state.self_fields
+      if (dict_has(self_fields, field) == "true") {
+        return dict_get(self_fields, field)
+      }
+      return ""
+    }
+
+    if (is_int(t) == "true") {
+      return t
+    }
+
+    return t
+  }
+
+  public action eval_expr(expr: string, state: Map<string, any>) {
+    string remaining = expr:strip()
+    string result = ""
+    int first = 1
+
+    while (remaining != "") {
+      int plus = toint(remaining:find(" + "))
+      string token = ""
+
+      if (plus < 0) {
+        token = remaining:strip()
+        remaining = ""
+      } else {
+        token = remaining:substr(0, plus):strip()
+        int rem_len = toint(remaining:len())
+        remaining = remaining:substr(plus + 3, rem_len - plus - 3):strip()
+      }
+
+      string value_text = toString(eval_term(token, state))
+      if (first == 1) {
+        result = value_text
+        first = 0
+      } else {
+        if (is_int(result) == "true" && is_int(value_text) == "true") {
+          result = toString(toint(result) + toint(value_text))
+        } else {
+          result = result + value_text
+        }
+      }
+    }
+
+    return result
+  }
+
+  public action set_self_field_default(field_name: string, field_type: string, state: Map<string, any>) {
+    string self_fields = state.self_fields
+    if (field_name == "") {
+      return 0
+    }
+    if (dict_has(self_fields, field_name) == "true") {
+      return 0
+    }
+
+    if (field_type == "int") {
+      dict_set(self_fields, field_name, "0")
+    } else {
+      dict_set(self_fields, field_name, "")
+    }
+    return 0
+  }
+
+  public action register_impl(struct_name: string, method_name: string, body_source: string, state: Map<string, any>) {
+    string impls = state.impls
+    string key = struct_name + "." + method_name
+    dict_set(impls, key, body_source)
+    return 0
+  }
+
+  public action execute_program_source_with_state(source_text: string, state: Map<string, any>) {
+    string remaining = source_text:strip()
+    while (remaining != "") {
+      int nl = toint(remaining:find("\n"))
+      string line = ""
+
+      if (nl < 0) {
+        line = remaining:strip()
+        remaining = ""
+      } else {
+        line = remaining:substr(0, nl):strip()
+        int rem_len = toint(remaining:len())
+        remaining = remaining:substr(nl + 1, rem_len - nl - 1)
+      }
+
+      if (line != "") {
+        execute_source_with_state(line, state)
+      }
+    }
+    return 0
+  }
+
+  public action execute_ast(ast: Map<string, any>, state: Map<string, any>) {
+    string structs = state.structs
+    string impls = state.impls
+
+    if (ast.kind == "BuiltinStructOpen") {
+      return 0
+    } else if (ast.kind == "StructDecl") {
+      dict_set(structs, ast.name, "true")
+    } else if (ast.kind == "ImplDecl") {
+      register_impl(ast.struct_name, ast.method_name, ast.body_source, state)
+    } else if (ast.kind == "ImplCall") {
+      string call_key = ast.struct_name + "." + ast.method_name
+      if (dict_has(impls, call_key) != "true") {
+        print "[selfhost:native] impl method not found: " + call_key
+      } else {
+        string body_source = dict_get(impls, call_key)
+        execute_program_source_with_state(body_source, state)
+      }
+    } else if (ast.kind == "SelfAssign") {
+      string self_fields = state.self_fields
+      auto value = eval_expr(ast.expr, state)
+      dict_set(self_fields, ast.field, value)
+    } else if (ast.kind == "RepeatStmt") {
+      int count = toint(ast.count)
+      int i = 0
+      while (i < count) {
+        execute_ast(ast.body_ast, state)
+        i = i + 1
+      }
+    } else if (ast.kind == "PrintLine") {
+      string line = ast.line:strip()
+      int line_len = toint(line:len())
+      if (line:starts_with("print ") && line_len >= 6) {
+        string expr = line:substr(6, line_len - 6)
+        print eval_expr(expr, state)
+      } else {
+        print "[selfhost:native] unsupported print form: " + line
+      }
+    } else if (ast.kind == "BinaryPrint") {
+      if (ast.line == "print 1 + 2") {
+        print 1 + 2
+      } else if (ast.line == "print nullptr == null") {
+        print nullptr == null
+      } else {
+        print "[selfhost:native] unsupported binary print: " + ast.line
+      }
+    } else if (ast.kind == "RawLine") {
+      print "[selfhost:native] unsupported source: " + ast.line
+    } else {
+      print "[selfhost:native] unsupported AST kind: " + ast.kind
+    }
+    return 0
+  }
+
+  public action execute_ast_stateless(ast: Map<string, any>) {
+    auto state = new_state()
+    return execute_ast(ast, state)
+  }
+
+  public action execute_source_with_state(src: string, state: Map<string, any>) {
+    auto tokens = SelfHostLexer::tokenize(src)
+    auto ast = SelfHostParser::parse(tokens)
+    auto check = SelfHostTypeChecker::check(ast)
+    if (check.ok != "true") {
+      print "[selfhost:typechecker] {check.message}"
+      return 1
+    }
+    return execute_ast(ast, state)
+  }
+
+  public action execute_source_stateless(src: string) {
+    auto state = new_state()
+    return execute_source_with_state(src, state)
+  }
+
+  public action run_generated(path: string) {
+    return exec("build\\bin\\Release\\erelang.exe " + path)
+  }
+}

@@ -1,0 +1,7 @@
+@erelang
+
+public action main {
+  print is_nullptr(nullptr)
+}
+
+run main

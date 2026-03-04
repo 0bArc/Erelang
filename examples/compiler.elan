@@ -1,0 +1,36 @@
+@erelang
+
+namespace Compiler {
+  struct CompileResult {
+    output_path: string
+    generated_code: string
+  }
+
+  public action compile_to_erelang(message: string, outputPath: string) {
+    string generated = "@erelang\n\npublic action main {\n  print \"" + message + "\"\n}\n\nrun main\n"
+    write_text(outputPath, generated)
+
+    return {
+      "output_path": outputPath,
+      "generated_code": generated
+    }
+  }
+
+  public action main {
+    string source_message = "Hello from compiler.elan"
+    string output_file = "tmp/generated_from_compiler.elan"
+
+    auto result_map = compile_to_erelang(source_message, output_file)
+    auto result = static_cast<Compiler::CompileResult>(result_map)
+
+    print "Generated file => {result.output_path}"
+    print "--- generated code start ---"
+    print "{result.generated_code}"
+    print "--- generated code end ---"
+
+    print "Running generated script..."
+    exec("build\\bin\\Release\\erelang.exe " + result.output_path)
+  }
+}
+
+run Compiler::main

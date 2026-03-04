@@ -1,0 +1,106 @@
+@erelang
+
+namespace SelfHostTypeChecker {
+  public action check(ast: Map<string, any>) {
+    if (ast.kind == "BuiltinStructOpen") {
+      return {
+        "ok": "true",
+        "message": "ok"
+      }
+    }
+
+    if (ast.kind == "PrintLine" || ast.kind == "ExprPrint" || ast.kind == "BinaryPrint" || ast.kind == "RawPrint") {
+      return {
+        "ok": "true",
+        "message": "ok"
+      }
+    }
+
+    if (ast.kind == "StructDecl") {
+      if (ast.name == "") {
+        return {
+          "ok": "false",
+          "message": "struct name required"
+        }
+      }
+      return {
+        "ok": "true",
+        "message": "ok"
+      }
+    }
+
+    if (ast.kind == "ImplDecl") {
+      if (ast.struct_name == "" || ast.method_name == "") {
+        return {
+          "ok": "false",
+          "message": "impl requires Struct.Method"
+        }
+      }
+      auto body_check = check(ast.body_ast)
+      if (body_check.ok != "true") {
+        return body_check
+      }
+      return {
+        "ok": "true",
+        "message": "ok"
+      }
+    }
+
+    if (ast.kind == "ImplCall") {
+      if (ast.struct_name == "" || ast.method_name == "") {
+        return {
+          "ok": "false",
+          "message": "call requires Struct.Method"
+        }
+      }
+      return {
+        "ok": "true",
+        "message": "ok"
+      }
+    }
+
+    if (ast.kind == "SelfAssign") {
+      if (ast.field == "" || ast.expr == "") {
+        return {
+          "ok": "false",
+          "message": "self assignment requires field and expr"
+        }
+      }
+      return {
+        "ok": "true",
+        "message": "ok"
+      }
+    }
+
+    if (ast.kind == "RepeatStmt") {
+      if (is_int(ast.count) != "true") {
+        return {
+          "ok": "false",
+          "message": "repeat count must be int"
+        }
+      }
+
+      auto body_check = check(ast.body_ast)
+      if (body_check.ok != "true") {
+        return body_check
+      }
+
+      return {
+        "ok": "true",
+        "message": "ok"
+      }
+    }
+
+    if (ast.kind == "RawLine") {
+      return {
+        "ok": "false",
+        "message": "unsupported source line: " + ast.line
+      }
+    }
+
+    return {
+      "ok": "true",
+      "message": "accepted"
+    }
+  }
+}

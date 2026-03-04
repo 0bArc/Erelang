@@ -1,0 +1,10 @@
+@erelang
+
+namespace SelfHostSymbolTable {
+  public action create() {
+    return {
+      "globals": dict_new(),
+      "locals": dict_new()
+    }
+  }
+}

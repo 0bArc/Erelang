@@ -1,0 +1,33 @@
+@erelang
+
+public entity Obstacle {
+  string id
+}
+
+public entity Wall : Obstacle {
+  double thickness
+}
+
+public entity Lava : Obstacle {
+  int temperature
+}
+
+public action handle_collision(target: Obstacle) {
+  auto wall_ptr = dynamic_cast<Wall>(target)
+  if (wall_ptr != null) {
+    print "Hit wall thickness {wall_ptr.thickness}"
+  }
+
+  auto lava_ptr = dynamic_cast<Lava>(target)
+  if (lava_ptr != null) {
+    print "Hit lava temp {lava_ptr.temperature}"
+  }
+}
+
+public action main {
+  let w = new Wall()
+  w.thickness = 42
+  handle_collision(w)
+}
+
+run main

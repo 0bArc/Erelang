@@ -250,6 +250,11 @@ std::vector<Token> Lexer::lex() {
             if (i+1<src_.size() && src_[i+1]=='=') { push(TokenKind::PipeAssign, "|="); i+=2; col+=2; continue; }
             push(TokenKind::Pipe, "|"); ++i; ++col; continue;
         }
+        if (c == '&') {
+            if (i+1<src_.size() && src_[i+1]=='&') { push(TokenKind::AmpAmp, "&&"); i+=2; col+=2; continue; }
+            if (i+1<src_.size() && src_[i+1]=='=') { push(TokenKind::AmpAssign, "&="); i+=2; col+=2; continue; }
+            push(TokenKind::Amp, "&"); ++i; ++col; continue;
+        }
         if (c == '^') { push(TokenKind::Caret, "^"); ++i; ++col; continue; }
         if (c == '~') { push(TokenKind::Tilde, "~"); ++i; ++col; continue; }
         // Raw string r"..." (no escapes); multi-line allowed
@@ -461,7 +466,7 @@ std::vector<Token> Lexer::lex() {
             // Keyword/boolean/null handling
             auto kw = opts_.keywords;
             if (kw.empty()) {
-                kw = { "if","else","while","for","switch","case","default","return","let","const","action","entity","hook","global","run","in","public","private","export","true","false","null","nil","nullptr" };
+                kw = { "if","else","while","repeat","for","switch","case","default","return","let","const","action","entity","hook","global","run","in","public","private","export","namespace","unsafe","true","false","null","nil","nullptr","sizeof","typeof","decltype","alignof","offsetof","is_base_of","reinterpret_cast" };
             }
             std::string low = word; for (auto& ch : low) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
             if (kw.count(low)) push(TokenKind::Keyword, word); else push(TokenKind::Word, word);

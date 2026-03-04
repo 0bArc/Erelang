@@ -1,0 +1,113 @@
+@erelang
+
+namespace SelfHostLexer {
+  public action tokenize(src: string) {
+    auto line = src:strip()
+
+    if (line == "Struct {" || line == "struct {") {
+      return {
+        "kind": "BuiltinStructOpen",
+        "line": line
+      }
+    }
+
+    if (line:starts_with("Struct ") || line:starts_with("struct ")) {
+      int length = toint(line:len())
+      string struct_name = line:substr(7, length - 7):strip()
+      if (struct_name:ends_with("{")) {
+        int name_len = toint(struct_name:len())
+        struct_name = struct_name:substr(0, name_len - 1):strip()
+      }
+      return {
+        "kind": "StructDecl",
+        "name": struct_name,
+        "line": line
+      }
+    }
+
+    if (line:starts_with("Impl ") || line:starts_with("impl ")) {
+      int open_brace = toint(line:find("{"))
+      int close_brace = toint(line:find("}"))
+
+      if (open_brace > 0 && close_brace > open_brace) {
+        string header = line:substr(5, open_brace - 5):strip()
+        string body_text = line:substr(open_brace + 1, close_brace - open_brace - 1):strip()
+        int dot = toint(header:find("."))
+        if (dot > 0) {
+          string struct_name = header:substr(0, dot):strip()
+          string method_name = header:substr(dot + 1):strip()
+          return {
+            "kind": "ImplDecl",
+            "struct_name": struct_name,
+            "method_name": method_name,
+            "body_source": body_text,
+            "line": line
+          }
+        }
+      }
+    }
+
+    if (line:starts_with("call ")) {
+      int call_len = toint(line:len())
+      string callee = line:substr(5, call_len - 5):strip()
+      int dot = toint(callee:find("."))
+      if (dot > 0) {
+        int callee_len = toint(callee:len())
+        return {
+          "kind": "ImplCall",
+          "struct_name": callee:substr(0, dot):strip(),
+          "method_name": callee:substr(dot + 1, callee_len - dot - 1):strip(),
+          "line": line
+        }
+      }
+    }
+
+    if (line:starts_with("self.")) {
+      int eq = toint(line:find("="))
+      if (eq > 0) {
+        string lhs = line:substr(0, eq):strip()
+        int lhs_len = toint(lhs:len())
+        if (lhs:starts_with("self.") && lhs_len > 5) {
+          string field_name = lhs:substr(5, lhs_len - 5):strip()
+          int total_len = toint(line:len())
+          string rhs = line:substr(eq + 1, total_len - eq - 1):strip()
+          return {
+            "kind": "SelfAssign",
+            "field": field_name,
+            "expr": rhs,
+            "line": line
+          }
+        }
+      }
+    }
+
+    if (line:starts_with("repeat ") && line:ends_with("}")) {
+      int open_brace = toint(line:find("{"))
+      int close_brace = toint(line:find("}"))
+
+      if (open_brace > 0 && close_brace > open_brace) {
+        string count_text = line:substr(7, open_brace - 7):strip()
+        string body_text = line:substr(open_brace + 1, close_brace - open_brace - 1):strip()
+
+        return {
+          "kind": "RepeatStmt",
+          "count": count_text,
+          "body_source": body_text,
+          "line": line
+        }
+      }
+    }
+
+    if (line:starts_with("print ")) {
+      return {
+        "kind": "PrintLine",
+        "line": line
+      }
+    }
+
+    return {
+      "kind": "RawLine",
+      "line": line
+    }
+  }
+}

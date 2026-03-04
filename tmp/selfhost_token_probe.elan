@@ -1,0 +1,26 @@
+@erelang
+
+#include "erelang/src/lexer.elan"
+
+public action main {
+  auto tp = SelfHostLexer::tokenize("__probe__")
+  print tp.kind
+
+  string src1 = "print \"Hello from self-host bootstrap\""
+  print string.starts_with(src1, "print ")
+
+  auto t1 = SelfHostLexer::tokenize("print \"Hello from self-host bootstrap\"")
+  print t1.kind
+  print t1.line
+
+  string src2 = "repeat 7 { print \"Hi\" }"
+  print string.starts_with(src2, "repeat ")
+  print string.ends_with(src2, "}")
+
+  auto t2 = SelfHostLexer::tokenize("repeat 7 { print \"Hi\" }")
+  print t2.kind
+  print t2.count
+  print t2.body_source
+}
+
+run main

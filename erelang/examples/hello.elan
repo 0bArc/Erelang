@@ -1,0 +1,7 @@
+@erelang
+
+public action main {
+  print "hello from erelang/examples/hello.elan"
+}
+
+run main

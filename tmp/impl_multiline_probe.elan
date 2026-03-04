@@ -1,0 +1,9 @@
+@erelang
+
+#include "erelang/compiler.elan"
+
+public action main {
+  SelfHost::execute_program_native("struct Probe {\nvalue: int\n}\nimpl Probe {\npublic action ping() {\nprint \"L1\"\nprint \"L2\"\n}\n}\ncall Probe.ping")
+}
+
+run main

@@ -1,0 +1,7 @@
+@erelang
+
+namespace SelfHostOptimizer {
+  public action optimize(ir: Map<string, any>) {
+    return ir
+  }
+}

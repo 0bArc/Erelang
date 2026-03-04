@@ -14,7 +14,7 @@ template <typename... Lambdas>
 Overloaded(Lambdas...)->Overloaded<Lambdas...>;
 
 [[nodiscard]] inline ExprPtr make_number_expr(int64_t value) {
-	return std::make_shared<Expr>(Expr{ ExprNumber{ value } });
+	return std::make_shared<Expr>(Expr{ ExprNumber{ value, false, std::to_string(value) } });
 }
 
 struct FoldStats {

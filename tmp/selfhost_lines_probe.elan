@@ -1,0 +1,9 @@
+@erelang
+
+#include "erelang/compiler.elan"
+
+public action main {
+  SelfHost::execute_program_native("print \"A\"\nprint \"B\"\nprint \"C\"")
+}
+
+run main

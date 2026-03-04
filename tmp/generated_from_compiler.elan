@@ -1,0 +1,7 @@
+@erelang
+
+public action main {
+  print "Hello from compiler.elan"
+}
+
+run main

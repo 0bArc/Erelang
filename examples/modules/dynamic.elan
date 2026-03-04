@@ -1,0 +1,43 @@
+
+#include <math.elan> as math
+
+public entity Weapon {
+    int power = 50
+}
+
+struct Profile {
+    name: string
+    level: int
+}
+
+
+public entity Admin : Profile {
+    int clearance_level = 5
+}
+
+public action handle_login(p: Profile) {
+    auto admin_ptr = dynamic_cast<Admin>(p)
+
+    if (admin_ptr != null) {
+        print "Admin {admin_ptr.name} logged in. Level {admin_ptr.clearance_level}"
+    } else {
+        print "Standard user {p.name} logged in"
+    }
+}
+
+public action main {
+
+    int i = 20
+    string n = "test"
+   
+    print i
+    print n + static_cast<auto>(i)
+
+
+
+}
+
+run main
+
+
+

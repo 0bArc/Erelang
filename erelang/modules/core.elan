@@ -1,0 +1,17 @@
+@erelang
+
+namespace SelfHostCore {
+  public action nullptr_value() {
+    return "nullptr"
+  }
+
+  public action is_nullptr(value: string) {
+    if (value == "") {
+      return "true"
+    }
+    if (value == "nullptr") {
+      return "true"
+    }
+    return "false"
+  }
+}

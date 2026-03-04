@@ -12,11 +12,16 @@
 namespace erelang {
 
 enum class BinOp { Add, Sub, Mul, Div, Mod, Pow, EQ, NE, LT, LE, GT, GE, And, Or, Coalesce };
-enum class UnOp { Neg, Not };
+enum class UnOp { Neg, Not, Deref, AddressOf };
 enum class Visibility { Public, Private };
 
 struct ExprString { std::string v; };
-struct ExprNumber { int64_t v{0}; };
+struct ExprNull {};
+struct ExprNumber {
+    int64_t v{0};
+    bool isFloatLiteral{false};
+    std::string raw;
+};
 struct ExprBool { bool v{false}; };
 struct ExprIdent { std::string name; };
 
@@ -28,7 +33,7 @@ struct MemberExpr { std::string objectName; std::string field; };
 struct FunctionCallExpr { std::string name; std::vector<ExprPtr> args; };
 
 struct Expr {
-    std::variant<ExprString, ExprNumber, ExprBool, ExprIdent, BinaryExpr, UnaryExpr, NewExpr, MemberExpr, FunctionCallExpr> node;
+    std::variant<ExprString, ExprNull, ExprNumber, ExprBool, ExprIdent, BinaryExpr, UnaryExpr, NewExpr, MemberExpr, FunctionCallExpr> node;
 };
 
 struct Block; // forward for recursive AST
@@ -49,6 +54,7 @@ struct IfStmt { ExprPtr cond; std::shared_ptr<Block> thenBlk; std::shared_ptr<Bl
 struct SwitchCase { std::string value; std::shared_ptr<Block> body; };
 struct SwitchStmt { ExprPtr selector; std::vector<SwitchCase> cases; std::shared_ptr<Block> defaultBlk; };
 struct WhileStmt { ExprPtr cond; std::shared_ptr<Block> body; };
+struct RepeatStmt { ExprPtr count; std::shared_ptr<Block> body; };
 struct ForStmt {
     std::shared_ptr<Block> init; // optional single-statement block
     std::optional<ExprPtr> cond;
@@ -57,8 +63,10 @@ struct ForStmt {
 };
 struct ForInStmt { std::string var; std::optional<std::string> valueVar; bool usedColon{false}; ExprPtr iterable; std::shared_ptr<Block> body; };
 struct TryCatchStmt { std::shared_ptr<Block> tryBlk; std::string catchVar; std::shared_ptr<Block> catchBlk; };
+struct UnsafeStmt { std::shared_ptr<Block> body; };
+struct PointerSetStmt { ExprPtr pointer; ExprPtr value; };
 
-using Statement = std::variant<PrintStmt, SleepStmt, ActionCallStmt, std::shared_ptr<ParallelStmt>, WaitAllStmt, PauseStmt, InputStmt, FireStmt, LetStmt, ReturnStmt, SetStmt, MethodCallStmt, IfStmt, SwitchStmt, WhileStmt, ForStmt, ForInStmt, TryCatchStmt>;
+using Statement = std::variant<PrintStmt, SleepStmt, ActionCallStmt, std::shared_ptr<ParallelStmt>, WaitAllStmt, PauseStmt, InputStmt, FireStmt, LetStmt, ReturnStmt, SetStmt, MethodCallStmt, IfStmt, SwitchStmt, WhileStmt, RepeatStmt, ForStmt, ForInStmt, TryCatchStmt, UnsafeStmt, PointerSetStmt>;
 
 struct Block { std::vector<Statement> stmts; };
 
@@ -81,9 +89,16 @@ struct Action {
 
 struct Hook { std::string name; Block body; std::string sourcePath; std::vector<Attribute> attributes; };
 
-struct Field { std::string name; std::string type; Visibility visibility{Visibility::Public}; std::vector<Attribute> attributes; };
+struct Field {
+    std::string name;
+    std::string type;
+    ExprPtr defaultValue;
+    Visibility visibility{Visibility::Public};
+    std::vector<Attribute> attributes;
+};
 struct Entity {
     std::string name;
+    std::string baseType;
     std::vector<Field> fields;
     std::vector<Action> methods; // actions within entity
     Visibility visibility{Visibility::Public};
@@ -127,6 +142,7 @@ public:
     Program parse();
 
 private:
+    std::string qualify_name(const std::string& name) const;
     const Token& peek(size_t offset = 0) const;
     const Token& consume();
     bool match(TokenKind kind);
@@ -167,6 +183,8 @@ private:
     std::vector<Token> tokens_;
     size_t pos_{0};
     bool strict_{false};
+    std::vector<std::string> namespaceStack_;
+    bool parsingEntityMethod_{false};
 };
 
 } // namespace erelang

@@ -3,7 +3,7 @@
   "displayName": "Erelang Language",
   "publisher": "localdev",
   "description": "Syntax highlighting and language basics for Erelang (.ere/.elan)",
-  "version": "0.0.3",
+  "version": "0.0.8",
   "engines": {
     "vscode": "^1.104.0"
   },
@@ -14,6 +14,11 @@
     "onLanguage:erelang"
   ],
   "contributes": {
+    "configurationDefaults": {
+      "[erelang]": {
+        "editor.semanticHighlighting.enabled": false
+      }
+    },
     "languages": [
       {
         "id": "erelang",

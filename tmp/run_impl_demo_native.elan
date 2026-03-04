@@ -1,0 +1,9 @@
+@erelang
+
+#include "erelang/compiler.elan"
+
+public action main {
+  SelfHost::compile_file_native("erelang/examples/impl_demo.elan")
+}
+
+run main

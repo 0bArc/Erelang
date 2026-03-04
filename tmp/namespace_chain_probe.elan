@@ -1,0 +1,14 @@
+@erelang
+
+namespace Probe {
+  public action run {
+    string line = "print \"Hello\""
+    if (line:starts_with("print ")) {
+      print "NS_TRUE"
+    } else {
+      print "NS_FALSE"
+    }
+  }
+}
+
+run Probe::run

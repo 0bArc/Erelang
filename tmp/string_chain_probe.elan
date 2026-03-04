@@ -1,0 +1,12 @@
+@erelang
+
+public action main {
+  string line = "print \"Hello\""
+  print line:starts_with("print ")
+  print line:ends_with("\"")
+  print line:find("\"")
+  print line:substr(7, 5)
+  print line:len()
+}
+
+run main

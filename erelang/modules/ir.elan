@@ -1,0 +1,48 @@
+@erelang
+
+namespace SelfHost {
+  public action lower_to_ir(ast: Map<string, any>) {
+    if (ast.kind == "BinaryPrint") {
+      int lhs = toInt(ast.lhs)
+      int rhs = toInt(ast.rhs)
+      int value = 0
+
+      if (ast.op == "+") {
+        value = lhs + rhs
+      } else {
+        if (ast.op == "-") {
+          value = lhs - rhs
+        } else {
+          if (ast.op == "*") {
+            value = lhs * rhs
+          } else {
+            if (ast.op == "/") {
+              if (rhs == 0) {
+                value = 0
+              } else {
+                value = lhs / rhs
+              }
+            }
+          }
+        }
+      }
+
+      return {
+        "kind": "IR_PrintInt",
+        "value": toString(value)
+      }
+    }
+
+    if (ast.kind == "ExprPrint") {
+      return {
+        "kind": "IR_PrintExpr",
+        "value": ast.expr
+      }
+    }
+
+    return {
+      "kind": "IR_PrintRaw",
+      "value": ast.text
+    }
+  }
+}

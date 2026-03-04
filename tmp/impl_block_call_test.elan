@@ -1,0 +1,9 @@
+@erelang
+
+#include "erelang/compiler.elan"
+
+public action main {
+  SelfHost::execute_program_native("struct Player {\nname: string\nage: int\n}\nimpl Player {\npublic action celebrate_birthday() {\nprint \"Happy Birthday \" + self.name\nself.age = self.age + 1\nprint \"You are now \" + self.age\n}\n}\ncall Player.celebrate_birthday\nrepeat 2 { call Player.celebrate_birthday }")
+}
+
+run main

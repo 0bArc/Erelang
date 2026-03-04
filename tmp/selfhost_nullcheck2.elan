@@ -1,0 +1,11 @@
+@erelang
+
+public action main {
+  if (is_nullptr(nullptr)) {
+    print "true"
+  } else {
+    print "false"
+  }
+}
+
+run main

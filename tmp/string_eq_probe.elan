@@ -1,0 +1,9 @@
+@erelang
+
+public action main {
+  print "print 1 + 2" == "print 1 + 2"
+  string x = "print 1 + 2"
+  print x == "print 1 + 2"
+}
+
+run main

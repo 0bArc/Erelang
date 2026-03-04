@@ -12,9 +12,10 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
     TypeInfo inferred{"unknown"};
     std::visit([&](auto&& node){
         using T = std::decay_t<decltype(node)>;
-        if constexpr (std::is_same_v<T, ExprNumber>) inferred = {"int"};
+        if constexpr (std::is_same_v<T, ExprNumber>) inferred = {node.isFloatLiteral ? "double" : "int"};
         else if constexpr (std::is_same_v<T, ExprBool>) inferred = {"bool"};
         else if constexpr (std::is_same_v<T, ExprString>) inferred = {"string"};
+        else if constexpr (std::is_same_v<T, ExprNull>) inferred = {"pointer"};
         else if constexpr (std::is_same_v<T, ExprIdent>) {
             if (ctx.scopes) {
                 if (auto* v = ctx.scopes->lookup(node.name)) { v->used = true; inferred = v->type; }
@@ -40,7 +41,9 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
                 default: inferred={"bool"}; break; // comparisons
             }
         } else if constexpr (std::is_same_v<T, UnaryExpr>) {
-            inferred = check(node.expr, ctx);
+            if (node.op == UnOp::AddressOf) inferred = {"pointer"};
+            else if (node.op == UnOp::Deref) inferred = {"unknown"};
+            else inferred = check(node.expr, ctx);
         } else if constexpr (std::is_same_v<T, NewExpr>) {
             inferred = TypeInfo{"entity:" + node.typeName};
         } else if constexpr (std::is_same_v<T, MemberExpr>) {
@@ -66,7 +69,23 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
             }
         } else if constexpr (std::is_same_v<T, FunctionCallExpr>) {
             // action or builtin
-            auto aIt = tc_.actions_.find(node.name);
+            auto resolve_action = [&](const std::string& name) -> const Action* {
+                auto it = tc_.actions_.find(name);
+                if (it != tc_.actions_.end()) return it->second;
+                if (name.find("::") != std::string::npos) return nullptr;
+                const Action* found = nullptr;
+                const std::string suffix = "::" + name;
+                for (const auto& kv : tc_.actions_) {
+                    const std::string& cand = kv.first;
+                    if (cand.size() > suffix.size() && cand.rfind(suffix) == cand.size() - suffix.size()) {
+                        if (found) return nullptr;
+                        found = kv.second;
+                    }
+                }
+                return found;
+            };
+            const Action* resolved = resolve_action(node.name);
+            auto aIt = resolved ? tc_.actions_.find(resolved->name) : tc_.actions_.end();
             if (aIt != tc_.actions_.end()) {
                 inferred = { aIt->second->returnType.empty()?"void":aIt->second->returnType };
             } else {
@@ -95,9 +114,24 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
         if constexpr (std::is_same_v<T, PrintStmt>) {
             expr_.check(stmt.value, ctx);
         } else if constexpr (std::is_same_v<T, ActionCallStmt>) {
-            auto it = tc_.actions_.find(stmt.name);
+            auto resolve_action_name = [&](const std::string& name) -> std::string {
+                if (tc_.actions_.count(name)) return name;
+                if (name.find("::") != std::string::npos) return {};
+                std::string found;
+                const std::string suffix = "::" + name;
+                for (const auto& kv : tc_.actions_) {
+                    const std::string& cand = kv.first;
+                    if (cand.size() > suffix.size() && cand.rfind(suffix) == cand.size() - suffix.size()) {
+                        if (!found.empty()) return {};
+                        found = cand;
+                    }
+                }
+                return found;
+            };
+            const std::string resolvedName = resolve_action_name(stmt.name);
+            auto it = resolvedName.empty() ? tc_.actions_.end() : tc_.actions_.find(resolvedName);
             if (it != tc_.actions_.end()) {
-                tc_.actionUsage_[stmt.name].referenced = true;
+                tc_.actionUsage_[it->second->name].referenced = true;
                 if (it->second->params.size() != stmt.args.size()) DiagBuilder(result_, Severity::Error, "Param count mismatch calling action " + stmt.name, "TC020", ctx.actionName()).emit();
             } else {
                 auto bIt = tc_.builtins_.find(stmt.name);
@@ -148,6 +182,8 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                     expected = "array<any>";
                 } else if (decl == "map" || decl.rfind("map<", 0) == 0 || decl == "dictionary") {
                     expected = "map<any,any>";
+                } else if (!decl.empty() && (decl.back() == '*' || decl.back() == '&')) {
+                    expected = "pointer";
                 } else if (ctx.program) {
                     bool matchedStruct = false;
                     for (const auto& sd : ctx.program->structs) {
@@ -183,6 +219,7 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                 auto is_compatible = [&](const std::string& exp, const std::string& actual) {
                     if (exp == "unknown" || actual == "unknown") return true;
                     if (exp == actual) return true;
+                    if (exp == "pointer" && actual == "pointer") return true;
                     if (exp == "array<any>" && actual.rfind("array", 0) == 0) return true;
                     if (exp == "map<any,any>" && actual.rfind("map", 0) == 0) return true;
                     if (exp.rfind("struct:", 0) == 0 && actual.rfind("dict:", 0) == 0) return true;
@@ -232,6 +269,14 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
             auto guard = scopes.push();
             CheckContext inner = ctx; inner.loop = LoopCtx::InLoop; inner.scopes = ctx.scopes;
             check_block(*stmt.body, inner, scopes, retType);
+        } else if constexpr (std::is_same_v<T, RepeatStmt>) {
+            auto countType = expr_.check(stmt.count, ctx);
+            if (countType.name != "unknown" && !TypeChecker::is_int(countType)) {
+                DiagBuilder(result_, Severity::Error, "Repeat count must be int", "TC063", ctx.actionName()).emit();
+            }
+            auto guard = scopes.push();
+            CheckContext inner = ctx; inner.loop = LoopCtx::InLoop; inner.scopes = ctx.scopes;
+            check_block(*stmt.body, inner, scopes, retType);
         } else if constexpr (std::is_same_v<T, ForStmt>) {
             auto guard = scopes.push();
             if (stmt.init) check_block(*stmt.init, ctx, scopes, retType);
@@ -265,6 +310,12 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
             if (stmt.defaultBlk) { auto guardD = scopes.push(); check_block(*stmt.defaultBlk, ctx, scopes, retType); }
         } else if constexpr (std::is_same_v<T, ParallelStmt>) {
             auto guardP = scopes.push(); check_block(stmt.body, ctx, scopes, retType);
+        } else if constexpr (std::is_same_v<T, UnsafeStmt>) {
+            auto guardU = scopes.push();
+            check_block(*stmt.body, ctx, scopes, retType);
+        } else if constexpr (std::is_same_v<T, PointerSetStmt>) {
+            expr_.check(stmt.pointer, ctx);
+            expr_.check(stmt.value, ctx);
         }
     }, s);
     return flow;
@@ -352,7 +403,26 @@ void TypeChecker::init_builtins() {
     add("args_count",0,0,"int"); add("args_get",1,1,"string");
     add("exec",1,1,"int"); add("run_file",1,1,"void"); add("run_bat",1,1,"void"); add("read_line",0,0,"string"); add("input",0,1,"string"); add("prompt",1,1,"string");
     add("toint",1,1,"int"); add("toInt",1,1,"int"); add("tostr",1,1,"string"); add("toString",1,1,"string"); add("tofloat",1,1,"double"); add("tobool",1,1,"bool");
+    add("dynamic_cast",2,2,"unknown");
+    add("reinterpret_cast",2,2,"pointer");
+    add("__builtin_sizeof",1,1,"int");
+    add("__builtin_alignof",1,1,"int");
+    add("__builtin_typeof",1,1,"string");
+    add("__builtin_decltype",1,1,"string");
+    add("__builtin_offsetof",2,2,"int");
+    add("__builtin_is_base_of",2,2,"bool");
+    add("ptr_new",1,1,"pointer");
+    add("ptr_get",1,1,"string");
+    add("ptr_set",2,2,"void");
+    add("ptr_free",1,1,"void");
+    add("ptr_valid",1,1,"bool");
+    add("make_unique",1,1,"pointer");
+    add("make_shared",1,1,"pointer");
+    add("unique_reset",1,1,"void");
+    add("shared_reset",1,1,"void");
+    add("to_json",1,1,"string"); add("from_json",1,1,"map<any,any>");
     add("string.lstrip",1,1,"string"); add("string.rstrip",1,1,"string"); add("string.strip",1,1,"string"); add("string.lower",1,1,"string"); add("string.upper",1,1,"string");
+    add("string.starts_with",2,2,"bool"); add("string.ends_with",2,2,"bool"); add("string.find",2,2,"int"); add("string.substr",2,3,"string"); add("string.len",1,1,"int");
     // Filesystem
     add("read_text",1,1,"string"); add("write_text",2,2,"void"); add("append_text",2,2,"void"); add("file_exists",1,1,"bool"); add("mkdirs",1,1,"void"); add("copy_file",2,2,"bool"); add("move_file",2,2,"bool"); add("delete_file",1,1,"bool");
     add("list_files",1,1,"unknown"); add("cwd",0,0,"string"); add("chdir",1,1,"bool");

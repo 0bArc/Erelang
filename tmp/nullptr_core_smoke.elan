@@ -1,0 +1,13 @@
+@erelang
+public action main {
+  auto p = nullptr
+  print (p == null)
+  print (p == nullptr)
+
+  int* q = nullptr
+  print (q == nullptr)
+
+  print (nullptr ?? "fallback")
+  print ("value" ?? "fallback")
+}
+run main

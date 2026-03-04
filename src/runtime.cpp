@@ -36,6 +36,7 @@
 #include "erelang/modules.hpp"
 #include "erelang/version.hpp"
 #include "erelang/policy.hpp"
+#include "erelang/features/serialization.hpp"
 // Ensure Runtime is visible before any C-ABI definitions that reference it
 #include "erelang/runtime.hpp"
 using namespace erelang;
@@ -361,6 +362,8 @@ int g_nextListId = 1;
 std::unordered_map<int, std::vector<std::string>> g_lists;
 int g_nextDictId = 1;
 std::unordered_map<int, std::unordered_map<std::string, std::string>> g_dicts;
+int g_nextPtrId = 1;
+std::unordered_map<int, std::string> g_ptrs;
 
 #ifdef _WIN32
 // Portable integer rounding helper (avoids std::lround issues on some MinGW setups)
@@ -1121,7 +1124,17 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
             Env calleeEnv;
             for (const auto& kv : globalVars_) calleeEnv.vars[kv.first] = kv.second;
             // bind args
-            for (size_t i=0;i<sa->params.size() && i<args.size(); ++i) calleeEnv.vars[sa->params[i].name] = eval_string(*args[i], env);
+            for (size_t i=0;i<sa->params.size() && i<args.size(); ++i) {
+                const std::string paramName = sa->params[i].name;
+                calleeEnv.vars[paramName] = eval_string(*args[i], env);
+                if (std::holds_alternative<ExprIdent>(args[i]->node)) {
+                    const auto& id = std::get<ExprIdent>(args[i]->node).name;
+                    auto oit = env.objects.find(id);
+                    if (oit != env.objects.end()) {
+                        calleeEnv.objects[paramName] = oit->second;
+                    }
+                }
+            }
             exec_block(sa->body, *currentProgram_, actCtx, calleeEnv);
             // propagate any changed globals back
             for (const auto& kv : calleeEnv.vars) if (globalNames_.count(kv.first)) globalVars_[kv.first] = kv.second;
@@ -1322,6 +1335,248 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
     if (nameStr == "tobool") {
         return is_truthy(argS(0)) ? std::string("true") : std::string("false");
     }
+    auto normalize_type_name = [](std::string typeName) {
+        std::string out;
+        out.reserve(typeName.size());
+        for (char ch : typeName) {
+            if (!std::isspace(static_cast<unsigned char>(ch))) {
+                out.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+            }
+        }
+        return out;
+    };
+    auto infer_runtime_type = [&](const std::string& value) {
+        if (value.rfind("list:", 0) == 0) return std::string("Array<any>");
+        if (value.rfind("dict:", 0) == 0) return std::string("Map<string, any>");
+        if (value.rfind("struct:", 0) == 0) return value;
+        if (value == "true" || value == "false") return std::string("bool");
+        if (is_int_string(value)) return std::string("int");
+        if (is_float_string(value)) return std::string("double");
+        if (auto it = env.objects.find(value); it != env.objects.end() && it->second) return it->second->typeName;
+        return std::string("string");
+    };
+    auto size_of_type = [&](const std::string& typeName) -> int {
+        const std::string t = normalize_type_name(typeName);
+        if (t == "bool") return 1;
+        if (t == "char" || t == "byte") return 1;
+        if (t == "short") return 2;
+        if (t == "int") return 8;
+        if (t == "float") return 4;
+        if (t == "double") return 8;
+        if (t == "string" || t == "str") return 24;
+        if (t.rfind("array", 0) == 0) return 24;
+        if (t.rfind("map", 0) == 0 || t == "dictionary") return 24;
+        if (t.rfind("struct:", 0) == 0) return 24;
+        return 8;
+    };
+    auto align_of_type = [&](const std::string& typeName) -> int {
+        const std::string t = normalize_type_name(typeName);
+        if (t == "bool" || t == "char" || t == "byte") return 1;
+        if (t == "short") return 2;
+        if (t == "float") return 4;
+        return 8;
+    };
+    if (nameStr == "__builtin_typeof" || nameStr == "__builtin_decltype") {
+        if (args.empty()) return "unknown";
+        return infer_runtime_type(eval_string(*args[0], env));
+    }
+    if (nameStr == "__builtin_sizeof") {
+        if (args.empty()) return "0";
+        std::string typeName;
+        if (std::holds_alternative<ExprString>(args[0]->node)) {
+            typeName = std::get<ExprString>(args[0]->node).v;
+        } else {
+            typeName = infer_runtime_type(eval_string(*args[0], env));
+        }
+        return std::to_string(size_of_type(typeName));
+    }
+    if (nameStr == "__builtin_alignof") {
+        if (args.empty()) return "1";
+        std::string typeName;
+        if (std::holds_alternative<ExprString>(args[0]->node)) {
+            typeName = std::get<ExprString>(args[0]->node).v;
+        } else {
+            typeName = infer_runtime_type(eval_string(*args[0], env));
+        }
+        return std::to_string(align_of_type(typeName));
+    }
+    if (nameStr == "__builtin_offsetof") {
+        if (args.size() < 2) return "0";
+        const std::string typeName = argS(0);
+        const std::string fieldName = argS(1);
+        if (currentProgram_) {
+            int index = 0;
+            for (const auto& sd : currentProgram_->structs) {
+                if (sd.name != typeName) continue;
+                for (const auto& f : sd.fields) {
+                    if (f.name == fieldName) return std::to_string(index * 8);
+                    ++index;
+                }
+                return "0";
+            }
+            for (const auto& ent : currentProgram_->entities) {
+                if (ent.name != typeName) continue;
+                index = 0;
+                for (const auto& f : ent.fields) {
+                    if (f.name == fieldName) return std::to_string(index * 8);
+                    ++index;
+                }
+                return "0";
+            }
+        }
+        return "0";
+    }
+    if (nameStr == "__builtin_is_base_of") {
+        if (args.size() < 2 || !currentProgram_) return "false";
+        const std::string baseType = argS(0);
+        const std::string derivedType = argS(1);
+        auto findEntity = [&](std::string_view n) -> const Entity* {
+            for (const auto& e : currentProgram_->entities) if (e.name == n) return &e;
+            return nullptr;
+        };
+        const Entity* current = findEntity(derivedType);
+        while (current && !current->baseType.empty()) {
+            if (current->baseType == baseType) return "true";
+            current = findEntity(current->baseType);
+        }
+        return "false";
+    }
+    if (nameStr == "dynamic_cast") {
+        if (args.size() < 2) return {};
+        const std::string targetType = argS(0);
+        std::string sourceName = argS(1);
+        if (std::holds_alternative<ExprIdent>(args[1]->node)) {
+            sourceName = std::get<ExprIdent>(args[1]->node).name;
+        }
+        auto sourceIt = env.objects.find(sourceName);
+        if (sourceIt == env.objects.end()) {
+            return {};
+        }
+        const auto& obj = sourceIt->second;
+        if (!obj) return {};
+
+        if (obj->typeName == targetType) return sourceName;
+        if (currentProgram_) {
+            auto findEntity = [&](std::string_view n) -> const Entity* {
+                for (const auto& e : currentProgram_->entities) if (e.name == n) return &e;
+                return nullptr;
+            };
+            const Entity* current = findEntity(obj->typeName);
+            while (current && !current->baseType.empty()) {
+                if (current->baseType == targetType) return sourceName;
+                current = findEntity(current->baseType);
+            }
+        }
+        return {};
+    }
+    if (nameStr == "reinterpret_cast") {
+        if (args.size() < 2) return {};
+        std::string targetType = argS(0);
+        std::string value = argS(1);
+        std::string low;
+        low.reserve(targetType.size());
+        for (char ch : targetType) {
+            if (!std::isspace(static_cast<unsigned char>(ch))) {
+                low.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+            }
+        }
+        const bool pointerLike = (!low.empty() && (low.back() == '*' || low.back() == '&')) ||
+                                 (low.find("ptr") != std::string::npos) ||
+                                 (low == "pointer");
+        if (pointerLike) {
+            if (value.rfind("ptr:", 0) == 0 || value.rfind("ref:", 0) == 0) return value;
+            const int id = g_nextPtrId++;
+            g_ptrs[id] = value;
+            return std::string("ptr:") + std::to_string(id);
+        }
+        if (value.rfind("ptr:", 0) == 0) {
+            const int id = to_int(value.substr(4));
+            auto it = g_ptrs.find(id);
+            if (it != g_ptrs.end()) return it->second;
+            return {};
+        }
+        if (value.rfind("ref:", 0) == 0) {
+            const std::string varName = value.substr(4);
+            if (auto it = env.vars.find(varName); it != env.vars.end()) return it->second;
+            if (auto git = globalVars_.find(varName); git != globalVars_.end()) return git->second;
+            return {};
+        }
+        return value;
+    }
+    if (nameStr == "ptr_new" || nameStr == "make_unique" || nameStr == "make_shared") {
+        const int id = g_nextPtrId++;
+        g_ptrs[id] = argS(0);
+        return std::string("ptr:") + std::to_string(id);
+    }
+    if (nameStr == "ptr_get") {
+        const std::string handle = argS(0);
+        if (handle.rfind("ptr:", 0) != 0) return {};
+        const int id = to_int(handle.substr(4));
+        auto it = g_ptrs.find(id);
+        if (it == g_ptrs.end()) return {};
+        return it->second;
+    }
+    if (nameStr == "ptr_set") {
+        const std::string handle = argS(0);
+        if (handle.rfind("ptr:", 0) != 0) return {};
+        const int id = to_int(handle.substr(4));
+        auto it = g_ptrs.find(id);
+        if (it == g_ptrs.end()) return {};
+        it->second = argS(1);
+        return {};
+    }
+    if (nameStr == "ptr_free" || nameStr == "unique_reset" || nameStr == "shared_reset") {
+        const std::string handle = argS(0);
+        if (handle.rfind("ptr:", 0) != 0) return {};
+        const int id = to_int(handle.substr(4));
+        g_ptrs.erase(id);
+        return {};
+    }
+    if (nameStr == "ptr_valid") {
+        const std::string handle = argS(0);
+        if (handle.rfind("ptr:", 0) != 0) return "false";
+        const int id = to_int(handle.substr(4));
+        return g_ptrs.count(id) ? "true" : "false";
+    }
+    if (nameStr == "to_json") {
+        if (args.empty()) return "null";
+        const std::string value = argS(0);
+        if (value.rfind("dict:", 0) == 0) return features::dict_handle_to_json(value);
+        if (value.rfind("list:", 0) == 0) return features::list_handle_to_json(value);
+        auto objIt = env.objects.find(value);
+        if (objIt != env.objects.end() && objIt->second) {
+            std::ostringstream oss;
+            oss << '{';
+            bool first = true;
+            for (const auto& [k, v] : objIt->second->fields) {
+                if (!first) oss << ',';
+                first = false;
+                oss << '"' << features::json_escape(k) << "\":\"" << features::json_escape(v) << '"';
+            }
+            oss << '}';
+            return oss.str();
+        }
+        if (value.rfind("struct:", 0) == 0) {
+            std::ostringstream oss;
+            oss << '{';
+            bool first = true;
+            const std::string prefix = value + ".";
+            for (const auto& [k, v] : env.vars) {
+                if (k.rfind(prefix, 0) != 0) continue;
+                const std::string field = k.substr(prefix.size());
+                if (!first) oss << ',';
+                first = false;
+                oss << '"' << features::json_escape(field) << "\":\"" << features::json_escape(v) << '"';
+            }
+            oss << '}';
+            return oss.str();
+        }
+        return std::string("\"") + features::json_escape(value) + "\"";
+    }
+    if (nameStr == "from_json") {
+        if (args.empty()) return {};
+        return features::from_json_object_to_dict_handle(argS(0));
+    }
     if (nameStr == "string.lstrip") {
         std::string s = argS(0);
         size_t i = 0;
@@ -1352,6 +1607,40 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         std::string s = argS(0);
         for (auto& ch : s) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
         return s;
+    }
+    if (nameStr == "string.starts_with") {
+        std::string s = argS(0);
+        std::string prefix = argS(1);
+        if (prefix.size() > s.size()) return std::string("false");
+        return s.compare(0, prefix.size(), prefix) == 0 ? std::string("true") : std::string("false");
+    }
+    if (nameStr == "string.ends_with") {
+        std::string s = argS(0);
+        std::string suffix = argS(1);
+        if (suffix.size() > s.size()) return std::string("false");
+        return s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0 ? std::string("true") : std::string("false");
+    }
+    if (nameStr == "string.find") {
+        std::string s = argS(0);
+        std::string needle = argS(1);
+        const auto pos = s.find(needle);
+        if (pos == std::string::npos) return std::string("-1");
+        return std::to_string(static_cast<int>(pos));
+    }
+    if (nameStr == "string.substr") {
+        std::string s = argS(0);
+        int start = to_int(argS(1));
+        if (start < 0) start = 0;
+        if (start > static_cast<int>(s.size())) return {};
+        if (args.size() >= 3) {
+            int len = to_int(argS(2));
+            if (len < 0) len = 0;
+            return s.substr(static_cast<size_t>(start), static_cast<size_t>(len));
+        }
+        return s.substr(static_cast<size_t>(start));
+    }
+    if (nameStr == "string.len") {
+        return std::to_string(static_cast<int>(argS(0).size()));
     }
     if (nameStr == "is_int") {
         return is_int_string(argS(0)) ? std::string("true") : std::string("false");
@@ -2826,7 +3115,14 @@ std::string Runtime::eval_string(const Expr& e, const Env& env) const {
         }
         return out;
     }
-    if (std::holds_alternative<ExprNumber>(e.node)) return std::to_string(std::get<ExprNumber>(e.node).v);
+    if (std::holds_alternative<ExprNull>(e.node)) {
+        return "nullptr";
+    }
+    if (std::holds_alternative<ExprNumber>(e.node)) {
+        const auto& n = std::get<ExprNumber>(e.node);
+        if (!n.raw.empty()) return n.raw;
+        return std::to_string(n.v);
+    }
     if (std::holds_alternative<ExprBool>(e.node)) return std::get<ExprBool>(e.node).v ? "true" : "false";
     if (std::holds_alternative<ExprIdent>(e.node)) {
         const auto& n = std::get<ExprIdent>(e.node);
@@ -2843,6 +3139,30 @@ std::string Runtime::eval_string(const Expr& e, const Env& env) const {
         switch (u.op) {
             case UnOp::Neg: return std::to_string(-to_int(v));
             case UnOp::Not: return (v == "true" || to_int(v) != 0) ? "false" : "true";
+            case UnOp::Deref: {
+                if (v.rfind("ref:", 0) == 0) {
+                    const std::string varName = v.substr(4);
+                    if (auto it = env.vars.find(varName); it != env.vars.end()) return it->second;
+                    if (auto git = globalVars_.find(varName); git != globalVars_.end()) return git->second;
+                    return {};
+                }
+                if (v.rfind("ptr:", 0) == 0) {
+                    const int id = to_int(v.substr(4));
+                    auto it = g_ptrs.find(id);
+                    if (it != g_ptrs.end()) return it->second;
+                    return {};
+                }
+                return {};
+            }
+            case UnOp::AddressOf: {
+                if (std::holds_alternative<ExprIdent>(u.expr->node)) {
+                    const auto& id = std::get<ExprIdent>(u.expr->node).name;
+                    return std::string("ref:") + id;
+                }
+                const int id = g_nextPtrId++;
+                g_ptrs[id] = v;
+                return std::string("ptr:") + std::to_string(id);
+            }
         }
     }
     if (std::holds_alternative<BinaryExpr>(e.node)) {
@@ -2937,8 +3257,8 @@ std::string Runtime::eval_string(const Expr& e, const Env& env) const {
             case BinOp::And: return ((ls=="true" || to_int(ls)!=0) && (rs=="true" || to_int(rs)!=0)) ? "true" : "false";
             case BinOp::Or: return ((ls=="true" || to_int(ls)!=0) || (rs=="true" || to_int(rs)!=0)) ? "true" : "false";
             case BinOp::Coalesce: {
-                // treat empty string as nullish; if ls is non-empty, return ls; else rs
-                return (!ls.empty() ? ls : rs);
+                const bool leftNullish = ls.empty() || ls == "nullptr";
+                return (!leftNullish ? ls : rs);
             }
         }
     }
@@ -2950,6 +3270,11 @@ std::string Runtime::eval_string(const Expr& e, const Env& env) const {
             if (fit != oit->second->fields.end()) return fit->second;
         }
         auto sv = env.vars.find(m.objectName);
+        if (sv != env.vars.end() && sv->second.rfind("dict:", 0) == 0) {
+            int id = to_int(sv->second.substr(5));
+            auto dit = g_dicts[id].find(m.field);
+            if (dit != g_dicts[id].end()) return dit->second;
+        }
         if (sv != env.vars.end() && sv->second.rfind("struct:", 0) == 0) {
             auto fit = env.vars.find(m.objectName + "." + m.field);
             if (fit != env.vars.end()) return fit->second;
@@ -2971,6 +3296,17 @@ std::string Runtime::eval_string(const Expr& e, const Env& env) const {
 
 const Action* Runtime::find_action(const Program& program, std::string_view name) const {
     for (const auto& a : program.actions) if (a.name == name) return &a;
+    if (name.find("::") == std::string_view::npos) {
+        const Action* found = nullptr;
+        std::string suffix = std::string("::") + std::string(name);
+        for (const auto& a : program.actions) {
+            if (a.name.size() > suffix.size() && a.name.rfind(suffix) == a.name.size() - suffix.size()) {
+                if (found) return nullptr;
+                found = &a;
+            }
+        }
+        if (found) return found;
+    }
     return nullptr;
 }
 
@@ -3081,8 +3417,14 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
             }
             auto obj = std::make_shared<Object>();
             obj->typeName = ne.typeName;
-            // initialize fields to empty
-            for (const auto& f : ent->fields) obj->fields[f.name] = {};
+            // initialize fields (default value if provided)
+            for (const auto& f : ent->fields) {
+                if (f.defaultValue) {
+                    obj->fields[f.name] = eval_string(*f.defaultValue, env);
+                } else {
+                    obj->fields[f.name] = {};
+                }
+            }
 #ifdef _WIN32
             if (ne.typeName == "Window") {
                 HINSTANCE hInst = GetModuleHandleW(nullptr);
@@ -3139,6 +3481,16 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
         } else {
             std::string v = eval_string(*st.value, env);
             env.vars[st.name] = v;
+            if (std::holds_alternative<FunctionCallExpr>(st.value->node)) {
+                const auto& fc = std::get<FunctionCallExpr>(st.value->node);
+                if (fc.name == "dynamic_cast") {
+                    auto source = env.objects.find(v);
+                    if (source != env.objects.end()) {
+                        env.objects[st.name] = source->second;
+                        env.vars[st.name] = st.name;
+                    }
+                }
+            }
             if (globalNames_.count(st.name)) globalVars_[st.name] = v;
         }
         return;
@@ -3171,6 +3523,20 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
         const auto& st = std::get<WhileStmt>(s);
         while (is_truthy(eval_string(*st.cond, env))) {
             exec_block(*st.body, program, ctx, env);
+            if (ctx.returned) {
+                break;
+            }
+        }
+        return;
+    }
+    if (std::holds_alternative<RepeatStmt>(s)) {
+        const auto& st = std::get<RepeatStmt>(s);
+        const int64_t count = to_int(eval_string(*st.count, env));
+        for (int64_t i = 0; i < count; ++i) {
+            exec_block(*st.body, program, ctx, env);
+            if (ctx.returned) {
+                break;
+            }
         }
         return;
     }
@@ -3184,7 +3550,13 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 if (!is_truthy(c)) break;
             }
             exec_block(*st.body, program, ctx, env);
+            if (ctx.returned) {
+                break;
+            }
             if (st.step) exec_block(*st.step, program, ctx, env);
+            if (ctx.returned) {
+                break;
+            }
         }
         return;
     }
@@ -3204,6 +3576,9 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 for (const auto& item : it->second) {
                     env.vars[st.var] = item;
                     exec_block(*st.body, program, ctx, env);
+                    if (ctx.returned) {
+                        break;
+                    }
                 }
             }
         } else if (iter.rfind("dict:", 0) == 0) {
@@ -3218,6 +3593,9 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                         env.vars[st.var] = kv.first;
                     }
                     exec_block(*st.body, program, ctx, env);
+                    if (ctx.returned) {
+                        break;
+                    }
                 }
             }
         }
@@ -3232,6 +3610,33 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
             exec_block(*st.catchBlk, program, ctx, env);
         }
         return;
+    }
+    if (std::holds_alternative<UnsafeStmt>(s)) {
+        const auto& st = std::get<UnsafeStmt>(s);
+        exec_block(*st.body, program, ctx, env);
+        return;
+    }
+    if (std::holds_alternative<PointerSetStmt>(s)) {
+        const auto& st = std::get<PointerSetStmt>(s);
+        const std::string target = eval_string(*st.pointer, env);
+        const std::string newValue = eval_string(*st.value, env);
+        if (target.rfind("ref:", 0) == 0) {
+            const std::string varName = target.substr(4);
+            if (globalNames_.count(varName)) {
+                globalVars_[varName] = newValue;
+            }
+            env.vars[varName] = newValue;
+            return;
+        }
+        if (target.rfind("ptr:", 0) == 0) {
+            const int id = to_int(target.substr(4));
+            auto it = g_ptrs.find(id);
+            if (it != g_ptrs.end()) {
+                it->second = newValue;
+            }
+            return;
+        }
+        throw std::runtime_error("Pointer assignment target is not a pointer");
     }
     if (std::holds_alternative<SwitchStmt>(s)) {
         const auto& sw = std::get<SwitchStmt>(s);
@@ -3252,6 +3657,12 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
             auto it = env.objects.find(st.objectName);
             if (it == env.objects.end()) {
                 auto structIt = env.vars.find(st.objectName);
+                if (structIt != env.vars.end() && structIt->second.rfind("dict:", 0) == 0) {
+                    int id = to_int(structIt->second.substr(5));
+                    std::string val = eval_string(*st.value, env);
+                    g_dicts[id][st.varOrField] = val;
+                    return;
+                }
                 if (structIt != env.vars.end() && structIt->second.rfind("struct:", 0) == 0) {
                     std::string val = eval_string(*st.value, env);
                     env.vars[st.objectName + "." + st.varOrField] = val;
@@ -3652,9 +4063,23 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
             for (const auto& kv : globalVars_) calleeEnv.vars[kv.first] = kv.second;
             // Bind positional args into parameter names
             for (size_t i=0; i<a->params.size() && i<call.args.size(); ++i) {
-                calleeEnv.vars[a->params[i].name] = eval_string(*call.args[i], env);
+                const std::string paramName = a->params[i].name;
+                calleeEnv.vars[paramName] = eval_string(*call.args[i], env);
+                if (std::holds_alternative<ExprIdent>(call.args[i]->node)) {
+                    const auto& id = std::get<ExprIdent>(call.args[i]->node).name;
+                    auto oit = env.objects.find(id);
+                    if (oit != env.objects.end()) {
+                        calleeEnv.objects[paramName] = oit->second;
+                    }
+                }
             }
-            exec_block(a->body, program, ctx, calleeEnv);
+            ExecContext calleeCtx;
+            exec_block(a->body, program, calleeCtx, calleeEnv);
+            for (auto& th : calleeCtx.threads) {
+                if (th.joinable()) {
+                    th.join();
+                }
+            }
         }
         else {
             // Fallback: treat as built-in call with side effects
@@ -3665,7 +4090,12 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
 }
 
 void Runtime::exec_block(const Block& b, const Program& program, ExecContext& ctx, Env& env) const {
-    for (const auto& st : b.stmts) exec_stmt(st, program, ctx, env);
+    for (const auto& st : b.stmts) {
+        exec_stmt(st, program, ctx, env);
+        if (ctx.returned) {
+            break;
+        }
+    }
 }
 
 int Runtime::run(const Program& program) const {

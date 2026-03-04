@@ -1,0 +1,27 @@
+@erelang
+
+namespace SelfHost {
+  struct Token {
+    kind: string
+    lexeme: string
+  }
+
+  struct ASTNode {
+    kind: string
+    payload: string
+  }
+
+  public action make_token(kind: string, lexeme: string) {
+    return {
+      "kind": kind,
+      "lexeme": lexeme
+    }
+  }
+
+  public action make_ast(kind: string, payload: string) {
+    return {
+      "kind": kind,
+      "payload": payload
+    }
+  }
+}

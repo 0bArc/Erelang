@@ -1,0 +1,12 @@
+@erelang
+
+#include "erelang/compiler.elan"
+
+public action main {
+  auto st = SelfHostRuntime::new_state()
+  SelfHostRuntime::set_self_field_default("age", "int", st)
+  SelfHostRuntime::execute_source_with_state("self.age = self.age + 1", st)
+  print SelfHostRuntime::eval_expr("\"You are now \" + self.age", st)
+}
+
+run main

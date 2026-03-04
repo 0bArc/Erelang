@@ -6,7 +6,11 @@
     { "include": "#comments" },
     { "include": "#includes" },
     { "include": "#strings" },
+    { "include": "#builtinCalls" },
     { "include": "#calls" },
+    { "include": "#structAccess" },
+    { "include": "#typeRefs" },
+    { "include": "#printArgs" },
     { "include": "#collectionVars" },
     { "include": "#declarations" },
     { "include": "#foreach" },
@@ -15,93 +19,133 @@
     { "include": "#keywords" },
     { "include": "#directives" },
     { "include": "#entities" },
-    { "include": "#actions" }
+    { "include": "#actions" },
+    { "include": "#identifiers" }
   ],
+      "builtinCalls": {
+        "patterns": [
+          {
+            "name": "support.function",
+            "match": "\\b(print|PRINT|sleep|now_ms|env|username|computer_name|machine_guid|uuid|rand_int|input|toint|toInt|tofloat|tostr|toString|tobool|dynamic_cast|reinterpret_cast|to_json|from_json|sizeof|typeof|decltype|alignof|offsetof|is_base_of|ptr_new|ptr_get|ptr_set|ptr_free|ptr_valid|make_unique|make_shared|unique_reset|shared_reset|string\\.lstrip|string\\.rstrip|string\\.strip|string\\.lower|string\\.upper|string\\.starts_with|string\\.ends_with|string\\.find|string\\.substr|string\\.len|list_new|list_push|list_len|dict_new|dict_set|dict_get|dict_has|dict_keys|dict_values|dict_get_or|dict_remove|dict_clear|dict_size|dict_merge|dict_clone|dict_items|dict_entries|dict_set_path|dict_get_path|dict_has_path|dict_remove_path|table_new|table_put|table_get|table_has|table_remove|table_rows|table_columns|table_row_keys|table_clear_row|table_count_row|win_window_create|win_button_create|win_checkbox_create|win_radiobutton_create|win_slider_create|win_textbox_create|win_label_create|win_on|win_show|win_loop|win_get_text|win_set_text|win_get_check|win_set_check|win_get_slider|win_set_slider|win_close|win_auto_scale|win_set_scale|ui_window_create|ui_label|ui_button|ui_checkbox|ui_radio|ui_slider|ui_textbox|ui_same_line|ui_newline|ui_spacer|ui_separator|ui_load)\\b(?=\\s*\\()"
+          }
+        ]
+      },
   "repository": {
     "comments": {
       "patterns": [
-        { "name": "comment.line.double-slash.erelang", "match": "//.*$" }
+        { "name": "comment.line.double-slash", "match": "//.*$" }
       ]
     },
     "strings": {
       "patterns": [
         {
-          "name": "string.quoted.double.erelang",
+          "name": "string.quoted.double",
           "begin": "\"",
           "end": "\"",
           "patterns": [
-            { "match": "\\\\.", "name": "constant.character.escape.erelang" },
+            { "match": "\\\\.", "name": "constant.character.escape" },
             {
               "name": "meta.interpolation.erelang",
               "match": "\\{[^\\}]+\\}",
               "captures": {
-                "0": { "name": "variable.other.interpolation.erelang" }
+                "0": { "name": "meta.interpolation" }
               }
             }
           ]
         },
         {
-          "name": "string.quoted.single.erelang",
+          "name": "string.quoted.single",
           "begin": "'",
           "end": "'",
           "patterns": [
-            { "match": "\\\\.", "name": "constant.character.escape.erelang" },
+            { "match": "\\\\.", "name": "constant.character.escape" },
             {
               "name": "meta.interpolation.erelang",
               "match": "\\{[^\\}]+\\}",
               "captures": {
-                "0": { "name": "variable.other.interpolation.erelang" }
+                "0": { "name": "meta.interpolation" }
               }
             }
           ]
+        }
+      ]
+    },
+    "structAccess": {
+      "patterns": [
+        {
+          "name": "meta.member.access",
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\.([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "variable.other" },
+            "2": { "name": "variable.other.property" }
+          }
+        }
+      ]
+    },
+    "typeRefs": {
+      "patterns": [
+        {
+          "name": "entity.name.type",
+          "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
         }
       ]
     },
     "calls": {
       "patterns": [
         {
-          "name": "meta.function.call.erelang",
-          "match": "\\b([A-Za-z_][A-Za-z0-9_\\.]*)\\s*(?=\\()",
+          "name": "meta.function-call",
+          "match": "\\b(?!(?:if|else|while|for|switch|match|case|default|break|continue|return|parallel|wait|all|run|fire|pause|try|catch|await)\\b)([A-Za-z_][A-Za-z0-9_\\.]*)\\s*(?=\\()",
           "captures": {
-            "1": { "name": "entity.name.function.call.erelang" }
+            "1": { "name": "entity.name.function" }
+          }
+        }
+      ]
+    },
+    "printArgs": {
+      "patterns": [
+        {
+          "name": "meta.print.argument",
+          "match": "\\bprint\\s+([A-Za-z_][A-Za-z0-9_]*)\\b(?!\\s*\\()",
+          "captures": {
+            "1": { "name": "variable.other.readwrite" }
           }
         }
       ]
     },
     "numbers": {
       "patterns": [
-        { "name": "constant.numeric.integer.erelang", "match": "\\b[0-9]+\\b" }
+        { "name": "constant.numeric", "match": "\\b[0-9]+\\b" }
       ]
     },
     "members": {
       "patterns": [
         {
-          "name": "meta.member.access.erelang",
+          "name": "meta.member.access",
           "match": "\\.([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
-            "1": { "name": "entity.name.function.member.erelang" }
+            "1": { "name": "variable.other.property" }
           }
         }
       ]
     },
     "keywords": {
       "patterns": [
-        { "name": "keyword.control.loop.erelang", "match": "\\bfor\\b" },
-        { "name": "keyword.control.erelang", "match": "\\b(if|else|while|switch|match|case|default|break|continue|return|parallel|wait|all|run|fire|pause|try|catch|await)\\b" },
-        { "name": "storage.type.erelang", "match": "\\b(void|int|double|float|string|str|bool|char|auto|list|array|dict|map|Array|Map|any)\\b" },
-        { "name": "keyword.other.declaration.erelang", "match": "\\b(action|entity|hook|let|const|constexpr|static|struct|enum|type|import|export|public|private|field|new|async|static_cast)\\b" },
-        { "name": "constant.language.erelang", "match": "\\b(true|false|null|nil|nullptr)\\b" },
-        { "name": "support.function.builtin.erelang", "match": "\\b(print|PRINT|sleep|now_ms|env|username|computer_name|machine_guid|uuid|rand_int|input|toint|toInt|tofloat|tostr|toString|string\\.lstrip|string\\.rstrip|string\\.strip|string\\.lower|string\\.upper|list_new|list_push|list_len|dict_new|dict_set|dict_get|dict_has|dict_keys|dict_values|dict_get_or|dict_remove|dict_clear|dict_size|dict_merge|dict_clone|dict_items|dict_entries|dict_set_path|dict_get_path|dict_has_path|dict_remove_path|table_new|table_put|table_get|table_has|table_remove|table_rows|table_columns|table_row_keys|table_clear_row|table_count_row|win_window_create|win_button_create|win_checkbox_create|win_radiobutton_create|win_slider_create|win_textbox_create|win_label_create|win_on|win_show|win_loop|win_get_text|win_set_text|win_get_check|win_set_check|win_get_slider|win_set_slider|win_close|win_auto_scale|win_set_scale|ui_window_create|ui_label|ui_button|ui_checkbox|ui_radio|ui_slider|ui_textbox|ui_same_line|ui_newline|ui_spacer|ui_separator|ui_load)\\b" }
+        { "name": "keyword.control", "match": "\\bfor\\b" },
+        { "name": "keyword.control", "match": "\\b(if|else|while|repeat|switch|match|case|default|break|continue|return|parallel|wait|all|run|fire|pause|try|catch|await|unsafe|namespace)\\b" },
+        { "name": "storage.type", "match": "\\b(void|int|double|float|string|str|bool|char|auto|list|array|dict|map|Array|Map|any)\\b" },
+        { "name": "storage.modifier", "match": "\\b(action|entity|hook|let|const|constexpr|static|struct|enum|type|import|export|public|private|field|new|async|static_cast|dynamic_cast|reinterpret_cast)\\b" },
+        { "name": "constant.language", "match": "\\b(true|false|null|nil|nullptr)\\b" },
+        { "name": "support.function", "match": "\\b(print|PRINT|sleep|now_ms|env|username|computer_name|machine_guid|uuid|rand_int|input|toint|toInt|tofloat|tostr|toString|tobool|dynamic_cast|reinterpret_cast|to_json|from_json|sizeof|typeof|decltype|alignof|offsetof|is_base_of|ptr_new|ptr_get|ptr_set|ptr_free|ptr_valid|make_unique|make_shared|unique_reset|shared_reset|string\\.lstrip|string\\.rstrip|string\\.strip|string\\.lower|string\\.upper|string\\.starts_with|string\\.ends_with|string\\.find|string\\.substr|string\\.len|list_new|list_push|list_len|dict_new|dict_set|dict_get|dict_has|dict_keys|dict_values|dict_get_or|dict_remove|dict_clear|dict_size|dict_merge|dict_clone|dict_items|dict_entries|dict_set_path|dict_get_path|dict_has_path|dict_remove_path|table_new|table_put|table_get|table_has|table_remove|table_rows|table_columns|table_row_keys|table_clear_row|table_count_row|win_window_create|win_button_create|win_checkbox_create|win_radiobutton_create|win_slider_create|win_textbox_create|win_label_create|win_on|win_show|win_loop|win_get_text|win_set_text|win_get_check|win_set_check|win_get_slider|win_set_slider|win_close|win_auto_scale|win_set_scale|ui_window_create|ui_label|ui_button|ui_checkbox|ui_radio|ui_slider|ui_textbox|ui_same_line|ui_newline|ui_spacer|ui_separator|ui_load)\\b" }
       ]
     },
     "declarations": {
       "patterns": [
         {
-          "name": "meta.declaration.variable.erelang",
+          "name": "meta.declaration.variable",
           "match": "\\b(let|const|constexpr|static|global|int|double|float|string|str|bool|char|auto|Array|Map)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
-            "1": { "name": "keyword.other.declaration.erelang" },
-            "2": { "name": "variable.other.declaration.erelang" }
+            "1": { "name": "storage.modifier" },
+            "2": { "name": "variable.other" }
           }
         }
       ]
@@ -109,7 +153,7 @@
     "collectionVars": {
       "patterns": [
         {
-          "name": "support.type.iterable.erelang",
+          "name": "storage.type",
           "match": "\\b(array|dictionary)\\b"
         }
       ]
@@ -117,12 +161,13 @@
     "foreach": {
       "patterns": [
         {
-          "name": "meta.foreach.erelang",
-          "match": "\\bfor\\s*\\(\\s*([A-Za-z_][A-Za-z0-9_]*)(?:\\s*,\\s*([A-Za-z_][A-Za-z0-9_]*))?\\s*:\\s*([A-Za-z_][A-Za-z0-9_]*)",
+          "name": "meta.foreach",
+          "match": "\\b(for)\\s*\\(\\s*([A-Za-z_][A-Za-z0-9_]*)(?:\\s*,\\s*([A-Za-z_][A-Za-z0-9_]*))?\\s*(?:,\\s*)?:\\s*([A-Za-z_][A-Za-z0-9_<>, ]*)",
           "captures": {
-            "1": { "name": "variable.parameter.foreach.erelang" },
-            "2": { "name": "variable.parameter.foreach.erelang" },
-            "3": { "name": "support.type.iterable.erelang" }
+            "1": { "name": "keyword.control" },
+            "2": { "name": "variable.other.readwrite" },
+            "3": { "name": "variable.other.readwrite" },
+            "4": { "name": "variable.other.readwrite" }
           }
         }
       ]
@@ -130,32 +175,43 @@
     "includes": {
       "patterns": [
         {
-          "name": "meta.preprocessor.include.erelang",
+          "name": "meta.preprocessor.include",
           "match": "^\\s*(#include)\\s*(<[^>]+>|\"[^\"]+\")\\s*(?:\\b(as)\\b\\s+([A-Za-z_][A-Za-z0-9_]*))?\\s*$",
           "captures": {
-            "1": { "name": "keyword.control.directive.include.erelang" },
-            "2": { "name": "string.unquoted.include.path.erelang" },
-            "3": { "name": "keyword.other.alias.erelang" },
-            "4": { "name": "variable.other.alias.erelang" }
+            "1": { "name": "keyword.control.import" },
+            "2": { "name": "string.unquoted" },
+            "3": { "name": "keyword.other" },
+            "4": { "name": "variable.other" }
           }
         }
       ]
     },
     "directives": {
       "patterns": [
-        { "name": "keyword.control.directive.erelang", "match": "@(erelang|strict|debug|deprecated|profile|describe|parallel|pure|final|override|hidden|event)\\b" }
+        { "name": "keyword.control.directive", "match": "@(erelang|strict|debug|deprecated|profile|describe|parallel|pure|final|override|hidden|event)\\b" }
       ]
     },
     "entities": {
       "patterns": [
-        { "name": "entity.name.type.erelang", "match": "\\bentity\\s+([A-Za-z_][A-Za-z0-9_]*)", "captures": { "1": { "name": "entity.name.type.erelang" } } },
-        { "name": "entity.name.type.struct.erelang", "match": "\\bstruct\\s+([A-Za-z_][A-Za-z0-9_]*)", "captures": { "1": { "name": "entity.name.type.struct.erelang" } } },
-        { "name": "entity.name.type.enum.erelang", "match": "\\benum\\s+([A-Za-z_][A-Za-z0-9_]*)", "captures": { "1": { "name": "entity.name.type.enum.erelang" } } }
+        { "name": "entity.name.type", "match": "\\bentity\\s+([A-Za-z_][A-Za-z0-9_]*)", "captures": { "1": { "name": "entity.name.type" } } },
+        { "name": "entity.name.type", "match": "\\bstruct\\s+([A-Za-z_][A-Za-z0-9_]*)", "captures": { "1": { "name": "entity.name.type" } } },
+        { "name": "entity.name.type", "match": "\\benum\\s+([A-Za-z_][A-Za-z0-9_]*)", "captures": { "1": { "name": "entity.name.type" } } }
       ]
     },
     "actions": {
       "patterns": [
-        { "name": "entity.name.function.erelang", "match": "\\baction\\s+([A-Za-z_][A-Za-z0-9_]*)", "captures": { "1": { "name": "entity.name.function.erelang" } } }
+        { "name": "entity.name.function", "match": "\\baction\\s+([A-Za-z_][A-Za-z0-9_]*)", "captures": { "1": { "name": "entity.name.function" } } }
+      ]
+    },
+    "identifiers": {
+      "patterns": [
+        {
+          "name": "variable.other.readwrite",
+          "match": "\\b(?!(?:if|else|while|repeat|for|switch|match|case|default|break|continue|return|parallel|wait|all|run|fire|pause|try|catch|await|unsafe|namespace|action|entity|hook|let|const|constexpr|static|struct|enum|type|import|export|public|private|field|new|async|static_cast|dynamic_cast|reinterpret_cast|void|int|double|float|string|str|bool|char|auto|list|array|dict|map|Array|Map|any|true|false|null|nil|nullptr|print|PRINT|sleep|now_ms|env|username|computer_name|machine_guid|uuid|rand_int|input|toint|toInt|tofloat|tostr|toString|tobool|to_json|from_json|sizeof|typeof|decltype|alignof|offsetof|is_base_of|ptr_new|ptr_get|ptr_set|ptr_free|ptr_valid|make_unique|make_shared|unique_reset|shared_reset)\\b)([a-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "variable.other.readwrite" }
+          }
+        }
       ]
     }
   }

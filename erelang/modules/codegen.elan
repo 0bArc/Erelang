@@ -1,0 +1,20 @@
+@erelang
+
+namespace SelfHost {
+  public action emit(ir: Map<string, any>) {
+    string value = ir.value
+    string generated = ""
+
+    if (ir.kind == "IR_PrintInt") {
+      generated = "@erelang\n\npublic action main {\n  print " + value + "\n}\n\nrun main\n"
+    } else {
+      if (ir.kind == "IR_PrintExpr") {
+        generated = "@erelang\n\npublic action main {\n  print " + value + "\n}\n\nrun main\n"
+      } else {
+        generated = "@erelang\n\npublic action main {\n  print \"" + value + "\"\n}\n\nrun main\n"
+      }
+    }
+
+    return generated
+  }
+}

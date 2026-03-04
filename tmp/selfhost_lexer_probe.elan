@@ -1,0 +1,15 @@
+@erelang
+
+#include "erelang/src/lexer.elan"
+
+public action main {
+  auto a = SelfHostLexer::tokenize("print 1 + 2")
+  print a.kind
+  print a.line
+
+  auto b = SelfHostLexer::tokenize("repeat 5 { print \"Hi\" }")
+  print b.kind
+  print b.line
+}
+
+run main

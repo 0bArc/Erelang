@@ -6,6 +6,13 @@ namespace erelang {
 
 Parser::Parser(std::vector<Token> tokens) : tokens_(std::move(tokens)) {}
 
+std::string Parser::qualify_name(const std::string& name) const {
+    if (name.empty()) return name;
+    if (name.find("::") != std::string::npos) return name;
+    if (namespaceStack_.empty()) return name;
+    return namespaceStack_.back() + "::" + name;
+}
+
 static inline bool is_word_or_kw(const Token& t, std::string_view w) {
     return ((t.kind == TokenKind::Word || t.kind == TokenKind::Keyword) && t.text == w);
 }
@@ -80,6 +87,12 @@ static int64_t parse_numeric_literal(const std::string& text) {
 
     size_t idx = 0;
     return std::stoll(text, &idx, 0);
+}
+
+static bool is_float_literal_text(const std::string& text) {
+    return text.find('.') != std::string::npos ||
+           text.find('e') != std::string::npos ||
+           text.find('E') != std::string::npos;
 }
 
 const Token& Parser::peek(size_t offset) const {
@@ -197,6 +210,14 @@ ExprPtr Parser::parse_unary() {
         auto e = parse_unary();
         return std::make_shared<Expr>(Expr{ UnaryExpr{ UnOp::Not, e } });
     }
+    if (match(TokenKind::Star)) {
+        auto e = parse_unary();
+        return std::make_shared<Expr>(Expr{ UnaryExpr{ UnOp::Deref, e } });
+    }
+    if (match(TokenKind::Amp)) {
+        auto e = parse_unary();
+        return std::make_shared<Expr>(Expr{ UnaryExpr{ UnOp::AddressOf, e } });
+    }
     return parse_primary();
 }
 
@@ -246,12 +267,136 @@ ExprPtr Parser::parse_primary() {
         call.args.push_back(inner);
         return apply_colon_chain(std::make_shared<Expr>(Expr{ call }));
     }
+    if ((t.kind == TokenKind::Word || t.kind == TokenKind::Keyword) && t.text == "dynamic_cast") {
+        consume();
+        expect(TokenKind::Less, "<");
+        std::string castType = parse_type_annotation();
+        if (peek().kind == TokenKind::Greater) {
+            consume();
+        }
+        expect(TokenKind::LParen, "(");
+        auto inner = parse_expression();
+        expect(TokenKind::RParen, ")");
+        FunctionCallExpr call;
+        call.name = "dynamic_cast";
+        call.args.push_back(std::make_shared<Expr>(Expr{ ExprString{ castType } }));
+        call.args.push_back(inner);
+        return apply_colon_chain(std::make_shared<Expr>(Expr{ call }));
+    }
+    if ((t.kind == TokenKind::Word || t.kind == TokenKind::Keyword) && t.text == "reinterpret_cast") {
+        consume();
+        expect(TokenKind::Less, "<");
+        std::string castType = parse_type_annotation();
+        if (peek().kind == TokenKind::Greater) {
+            consume();
+        }
+        expect(TokenKind::LParen, "(");
+        auto inner = parse_expression();
+        expect(TokenKind::RParen, ")");
+        FunctionCallExpr call;
+        call.name = "reinterpret_cast";
+        call.args.push_back(std::make_shared<Expr>(Expr{ ExprString{ castType } }));
+        call.args.push_back(inner);
+        return apply_colon_chain(std::make_shared<Expr>(Expr{ call }));
+    }
+    if ((t.kind == TokenKind::Word || t.kind == TokenKind::Keyword) && t.text == "sizeof") {
+        consume();
+        FunctionCallExpr call;
+        call.name = "__builtin_sizeof";
+        if (match(TokenKind::Less)) {
+            const std::string typeName = parse_type_annotation();
+            if (peek().kind == TokenKind::Greater) consume();
+            call.args.push_back(std::make_shared<Expr>(Expr{ ExprString{ typeName } }));
+            if (match(TokenKind::LParen)) expect(TokenKind::RParen, ")");
+        } else if (match(TokenKind::LParen)) {
+            call.args.push_back(parse_expression());
+            expect(TokenKind::RParen, ")");
+        } else {
+            throw std::runtime_error("Expected '<type>' or '(expr)' after sizeof");
+        }
+        return apply_colon_chain(std::make_shared<Expr>(Expr{ call }));
+    }
+    if ((t.kind == TokenKind::Word || t.kind == TokenKind::Keyword) && t.text == "alignof") {
+        consume();
+        FunctionCallExpr call;
+        call.name = "__builtin_alignof";
+        if (match(TokenKind::Less)) {
+            const std::string typeName = parse_type_annotation();
+            if (peek().kind == TokenKind::Greater) consume();
+            call.args.push_back(std::make_shared<Expr>(Expr{ ExprString{ typeName } }));
+            if (match(TokenKind::LParen)) expect(TokenKind::RParen, ")");
+        } else if (match(TokenKind::LParen)) {
+            call.args.push_back(parse_expression());
+            expect(TokenKind::RParen, ")");
+        } else {
+            throw std::runtime_error("Expected '<type>' or '(expr)' after alignof");
+        }
+        return apply_colon_chain(std::make_shared<Expr>(Expr{ call }));
+    }
+    if ((t.kind == TokenKind::Word || t.kind == TokenKind::Keyword) && t.text == "typeof") {
+        consume();
+        FunctionCallExpr call;
+        call.name = "__builtin_typeof";
+        expect(TokenKind::LParen, "(");
+        call.args.push_back(parse_expression());
+        expect(TokenKind::RParen, ")");
+        return apply_colon_chain(std::make_shared<Expr>(Expr{ call }));
+    }
+    if ((t.kind == TokenKind::Word || t.kind == TokenKind::Keyword) && t.text == "decltype") {
+        consume();
+        FunctionCallExpr call;
+        call.name = "__builtin_decltype";
+        expect(TokenKind::LParen, "(");
+        call.args.push_back(parse_expression());
+        expect(TokenKind::RParen, ")");
+        return apply_colon_chain(std::make_shared<Expr>(Expr{ call }));
+    }
+    if ((t.kind == TokenKind::Word || t.kind == TokenKind::Keyword) && t.text == "offsetof") {
+        consume();
+        FunctionCallExpr call;
+        call.name = "__builtin_offsetof";
+        expect(TokenKind::LParen, "(");
+        const std::string typeName = parse_type_annotation();
+        expect(TokenKind::Comma, ",");
+        const Token& fieldTok = consume();
+        if (!(fieldTok.kind == TokenKind::Word || fieldTok.kind == TokenKind::Keyword)) {
+            throw std::runtime_error("Expected field name in offsetof(type, field)");
+        }
+        call.args.push_back(std::make_shared<Expr>(Expr{ ExprString{ typeName } }));
+        call.args.push_back(std::make_shared<Expr>(Expr{ ExprString{ ident_text(fieldTok) } }));
+        expect(TokenKind::RParen, ")");
+        return apply_colon_chain(std::make_shared<Expr>(Expr{ call }));
+    }
+    if ((t.kind == TokenKind::Word || t.kind == TokenKind::Keyword) && t.text == "is_base_of") {
+        consume();
+        FunctionCallExpr call;
+        call.name = "__builtin_is_base_of";
+        expect(TokenKind::Less, "<");
+        const std::string baseType = parse_type_annotation();
+        expect(TokenKind::Comma, ",");
+        const std::string derivedType = parse_type_annotation();
+        if (peek().kind == TokenKind::Greater) consume();
+        if (match(TokenKind::LParen)) {
+            if (!match(TokenKind::RParen)) {
+                do { (void)parse_expression(); } while (match(TokenKind::Comma));
+                expect(TokenKind::RParen, ")");
+            }
+        }
+        call.args.push_back(std::make_shared<Expr>(Expr{ ExprString{ baseType } }));
+        call.args.push_back(std::make_shared<Expr>(Expr{ ExprString{ derivedType } }));
+        return apply_colon_chain(std::make_shared<Expr>(Expr{ call }));
+    }
     // new Type(expr, ...)
     if ((t.kind == TokenKind::Word || t.kind == TokenKind::Keyword) && t.text == "new") {
         consume();
         const Token& typeTok = consume();
             if (!(typeTok.kind == TokenKind::Word || typeTok.kind == TokenKind::Keyword)) throw std::runtime_error("Expected type name after 'new'");
-        NewExpr ne; ne.typeName = typeTok.text;
+        NewExpr ne; ne.typeName = ident_text(typeTok);
+        while (match(TokenKind::Scope)) {
+            const Token& seg = consume();
+            if (!(seg.kind == TokenKind::Word || seg.kind == TokenKind::Keyword)) throw std::runtime_error("Expected type segment after '::'");
+            ne.typeName += "::" + ident_text(seg);
+        }
         if (match(TokenKind::LParen)) {
             if (!match(TokenKind::RParen)) {
                 do { ne.args.push_back(parse_expression()); } while (match(TokenKind::Comma));
@@ -266,11 +411,12 @@ ExprPtr Parser::parse_primary() {
     }
     if (t.kind == TokenKind::Number) {
         consume();
-        return apply_colon_chain(std::make_shared<Expr>(Expr{ ExprNumber{ parse_numeric_literal(t.text) } }));
+        return apply_colon_chain(std::make_shared<Expr>(Expr{ ExprNumber{ parse_numeric_literal(t.text), is_float_literal_text(t.text), t.text } }));
     }
     if (t.kind == TokenKind::Duration) {
         consume();
-        return apply_colon_chain(std::make_shared<Expr>(Expr{ ExprNumber{ parse_duration_ms(t.text) } }));
+        const auto ms = parse_duration_ms(t.text);
+        return apply_colon_chain(std::make_shared<Expr>(Expr{ ExprNumber{ ms, false, std::to_string(ms) } }));
     }
     if (t.kind == TokenKind::UnitNumber) {
         consume();
@@ -278,9 +424,14 @@ ExprPtr Parser::parse_primary() {
     }
     if (t.kind == TokenKind::Word || t.kind == TokenKind::Keyword) {
     if (t.text == "true" || t.text == "false") { consume(); return apply_colon_chain(std::make_shared<Expr>(Expr{ ExprBool{ t.text == "true" } })); }
-    if (t.text == "null" || t.text == "nil" || t.text == "nullptr") { consume(); return apply_colon_chain(std::make_shared<Expr>(Expr{ ExprString{ std::string() } })); }
+    if (t.text == "null" || t.text == "nil" || t.text == "nullptr") { consume(); return apply_colon_chain(std::make_shared<Expr>(Expr{ ExprNull{} })); }
         consume();
         std::string baseName = ident_text(t);
+        while (match(TokenKind::Scope)) {
+            const Token& seg = consume();
+            if (!(seg.kind == TokenKind::Word || seg.kind == TokenKind::Keyword)) throw std::runtime_error("Expected identifier after '::'");
+            baseName += "::" + ident_text(seg);
+        }
         bool hadIndex = false;
         while (match(TokenKind::LBracket)) {
             hadIndex = true;
@@ -409,7 +560,12 @@ Action Parser::parse_action() {
     if (!match_word("action")) throw std::runtime_error("Expected 'action'");
     const Token& nameTok = consume();
     if (!(nameTok.kind == TokenKind::Word || nameTok.kind == TokenKind::Keyword)) throw std::runtime_error("Action name");
-    Action a; a.name = ident_text(nameTok); a.visibility = vis; a.exported = isExport; a.attributes = std::move(attrs);
+    Action a;
+    const std::string rawName = ident_text(nameTok);
+    a.name = parsingEntityMethod_ ? rawName : qualify_name(rawName);
+    a.visibility = vis;
+    a.exported = isExport;
+    a.attributes = std::move(attrs);
     if (match(TokenKind::LParen)) {
         if (!match(TokenKind::RParen)) {
             do {
@@ -439,7 +595,7 @@ Hook Parser::parse_hook() {
     if (!match_word("hook")) throw std::runtime_error("Expected 'hook'");
     const Token& nameTok = consume();
     if (!(nameTok.kind == TokenKind::Word || nameTok.kind == TokenKind::Keyword)) throw std::runtime_error("Hook name");
-    Hook h; h.name = ident_text(nameTok); h.attributes = std::move(attrs); h.body = parse_block();
+    Hook h; h.name = qualify_name(ident_text(nameTok)); h.attributes = std::move(attrs); h.body = parse_block();
     return h;
 }
 
@@ -464,13 +620,33 @@ GlobalDecl Parser::parse_global() {
     if (!(nameTok.kind == TokenKind::Word || nameTok.kind == TokenKind::Keyword)) throw std::runtime_error("Global name");
     expect(TokenKind::Assign, "=");
     auto val = parse_expression();
-    return GlobalDecl{ ident_text(nameTok), val, std::string{} };
+    return GlobalDecl{ qualify_name(ident_text(nameTok)), val, std::string{} };
 }
 
 Statement Parser::parse_statement() {
+    // C++-style pointer assignment: *p = expr
+    if (peek().kind == TokenKind::Star) {
+        const size_t savePos = pos_;
+        consume();
+        if (peek().kind == TokenKind::Word || peek().kind == TokenKind::Keyword) {
+            const Token& ptrTok = consume();
+            if (match(TokenKind::Assign)) {
+                auto ptrExpr = std::make_shared<Expr>(Expr{ ExprIdent{ ident_text(ptrTok) } });
+                auto valueExpr = parse_expression();
+                return PointerSetStmt{ ptrExpr, valueExpr };
+            }
+        }
+        pos_ = savePos;
+    }
+
     // if
     if (is_word_or_kw(peek(), "if")) {
         return parse_if();
+    }
+    if (is_word_or_kw(peek(), "unsafe")) {
+        consume();
+        auto body = std::make_shared<Block>(parse_block());
+        return UnsafeStmt{ body };
     }
     if (is_word_or_kw(peek(), "try")) {
         return parse_try_catch();
@@ -480,7 +656,6 @@ Statement Parser::parse_statement() {
         auto sel = parse_expression();
         expect(TokenKind::LBrace, "{");
         SwitchStmt sw; sw.selector = sel;
-        bool hasDefault = false;
         skip_separators();
         while (peek().kind != TokenKind::RBrace && peek().kind != TokenKind::End) {
             if (match_word("case")) {
@@ -488,11 +663,23 @@ Statement Parser::parse_statement() {
                 if (!(v.kind == TokenKind::String || v.kind == TokenKind::Word || v.kind == TokenKind::Keyword || v.kind == TokenKind::Number)) {
                     throw std::runtime_error("case value");
                 }
-                Block b = parse_block();
+                Block b;
+                if (match(TokenKind::Colon)) {
+                    skip_separators();
+                    b.stmts.push_back(parse_statement());
+                } else {
+                    b = parse_block();
+                }
                 sw.cases.push_back(SwitchCase{v.text, std::make_shared<Block>(std::move(b))});
             } else if (match_word("default")) {
-                sw.defaultBlk = std::make_shared<Block>(parse_block());
-                hasDefault = true;
+                if (match(TokenKind::Colon)) {
+                    Block b;
+                    skip_separators();
+                    b.stmts.push_back(parse_statement());
+                    sw.defaultBlk = std::make_shared<Block>(std::move(b));
+                } else {
+                    sw.defaultBlk = std::make_shared<Block>(parse_block());
+                }
             } else {
                 skip_separators();
                 if (!(peek().kind == TokenKind::RBrace || peek().kind == TokenKind::End)) throw std::runtime_error("Expected 'case' or 'default'");
@@ -500,12 +687,18 @@ Statement Parser::parse_statement() {
             skip_separators();
         }
         expect(TokenKind::RBrace, "}");
-        if (!hasDefault) throw std::runtime_error("match requires a default case");
         return sw;
     }
     // while
     if (is_word_or_kw(peek(), "while")) {
         return parse_while();
+    }
+    // repeat N { ... }
+    if (is_word_or_kw(peek(), "repeat")) {
+        consume();
+        auto count = parse_expression();
+        auto body = std::make_shared<Block>(parse_block());
+        return RepeatStmt{ count, body };
     }
     // for / for-each
     if ((peek().kind == TokenKind::Word || peek().kind == TokenKind::Keyword) && peek().text == "for") {
@@ -546,7 +739,7 @@ Statement Parser::parse_statement() {
         throw std::runtime_error("Expected duration literal or number after 'sleep'");
     }
     // typed declaration with optional constexpr/static modifiers and generic type names
-    {
+    if (!is_word_or_kw(peek(), "let") && !is_word_or_kw(peek(), "const")) {
         const size_t savePos = pos_;
         bool isConstDecl = false;
         if (match_word("constexpr")) isConstDecl = true;
@@ -555,7 +748,9 @@ Statement Parser::parse_statement() {
             std::string declaredType = parse_type_annotation();
             const Token& nameTok = consume();
             if (nameTok.kind != TokenKind::Word) throw std::runtime_error("Variable name");
-            expect(TokenKind::Assign, "=");
+            if (!match(TokenKind::Assign) && peek().kind != TokenKind::LBrace) {
+                throw std::runtime_error("=");
+            }
             auto val = parse_expression();
             return LetStmt{ isConstDecl, ident_text(nameTok), val, declaredType };
         } catch (...) {
@@ -568,7 +763,9 @@ Statement Parser::parse_statement() {
         if (match_word("let")) isConst = false; else if (match_word("const")) isConst = true;
         const Token& nameTok = consume();
         if (nameTok.kind != TokenKind::Word) throw std::runtime_error("Variable name");
-        expect(TokenKind::Assign, "=");
+        if (!match(TokenKind::Assign) && peek().kind != TokenKind::LBrace) {
+            throw std::runtime_error("=");
+        }
         auto val = parse_expression();
         return LetStmt{ isConst, ident_text(nameTok), val, std::string{} };
     }
@@ -616,8 +813,14 @@ Statement Parser::parse_statement() {
     // run main (top-level only, but allow as stmt capturing target)
     if (match_word("run")) {
         const Token& nameTok = consume();
-        if (nameTok.kind != TokenKind::Word) throw std::runtime_error("Expected action name after run");
-        return ActionCallStmt{ ident_text(nameTok), {} };
+        if (!(nameTok.kind == TokenKind::Word || nameTok.kind == TokenKind::Keyword)) throw std::runtime_error("Expected action name after run");
+        std::string callName = ident_text(nameTok);
+        while (match(TokenKind::Scope)) {
+            const Token& seg = consume();
+            if (!(seg.kind == TokenKind::Word || seg.kind == TokenKind::Keyword)) throw std::runtime_error("Expected scoped segment after '::'");
+            callName += "::" + ident_text(seg);
+        }
+        return ActionCallStmt{ callName, {} };
     }
     // member assignment or dotted call like obj.field = expr or a.b.c(...)
     if (peek().kind == TokenKind::Word || peek().kind == TokenKind::Keyword) {
@@ -662,6 +865,11 @@ Statement Parser::parse_statement() {
         const Token& fn = consume();
         if (!(fn.kind == TokenKind::Word || fn.kind == TokenKind::Keyword)) throw std::runtime_error("Expected callable name after 'await'");
         ActionCallStmt call; call.name = ident_text(fn);
+        while (match(TokenKind::Scope)) {
+            const Token& seg = consume();
+            if (!(seg.kind == TokenKind::Word || seg.kind == TokenKind::Keyword)) throw std::runtime_error("Expected scoped segment after '::'");
+            call.name += "::" + ident_text(seg);
+        }
         if (match(TokenKind::LParen)) {
             if (!match(TokenKind::RParen)) {
                 do { call.args.push_back(parse_expression()); } while (match(TokenKind::Comma));
@@ -676,6 +884,11 @@ Statement Parser::parse_statement() {
     if (id.kind == TokenKind::Word || id.kind == TokenKind::Keyword) {
     consume();
     ActionCallStmt call; call.name = ident_text(id);
+        while (match(TokenKind::Scope)) {
+            const Token& seg = consume();
+            if (!(seg.kind == TokenKind::Word || seg.kind == TokenKind::Keyword)) throw std::runtime_error("Expected scoped segment after '::'");
+            call.name += "::" + ident_text(seg);
+        }
         if (match(TokenKind::LParen)) {
             if (!match(TokenKind::RParen)) {
                 do { call.args.push_back(parse_expression()); } while (match(TokenKind::Comma));
@@ -722,21 +935,41 @@ Program Parser::parse_program() {
         skip_separators();
     }
     while (peek().kind != TokenKind::End) {
+        if (peek().kind == TokenKind::RBrace) {
+            if (!namespaceStack_.empty()) {
+                consume();
+                namespaceStack_.pop_back();
+                skip_separators();
+                continue;
+            }
+            throw std::runtime_error("Unexpected '}' at top level");
+        }
         // classify next top-level declaration while allowing attributes/modifiers
         auto classify_next = [&](void) -> std::string {
             size_t i = 0;
             // skip separators
             while (peek(i).kind == TokenKind::Newline || peek(i).kind == TokenKind::Semicolon) ++i;
             // attributes
-            while (peek(i).kind == TokenKind::At) {
-                ++i; // '@'
-                if (!(peek(i).kind == TokenKind::Word || peek(i).kind == TokenKind::Keyword)) return std::string();
-                ++i; // name
-                if (peek(i).kind == TokenKind::LParen) {
-                    ++i; // '('
-                    // scan until ')'
-                    while (peek(i).kind != TokenKind::RParen && peek(i).kind != TokenKind::End) ++i;
-                    if (peek(i).kind == TokenKind::RParen) ++i;
+            while (peek(i).kind == TokenKind::At || peek(i).kind == TokenKind::LBracket) {
+                if (peek(i).kind == TokenKind::At) {
+                    ++i; // '@'
+                    if (!(peek(i).kind == TokenKind::Word || peek(i).kind == TokenKind::Keyword)) return std::string();
+                    ++i; // name
+                    if (peek(i).kind == TokenKind::LParen) {
+                        ++i; // '('
+                        while (peek(i).kind != TokenKind::RParen && peek(i).kind != TokenKind::End) ++i;
+                        if (peek(i).kind == TokenKind::RParen) ++i;
+                    }
+                } else {
+                    ++i; // '['
+                    if (!(peek(i).kind == TokenKind::Word || peek(i).kind == TokenKind::Keyword)) return std::string();
+                    ++i; // name
+                    if (peek(i).kind == TokenKind::LParen) {
+                        ++i;
+                        while (peek(i).kind != TokenKind::RParen && peek(i).kind != TokenKind::End) ++i;
+                        if (peek(i).kind == TokenKind::RParen) ++i;
+                    }
+                    if (peek(i).kind == TokenKind::RBracket) ++i;
                 }
                 while (peek(i).kind == TokenKind::Newline || peek(i).kind == TokenKind::Semicolon) ++i;
             }
@@ -755,6 +988,7 @@ Program Parser::parse_program() {
                 if (w == "struct") return std::string("struct");
                 if (w == "enum") return std::string("enum");
                 if (w == "type") return std::string("type");
+                if (w == "namespace") return std::string("namespace");
                 if (w == "run") return std::string("run");
             }
             return std::string();
@@ -820,11 +1054,29 @@ Program Parser::parse_program() {
             prog.enums.push_back(parse_enum());
         } else if (kind == "type") {
             prog.typeAliases.push_back(parse_type_alias());
+        } else if (kind == "namespace") {
+            consume();
+            const Token& firstNs = consume();
+            if (!(firstNs.kind == TokenKind::Word || firstNs.kind == TokenKind::Keyword)) throw std::runtime_error("Expected namespace name");
+            std::string nsName = ident_text(firstNs);
+            while (match(TokenKind::Scope)) {
+                const Token& seg = consume();
+                if (!(seg.kind == TokenKind::Word || seg.kind == TokenKind::Keyword)) throw std::runtime_error("Expected namespace segment after '::'");
+                nsName += "::" + ident_text(seg);
+            }
+            expect(TokenKind::LBrace, "{");
+            namespaceStack_.push_back(qualify_name(nsName));
         } else if (kind == "run") {
             consume();
             const Token& t = consume();
             if (!(t.kind == TokenKind::Word || t.kind == TokenKind::Keyword)) throw std::runtime_error("Expected action name after run");
-            prog.runTarget = ident_text(t);
+            std::string runName = ident_text(t);
+            while (match(TokenKind::Scope)) {
+                const Token& seg = consume();
+                if (!(seg.kind == TokenKind::Word || seg.kind == TokenKind::Keyword)) throw std::runtime_error("Expected scoped segment after '::'");
+                runName += "::" + ident_text(seg);
+            }
+            prog.runTarget = qualify_name(runName);
         } else {
             // allow stray separators and ignore unknown top-level '@' blocks handled above
             skip_separators();
@@ -833,6 +1085,9 @@ Program Parser::parse_program() {
             throw std::runtime_error("Unexpected top-level token");
         }
         skip_separators();
+    }
+    if (!namespaceStack_.empty()) {
+        throw std::runtime_error("Unterminated namespace block");
     }
     return prog;
 }
@@ -961,7 +1216,10 @@ Entity Parser::parse_entity() {
     if (!match_word("entity")) throw std::runtime_error("Expected 'entity'");
     const Token& nameTok = consume();
     if (!(nameTok.kind == TokenKind::Word || nameTok.kind == TokenKind::Keyword)) throw std::runtime_error("Entity name");
-    Entity e; e.name = ident_text(nameTok); e.visibility = vis; e.exported = isExport; e.attributes = std::move(attrs);
+    Entity e; e.name = qualify_name(ident_text(nameTok)); e.visibility = vis; e.exported = isExport; e.attributes = std::move(attrs);
+    if (match(TokenKind::Colon)) {
+        e.baseType = parse_type_annotation();
+    }
     expect(TokenKind::LBrace, "{");
     skip_separators();
     while (peek().kind != TokenKind::RBrace && peek().kind != TokenKind::End) {
@@ -980,7 +1238,7 @@ Entity Parser::parse_entity() {
                 if ((peek(i).kind == TokenKind::Word || peek(i).kind == TokenKind::Keyword) && peek(i).text == "action") parseMethod = true;
             }
         }
-        if (peek().kind == TokenKind::At) {
+        if (peek().kind == TokenKind::At || peek().kind == TokenKind::LBracket) {
             // Attributes can apply to either methods or fields; decide after peeking the next non-attr token
             // We'll parse attributes inside the branch handlers to avoid consuming them twice.
             // Fall through to unified handling below.
@@ -991,12 +1249,19 @@ Entity Parser::parse_entity() {
             // peek past attributes and modifiers here.
             size_t i = 0;
             // Skip attributes
-            if (peek().kind == TokenKind::At) {
+            if (peek().kind == TokenKind::At || peek().kind == TokenKind::LBracket) {
                 // simulate parse_attributes look-ahead
-                while (peek(i).kind == TokenKind::At) {
-                    ++i; // '@'
-                    ++i; // name
-                    if (peek(i).kind == TokenKind::LParen) { ++i; while (peek(i).kind != TokenKind::RParen && peek(i).kind != TokenKind::End) ++i; if (peek(i).kind == TokenKind::RParen) ++i; }
+                while (peek(i).kind == TokenKind::At || peek(i).kind == TokenKind::LBracket) {
+                    if (peek(i).kind == TokenKind::At) {
+                        ++i;
+                        ++i;
+                        if (peek(i).kind == TokenKind::LParen) { ++i; while (peek(i).kind != TokenKind::RParen && peek(i).kind != TokenKind::End) ++i; if (peek(i).kind == TokenKind::RParen) ++i; }
+                    } else {
+                        ++i;
+                        ++i;
+                        if (peek(i).kind == TokenKind::LParen) { ++i; while (peek(i).kind != TokenKind::RParen && peek(i).kind != TokenKind::End) ++i; if (peek(i).kind == TokenKind::RParen) ++i; }
+                        if (peek(i).kind == TokenKind::RBracket) ++i;
+                    }
                     while (peek(i).kind == TokenKind::Newline || peek(i).kind == TokenKind::Semicolon) ++i;
                 }
             }
@@ -1006,7 +1271,9 @@ Entity Parser::parse_entity() {
                 ++i; while (peek(i).kind == TokenKind::Newline || peek(i).kind == TokenKind::Semicolon) ++i;
             }
             if ((peek(i).kind == TokenKind::Word || peek(i).kind == TokenKind::Keyword) && peek(i).text == "action") {
+                parsingEntityMethod_ = true;
                 e.methods.push_back(parse_action());
+                parsingEntityMethod_ = false;
                 skip_separators();
                 continue;
             }
@@ -1019,16 +1286,24 @@ Entity Parser::parse_entity() {
         if (match_word("public")) { fvis = Visibility::Public; fHadVis = true; }
         else if (match_word("private")) { fvis = Visibility::Private; fHadVis = true; }
         match_word("field");
-        const Token& fn = consume();
-        if (!(fn.kind == TokenKind::Word || fn.kind == TokenKind::Keyword)) throw std::runtime_error("Field name");
+        const Token& firstTok = consume();
+        if (!(firstTok.kind == TokenKind::Word || firstTok.kind == TokenKind::Keyword)) throw std::runtime_error("Field declaration");
         Field field;
-        field.name = ident_text(fn);
         field.visibility = fvis;
         field.attributes = std::move(fattrs);
         if (match(TokenKind::Colon)) {
-            const Token& ft = consume();
-            if (!(ft.kind == TokenKind::Word || ft.kind == TokenKind::Keyword)) throw std::runtime_error("Field type");
-            field.type = ft.text;
+            field.name = ident_text(firstTok);
+            field.type = parse_type_annotation();
+        } else if (peek().kind == TokenKind::Word || peek().kind == TokenKind::Keyword) {
+            // type-first form: int age
+            const Token& secondTok = consume();
+            field.type = ident_text(firstTok);
+            field.name = ident_text(secondTok);
+        } else {
+            field.name = ident_text(firstTok);
+        }
+        if (match(TokenKind::Assign)) {
+            field.defaultValue = parse_expression();
         }
         e.fields.push_back(std::move(field));
         match(TokenKind::Semicolon);
@@ -1118,7 +1393,7 @@ StructDecl Parser::parse_struct() {
     const Token& nameTok = consume();
     if (!(nameTok.kind == TokenKind::Word || nameTok.kind == TokenKind::Keyword)) throw std::runtime_error("Struct name");
     StructDecl decl;
-    decl.name = ident_text(nameTok);
+    decl.name = qualify_name(ident_text(nameTok));
     expect(TokenKind::LBrace, "{");
     skip_separators();
     while (peek().kind != TokenKind::RBrace && peek().kind != TokenKind::End) {
@@ -1148,7 +1423,7 @@ EnumDecl Parser::parse_enum() {
     const Token& nameTok = consume();
     if (!(nameTok.kind == TokenKind::Word || nameTok.kind == TokenKind::Keyword)) throw std::runtime_error("Enum name");
     EnumDecl decl;
-    decl.name = ident_text(nameTok);
+    decl.name = qualify_name(ident_text(nameTok));
     expect(TokenKind::LBrace, "{");
     skip_separators();
     while (peek().kind != TokenKind::RBrace && peek().kind != TokenKind::End) {
@@ -1179,13 +1454,18 @@ TypeAliasDecl Parser::parse_type_alias() {
     expect(TokenKind::Assign, "=");
     std::string targetType = parse_type_annotation();
     (void)match(TokenKind::Semicolon);
-    return TypeAliasDecl{ ident_text(nameTok), targetType };
+    return TypeAliasDecl{ qualify_name(ident_text(nameTok)), targetType };
 }
 
 std::string Parser::parse_type_annotation() {
     const Token& first = consume();
     if (!(first.kind == TokenKind::Word || first.kind == TokenKind::Keyword)) throw std::runtime_error("Expected type name");
     std::string out = ident_text(first);
+    while (match(TokenKind::Scope)) {
+        const Token& seg = consume();
+        if (!(seg.kind == TokenKind::Word || seg.kind == TokenKind::Keyword)) throw std::runtime_error("Expected type segment after '::'");
+        out += "::" + ident_text(seg);
+    }
     if (match(TokenKind::Less)) {
         out += "<";
         int depth = 1;
@@ -1207,6 +1487,7 @@ std::string Parser::parse_type_annotation() {
                 continue;
             }
             if (tk.kind == TokenKind::Dot || tk.kind == TokenKind::Colon || tk.kind == TokenKind::Question ||
+                tk.kind == TokenKind::Scope ||
                 tk.kind == TokenKind::Word || tk.kind == TokenKind::Keyword || tk.kind == TokenKind::Number) {
                 out += tk.text;
                 continue;
@@ -1214,13 +1495,38 @@ std::string Parser::parse_type_annotation() {
             throw std::runtime_error("Invalid token in type annotation");
         }
     }
+    while (true) {
+        if (match(TokenKind::Star)) {
+            out += "*";
+            continue;
+        }
+        if (match(TokenKind::Amp)) {
+            out += "&";
+            continue;
+        }
+        break;
+    }
     return out;
 }
 
 std::vector<Attribute> Parser::parse_attributes() {
     std::vector<Attribute> attrs;
-    while (peek().kind == TokenKind::At) {
-        consume();
+    while (peek().kind == TokenKind::At || peek().kind == TokenKind::LBracket) {
+        if (peek().kind == TokenKind::At) {
+            consume();
+            const Token& an = consume();
+            if (!(an.kind == TokenKind::Word || an.kind == TokenKind::Keyword)) throw std::runtime_error("Attribute name");
+            Attribute a; a.name = an.text;
+            if (match(TokenKind::LParen)) {
+                const Token& v = consume();
+                if (v.kind == TokenKind::String || v.kind == TokenKind::Word || v.kind == TokenKind::Keyword || v.kind == TokenKind::Number) a.value = v.text; else throw std::runtime_error("Attribute value");
+                expect(TokenKind::RParen, ")");
+            }
+            attrs.push_back(std::move(a));
+            skip_separators();
+            continue;
+        }
+        expect(TokenKind::LBracket, "[");
         const Token& an = consume();
         if (!(an.kind == TokenKind::Word || an.kind == TokenKind::Keyword)) throw std::runtime_error("Attribute name");
         Attribute a; a.name = an.text;
@@ -1229,6 +1535,7 @@ std::vector<Attribute> Parser::parse_attributes() {
             if (v.kind == TokenKind::String || v.kind == TokenKind::Word || v.kind == TokenKind::Keyword || v.kind == TokenKind::Number) a.value = v.text; else throw std::runtime_error("Attribute value");
             expect(TokenKind::RParen, ")");
         }
+        expect(TokenKind::RBracket, "]");
         attrs.push_back(std::move(a));
         skip_separators();
     }

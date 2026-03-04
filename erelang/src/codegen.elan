@@ -1,0 +1,12 @@
+@erelang
+
+namespace SelfHostCodeGen {
+  public action emit(ir: Map<string, any>) {
+    string line = ir.line
+    if (regex_match("^print .*$", line) != "true") {
+      line = "print \"" + line + "\""
+    }
+
+    return "@erelang\n\npublic action main {\n  " + line + "\n}\n\nrun main\n"
+  }
+}

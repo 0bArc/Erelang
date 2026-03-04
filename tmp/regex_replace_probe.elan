@@ -1,0 +1,8 @@
+@erelang
+
+public action main {
+  print regex_replace("abc123def", "[a-z]+", "")
+  print regex_replace("repeat 15 { print \"Hi\" }", "^repeat ([0-9]+) \\{.*$", "$1")
+}
+
+run main

@@ -1,0 +1,26 @@
+@erelang
+
+namespace SelfHost {
+  public action parse(token_stream: Map<string, any>) {
+    if (token_stream.kind == "arith_print") {
+      return {
+        "kind": "BinaryPrint",
+        "lhs": token_stream.lhs,
+        "op": token_stream.op,
+        "rhs": token_stream.rhs
+      }
+    }
+
+    if (token_stream.kind == "expr_print") {
+      return {
+        "kind": "ExprPrint",
+        "expr": token_stream.expr
+      }
+    }
+
+    return {
+      "kind": "RawPrint",
+      "text": token_stream.text
+    }
+  }
+}

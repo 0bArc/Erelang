@@ -1,0 +1,10 @@
+@erelang
+
+namespace SelfHostIR {
+  public action lower(ast: Map<string, any>) {
+    return {
+      "kind": "IR_Line",
+      "line": ast.line
+    }
+  }
+}

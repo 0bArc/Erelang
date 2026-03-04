@@ -1,0 +1,8 @@
+@erelang
+
+public action main {
+  print toint("15")
+  print toint("007")
+}
+
+run main

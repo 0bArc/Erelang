@@ -1,0 +1,33 @@
+@erelang
+
+namespace SelfHost {
+  public action tokenize(src: string) {
+    string trimmed = src:strip()
+
+    string expr = regex_find("^print (.*)$", trimmed)
+    if (expr != "") {
+      string lhs = regex_find("^([0-9]+) .*", expr)
+      string op = regex_find("^[0-9]+ ([+*/-]) [0-9]+$", expr)
+      string rhs = regex_find("^.* ([0-9]+)$", expr)
+      if (lhs != "" && op != "" && rhs != "") {
+        return {
+          "kind": "arith_print",
+          "lhs": lhs,
+          "op": op,
+          "rhs": rhs,
+          "expr": expr
+        }
+      }
+
+      return {
+        "kind": "expr_print",
+        "expr": expr
+      }
+    }
+
+    return {
+      "kind": "raw_print",
+      "text": trimmed
+    }
+  }
+}

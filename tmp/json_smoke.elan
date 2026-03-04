@@ -1,0 +1,12 @@
+@erelang
+
+public action main {
+  Map<string, any> meta = { "Age": 18, "Name": "Alex" }
+  auto j = to_json(meta)
+  print j
+
+  auto d = from_json("{\"X\":\"1\",\"Y\":\"2\"}")
+  print to_json(d)
+}
+
+run main

@@ -1,0 +1,25 @@
+struct Player {
+    name: string
+    age: int
+}
+
+impl Player {
+    public action celebrate_birthday() {
+    
+        print "Happy Birthday " + self.name
+        self.age = self.age + 1
+        print "You are now " + self.age
+    }
+
+    public action describe() {
+        print "Player: " + self.name + " | Age: " + self.age
+    }
+}
+
+
+public action main {
+ auto p1 = new Player
+ print p1.name
+}
+
+run main

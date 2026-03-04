@@ -1,0 +1,14 @@
+@erelang
+
+#include "./src/lexer.elan"
+
+public action main {
+  auto t1 = SelfHostLexer::tokenize("print \"Hello from self-host bootstrap\"")
+  print t1.kind
+  auto t2 = SelfHostLexer::tokenize("repeat 7 { print \"Hi\" }")
+  print t2.kind
+  print t2.count
+  print t2.body_source
+}
+
+run main

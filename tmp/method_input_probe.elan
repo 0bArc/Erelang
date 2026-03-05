@@ -1,0 +1,7 @@
+public action main() {
+  util.log("probe");
+  input name;
+  print "name:{name}";
+}
+
+run main;

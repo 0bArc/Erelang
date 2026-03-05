@@ -1,0 +1,13 @@
+public action main() {
+  let items = list_new(10, 20, 30);
+  for (v : items) {
+    print "v:{v}";
+  }
+
+  let m = dict_new("a", 1, "b", 2);
+  for (k, v : m) {
+    print "{k}:{v}";
+  }
+}
+
+run main;

@@ -1,0 +1,33 @@
+; erelang IR v1
+entry main
+
+func helper(x)
+  add %t0, $x, #1
+  ret %t0
+end
+
+func main()
+  mov $sum, #0
+  mov $i, #0
+  label L_for_cond_0
+  cmp_lt %t0, $i, #5
+  jz %t0, L_for_end_3
+  label L_for_body_1
+  call_name helper, $i
+  call %t1
+  add %t2, $sum, %t1
+  mov $sum, %t2
+  label L_for_step_2
+  add %t3, $i, #1
+  mov $i, %t3
+  jmp L_for_cond_0
+  label L_for_end_3
+  print_fmt "sum:%lld\n", $sum
+  jmp L_try_end_5
+  label L_try_catch_4
+  mov $err, "native-exception"
+  print_fmt "caught:%s\n", $err
+  label L_try_end_5
+  ret #0
+end
+

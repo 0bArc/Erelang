@@ -46,6 +46,11 @@ struct ValueRef {
     std::string type; // int, bool, string, unknown
 };
 
+struct DictEntryLiteral {
+    ExprPtr key;
+    ExprPtr value;
+};
+
 class IRLowerer {
 public:
     explicit IRLowerer(IRFunction& fn) : fn_(fn) {}
@@ -64,6 +69,129 @@ public:
 
 private:
     static std::string to_var(const std::string& name) { return "$" + name; }
+
+    const FunctionCallExpr* as_function_call(const ExprPtr& expr) const {
+        if (!expr) return nullptr;
+        return std::get_if<FunctionCallExpr>(&expr->node);
+    }
+
+    void forget_literal_binding(const std::string& name) {
+        literalLists_.erase(name);
+        literalDicts_.erase(name);
+    }
+
+    void track_literal_binding(const std::string& name, const ExprPtr& valueExpr) {
+        forget_literal_binding(name);
+        const auto* call = as_function_call(valueExpr);
+        if (!call) return;
+        if (call->name == "list_new") {
+            literalLists_[name] = call->args;
+            return;
+        }
+        if (call->name == "dict_new") {
+            std::vector<DictEntryLiteral> entries;
+            for (std::size_t i = 0; i + 1 < call->args.size(); i += 2) {
+                entries.push_back(DictEntryLiteral{call->args[i], call->args[i + 1]});
+            }
+            literalDicts_[name] = std::move(entries);
+        }
+    }
+
+    bool lower_for_in_static(const ForInStmt& s) {
+        const std::vector<ExprPtr>* listItems = nullptr;
+        const std::vector<DictEntryLiteral>* dictItems = nullptr;
+
+        if (const auto* call = as_function_call(s.iterable)) {
+            if (call->name == "list_new") {
+                listItems = &call->args;
+            } else if (call->name == "dict_new") {
+                tmpDictEntries_.clear();
+                for (std::size_t i = 0; i + 1 < call->args.size(); i += 2) {
+                    tmpDictEntries_.push_back(DictEntryLiteral{call->args[i], call->args[i + 1]});
+                }
+                dictItems = &tmpDictEntries_;
+            }
+        } else if (s.iterable && std::holds_alternative<ExprIdent>(s.iterable->node)) {
+            const auto& ident = std::get<ExprIdent>(s.iterable->node);
+            auto litListIt = literalLists_.find(ident.name);
+            if (litListIt != literalLists_.end()) {
+                listItems = &litListIt->second;
+            }
+            auto litDictIt = literalDicts_.find(ident.name);
+            if (litDictIt != literalDicts_.end()) {
+                dictItems = &litDictIt->second;
+            }
+        }
+
+        if (listItems) {
+            for (std::size_t i = 0; i < listItems->size(); ++i) {
+                if (s.valueVar.has_value()) {
+                    emit("mov", {to_var(s.var), "#" + std::to_string(i)});
+                    varTypes_[s.var] = "int";
+                    auto value = lower_expr((*listItems)[i]);
+                    emit("mov", {to_var(*s.valueVar), value.value});
+                    varTypes_[*s.valueVar] = value.type;
+                } else {
+                    auto value = lower_expr((*listItems)[i]);
+                    emit("mov", {to_var(s.var), value.value});
+                    varTypes_[s.var] = value.type;
+                }
+                if (s.body) lower_block(*s.body);
+            }
+            return true;
+        }
+
+        if (dictItems) {
+            for (const auto& entry : *dictItems) {
+                auto key = lower_expr(entry.key);
+                emit("mov", {to_var(s.var), key.value});
+                varTypes_[s.var] = key.type;
+                if (s.valueVar.has_value()) {
+                    auto value = lower_expr(entry.value);
+                    emit("mov", {to_var(*s.valueVar), value.value});
+                    varTypes_[*s.valueVar] = value.type;
+                }
+                if (s.body) lower_block(*s.body);
+            }
+            return true;
+        }
+
+        return false;
+    }
+
+    bool lower_method_builtin_call(const MethodCallStmt& s) {
+        auto emit_call = [&](std::string name, bool includeObject) {
+            std::vector<std::string> ops;
+            ops.push_back(std::move(name));
+            if (includeObject) ops.push_back(to_var(s.objectName));
+            for (const auto& a : s.args) ops.push_back(lower_expr(a).value);
+            emit("call_name", std::move(ops));
+        };
+
+        const std::string& m = s.method;
+        if (m == "push") { emit_call("list_push", true); return true; }
+        if (m == "get") { emit_call("list_get", true); return true; }
+        if (m == "len") { emit_call("list_len", true); return true; }
+        if (m == "join") { emit_call("list_join", true); return true; }
+        if (m == "clear") { emit_call("list_clear", true); return true; }
+        if (m == "remove_at") { emit_call("list_remove_at", true); return true; }
+
+        if (m == "set") { emit_call("dict_set", true); return true; }
+        if (m == "has") { emit_call("dict_has", true); return true; }
+        if (m == "keys") { emit_call("dict_keys", true); return true; }
+        if (m == "values") { emit_call("dict_values", true); return true; }
+        if (m == "entries" || m == "items") { emit_call("dict_entries", true); return true; }
+        if (m == "remove") { emit_call("dict_remove", true); return true; }
+        if (m == "size") { emit_call("dict_size", true); return true; }
+
+        if (m == "strip" || m == "lstrip" || m == "rstrip" || m == "lower" || m == "upper" ||
+            m == "starts_with" || m == "ends_with" || m == "find" || m == "substr") {
+            emit_call("string." + m, true);
+            return true;
+        }
+
+        return false;
+    }
 
     std::string new_temp() {
         return "%t" + std::to_string(nextTemp_++);
@@ -155,6 +283,12 @@ private:
                 const std::string dst = new_temp();
                 emit("call_name", std::move(ops));
                 emit("call", {dst});
+                if (node.name == "list_new" || node.name == "list_get" || node.name == "dict_keys" || node.name == "dict_values" || node.name == "dict_items" || node.name == "dict_entries") {
+                    return {dst, "list"};
+                }
+                if (node.name == "dict_new") {
+                    return {dst, "dict"};
+                }
                 return {dst, "unknown"};
             } else if constexpr (std::is_same_v<T, MemberExpr>) {
                 return {"#0", "unknown"};
@@ -210,13 +344,16 @@ private:
                 auto v = lower_expr(s.value);
                 emit("mov", {to_var(s.name), v.value});
                 varTypes_[s.name] = v.type;
+                track_literal_binding(s.name, s.value);
             } else if constexpr (std::is_same_v<T, SetStmt>) {
                 if (!s.isMember) {
                     auto v = lower_expr(s.value);
                     emit("mov", {to_var(s.varOrField), v.value});
                     varTypes_[s.varOrField] = v.type;
+                    track_literal_binding(s.varOrField, s.value);
                 } else {
-                    emit("todo", {"member-set"});
+                    auto v = lower_expr(s.value);
+                    emit("mov", {to_var(s.objectName + "." + s.varOrField), v.value});
                 }
             } else if constexpr (std::is_same_v<T, ReturnStmt>) {
                 if (s.value.has_value()) emit("ret", {lower_expr(*s.value).value});
@@ -299,29 +436,63 @@ private:
                 for (const auto& a : s.args) ops.push_back(lower_expr(a).value);
                 emit("call_name", std::move(ops));
             } else if constexpr (std::is_same_v<T, MethodCallStmt>) {
-                emit("todo", {"method-call", s.objectName + ":" + s.method});
+                if (!lower_method_builtin_call(s)) {
+                    std::vector<std::string> ops;
+                    ops.push_back(s.objectName + "." + s.method);
+                    for (const auto& a : s.args) ops.push_back(lower_expr(a).value);
+                    emit("call_name", std::move(ops));
+                }
             } else if constexpr (std::is_same_v<T, ForInStmt>) {
-                emit("todo", {"for-in"});
+                if (!lower_for_in_static(s)) {
+                    emit("nop", {"for-in-dynamic"});
+                }
             } else if constexpr (std::is_same_v<T, ForStmt>) {
-                emit("todo", {"for"});
+                if (s.init) lower_block(*s.init);
+                const std::string condLabel = new_label("for_cond");
+                const std::string bodyLabel = new_label("for_body");
+                const std::string stepLabel = new_label("for_step");
+                const std::string endLabel = new_label("for_end");
+
+                emit("label", {condLabel});
+                if (s.cond.has_value()) {
+                    auto cond = lower_expr(*s.cond);
+                    emit("jz", {cond.value, endLabel});
+                }
+                emit("label", {bodyLabel});
+                if (s.body) lower_block(*s.body);
+                emit("label", {stepLabel});
+                if (s.step) lower_block(*s.step);
+                emit("jmp", {condLabel});
+                emit("label", {endLabel});
             } else if constexpr (std::is_same_v<T, TryCatchStmt>) {
-                emit("todo", {"try-catch"});
+                const std::string catchLabel = new_label("try_catch");
+                const std::string endLabel = new_label("try_end");
+                if (s.tryBlk) lower_block(*s.tryBlk);
+                emit("jmp", {endLabel});
+                emit("label", {catchLabel});
+                if (!s.catchVar.empty()) {
+                    emit("mov", {to_var(s.catchVar), quote_string("native-exception")});
+                    varTypes_[s.catchVar] = "string";
+                }
+                if (s.catchBlk) lower_block(*s.catchBlk);
+                emit("label", {endLabel});
             } else if constexpr (std::is_same_v<T, UnsafeStmt>) {
                 if (s.body) lower_block(*s.body);
             } else if constexpr (std::is_same_v<T, PointerSetStmt>) {
-                emit("todo", {"pointer-set"});
+                emit("nop", {"pointer-set"});
             } else if constexpr (std::is_same_v<T, InputStmt>) {
-                emit("todo", {"input"});
+                emit("input", {to_var(s.name)});
+                varTypes_[s.name] = "string";
             } else if constexpr (std::is_same_v<T, FireStmt>) {
-                emit("todo", {"fire"});
+                emit("fire", {quote_string(s.name)});
             } else if constexpr (std::is_same_v<T, WaitAllStmt>) {
-                emit("todo", {"wait-all"});
+                emit("wait_all");
             } else if constexpr (std::is_same_v<T, PauseStmt>) {
-                emit("todo", {"pause"});
+                emit("pause");
             } else if constexpr (std::is_same_v<T, SleepStmt>) {
-                emit("todo", {"sleep"});
+                emit("sleep", {"#" + std::to_string(s.ms)});
             } else if constexpr (std::is_same_v<T, std::shared_ptr<ParallelStmt>>) {
-                emit("todo", {"parallel"});
+                if (s) lower_block(s->body);
             }
         }, stmt);
     }
@@ -331,6 +502,9 @@ private:
     int nextTemp_{0};
     int nextLabel_{0};
     std::unordered_map<std::string, std::string> varTypes_;
+    std::unordered_map<std::string, std::vector<ExprPtr>> literalLists_;
+    std::unordered_map<std::string, std::vector<DictEntryLiteral>> literalDicts_;
+    std::vector<DictEntryLiteral> tmpDictEntries_;
 };
 
 } // namespace

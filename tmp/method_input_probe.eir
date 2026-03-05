@@ -1,0 +1,10 @@
+; erelang IR v1
+entry main
+
+func main()
+  call_name util.log, "probe"
+  input $name
+  print_fmt "name:%s\n", $name
+  ret #0
+end
+

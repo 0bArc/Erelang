@@ -38,7 +38,8 @@ Partial: allocator abstraction, low-level pointer arithmetic semantics, and expl
 ### 4) Control flow — ✅
 Implemented: `if/else`, `switch`, `for`, `while`, `break`, `continue`, `return`, recursion support.  
 `do while` syntax is now implemented.  
-Remaining advanced gap: full pattern-match destructuring.
+`for-in` now lowers in the native IR path for static/literal list+dict cases (including literal dict key/value pair expansion), and unsupported dynamic cases degrade to explicit no-op markers instead of hard TODO failures.  
+Remaining advanced gap: full pattern-match destructuring and fully dynamic native `for-in` iteration over runtime containers.
 
 ### 5) Functions — ✅
 Implemented: declaration/definition, params/returns, multiple params, recursion, pass-by-value behavior.  
@@ -100,8 +101,8 @@ Implemented: first-class runtime-oriented IR stage now emits explicit operations
 Partial: typed SSA/basic-block form and full call graph/function ABI metadata are not complete.
 
 ### 22) Code generation — 🟡
-Implemented: x64 backend now lowers runtime IR instructions to assembly with stack-frame setup, local stack-slot addressing, arithmetic/comparison ops, labels/branches, and call-site emission for runtime constructs (`if`/`while`/`do`/`repeat`/`switch`) through `--build-native`.  
-Partial: full instruction selection, register allocation, broad statement/expression lowering, and complete calling-convention coverage are still in progress.
+Implemented: x64 backend now lowers runtime IR instructions to assembly with stack-frame setup, local stack-slot addressing, arithmetic/comparison ops, labels/branches, call-site emission (including stack args beyond register args), `input` support, and concrete `sleep`/`pause` opcode execution in native builds.  
+Partial: full instruction selection, register allocation, fully dynamic collection iteration lowering, robust exception semantics, and complete calling-convention/interop coverage are still in progress.
 
 ### 23) Binary generation — 🟡
 Implemented: compiler-driven native demo artifact path now exists (`obc --build-native`) that emits assembly and invokes toolchain to produce a Windows `.exe`.  
@@ -123,7 +124,7 @@ Implemented: substantial builtin surface for strings/containers/fs/memory/error-
 Partial: stabilized minimal self-hosting stdlib boundary and package/module maturity.
 
 ### 28) Bootstrapping stages — 🟡
-Implemented: stage-1 and stage-2 direction exists (C++ host + Erelang compiler scripts).  
+Implemented: stage-1 and stage-2 direction exists (C++ host + Erelang compiler scripts) with expanded native demo coverage (`for`, `while`, `switch`, multi-arg calls, static/literal `for-in`, input, and larger loop stress probes).  
 Partial: stage-3 self-compile reproducibility and stage-4 production artifacts fully produced by self-host path.
 
 ### 29) Deterministic builds — 🟡

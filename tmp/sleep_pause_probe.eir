@@ -1,0 +1,13 @@
+; erelang IR v1
+entry main
+
+func main()
+  print_s "before"
+  sleep #10
+  print_s "after-sleep"
+  print_s "press-enter"
+  pause
+  print_s "after-pause"
+  ret #0
+end
+

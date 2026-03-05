@@ -214,6 +214,9 @@ std::string X64Codegen::emit_gas_win64_demo(const IRModule& module) const {
     out << ".globl main\n";
     out << ".extern puts\n";
     out << ".extern printf\n";
+    out << ".extern scanf\n";
+    out << ".extern Sleep\n";
+    out << ".extern getchar\n";
     out << ".extern strcmp\n\n";
 
     std::unordered_map<std::string, std::string> fnLabel;
@@ -245,6 +248,8 @@ std::string X64Codegen::emit_gas_win64_demo(const IRModule& module) const {
     };
 
     const std::string intFmtLabel = ensure_global_string("%lld\\n");
+    const std::string inputFmtLabel = ensure_global_string("%1023s");
+    const std::string inputBufLabel = ".L_INPUT_BUF";
 
     for (const auto& fn : module.functions) {
         FunctionAsmContext ctx;
@@ -268,6 +273,9 @@ std::string X64Codegen::emit_gas_win64_demo(const IRModule& module) const {
         }
 
         for (const auto& ins : fn.instructions) {
+            if (ins.opcode == "nop") {
+                continue;
+            }
             if (ins.opcode == "label") {
                 if (!ins.operands.empty()) out << sanitize_label(ins.operands[0]) << ":\n";
                 continue;
@@ -376,6 +384,42 @@ std::string X64Codegen::emit_gas_win64_demo(const IRModule& module) const {
                 }
                 continue;
             }
+            if (ins.opcode == "input") {
+                if (!ins.operands.empty() && is_symbol_operand(ins.operands[0])) {
+                    out << "    sub rsp, 32\n";
+                    out << "    lea rcx, " << inputFmtLabel << "[rip]\n";
+                    out << "    lea rdx, " << inputBufLabel << "[rip]\n";
+                    out << "    call scanf\n";
+                    out << "    add rsp, 32\n";
+                    out << "    lea rax, " << inputBufLabel << "[rip]\n";
+                    emit_store_symbol(out, ctx, ins.operands[0], "rax");
+                }
+                continue;
+            }
+            if (ins.opcode == "sleep") {
+                out << "    sub rsp, 32\n";
+                if (!ins.operands.empty()) {
+                    emit_load_operand(out, ctx, "rax", ins.operands[0]);
+                    out << "    mov ecx, eax\n";
+                } else {
+                    out << "    xor ecx, ecx\n";
+                }
+                out << "    call Sleep\n";
+                out << "    add rsp, 32\n";
+                continue;
+            }
+            if (ins.opcode == "pause") {
+                out << "    sub rsp, 32\n";
+                out << "    call getchar\n";
+                out << "    add rsp, 32\n";
+                continue;
+            }
+            if (ins.opcode == "wait_all") {
+                continue;
+            }
+            if (ins.opcode == "fire") {
+                continue;
+            }
 
             if (ins.opcode == "call_name") {
                 if (!ins.operands.empty()) {
@@ -388,7 +432,7 @@ std::string X64Codegen::emit_gas_win64_demo(const IRModule& module) const {
                         }
                         emit_call_with_operands(out, ctx, fit->second, args);
                     } else {
-                        out << "    ; unresolved call target: " << callee << "\n";
+                        out << "    # unresolved call target: " << callee << "\n";
                     }
                 }
                 continue;
@@ -407,7 +451,7 @@ std::string X64Codegen::emit_gas_win64_demo(const IRModule& module) const {
                 continue;
             }
 
-            out << "    ; TODO unsupported IR op: " << ins.opcode << "\n";
+            out << "    # TODO unsupported IR op: " << ins.opcode << "\n";
         }
 
         out << fnEnd << ":\n";
@@ -428,6 +472,9 @@ std::string X64Codegen::emit_gas_win64_demo(const IRModule& module) const {
     for (const auto& [text, label] : orderedStrings) {
         out << label << ": .asciz \"" << gas_escape(text) << "\"\n";
     }
+    out << ".bss\n";
+    out << ".align 8\n";
+    out << inputBufLabel << ": .space 1024\n";
 
     return out.str();
 }

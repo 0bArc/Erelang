@@ -1,0 +1,25 @@
+; erelang IR v1
+entry main
+
+func main()
+  call_name list_new, #10, #20, #30
+  call %t0
+  mov $items, %t0
+  mov $v, #10
+  print_fmt "v:%lld\n", $v
+  mov $v, #20
+  print_fmt "v:%lld\n", $v
+  mov $v, #30
+  print_fmt "v:%lld\n", $v
+  call_name dict_new, "a", #1, "b", #2
+  call %t1
+  mov $m, %t1
+  mov $k, "a"
+  mov $v, #1
+  print_fmt "%s:%lld\n", $k, $v
+  mov $k, "b"
+  mov $v, #2
+  print_fmt "%s:%lld\n", $k, $v
+  ret #0
+end
+

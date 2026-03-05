@@ -1,0 +1,16 @@
+@erelang
+
+public action main {
+    Array<string> names = ["a", "b"];
+    Map<string, any> table = {"a": 1, "b": 2};
+
+    for (name : names) {
+        print name;
+    }
+
+    for (key, value : table) {
+        print key;
+    }
+}
+
+run main;

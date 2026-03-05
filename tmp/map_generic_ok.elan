@@ -1,0 +1,15 @@
+@erelang
+
+public action main {
+   Map<string, any> scores = {
+    "Names": {
+
+    }
+   };
+
+   for (i, v : scores) {
+    print "{i}, {v}";
+   }
+}
+
+run main;

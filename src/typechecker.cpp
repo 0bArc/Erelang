@@ -5,6 +5,78 @@
 
 namespace erelang {
 
+namespace {
+
+std::string merge_inferred_type(const std::string& left, const std::string& right) {
+    if (left.empty() || left == "unknown") return right;
+    if (right.empty() || right == "unknown") return left;
+    if (left == right) return left;
+    return "any";
+}
+
+bool parse_array_type(const std::string& typeName, std::string& elementType) {
+    constexpr const char* prefix = "array<";
+    if (typeName.rfind(prefix, 0) != 0 || typeName.back() != '>') return false;
+    elementType = typeName.substr(6, typeName.size() - 7);
+    return !elementType.empty();
+}
+
+bool parse_map_type(const std::string& typeName, std::string& keyType, std::string& valueType) {
+    constexpr const char* prefix = "map<";
+    if (typeName.rfind(prefix, 0) != 0 || typeName.back() != '>') return false;
+    const std::string inner = typeName.substr(4, typeName.size() - 5);
+    int depth = 0;
+    for (size_t index = 0; index < inner.size(); ++index) {
+        const char ch = inner[index];
+        if (ch == '<') {
+            ++depth;
+            continue;
+        }
+        if (ch == '>') {
+            --depth;
+            continue;
+        }
+        if (ch == ',' && depth == 0) {
+            keyType = inner.substr(0, index);
+            valueType = inner.substr(index + 1);
+            return !keyType.empty() && !valueType.empty();
+        }
+    }
+    return false;
+}
+
+bool generic_type_compatible(const std::string& expected, const std::string& actual) {
+    if (expected == "any" || expected == "unknown") return true;
+    if (actual == "any" || actual == "unknown") return true;
+    return expected == actual;
+}
+
+bool collection_type_compatible(const std::string& expected, const std::string& actual) {
+    if (expected == actual) return true;
+
+    std::string expectedArrayElem;
+    std::string actualArrayElem;
+    if (parse_array_type(expected, expectedArrayElem)) {
+        if (actual == "array<any>") return true;
+        if (!parse_array_type(actual, actualArrayElem)) return false;
+        return generic_type_compatible(expectedArrayElem, actualArrayElem);
+    }
+
+    std::string expectedMapKey;
+    std::string expectedMapValue;
+    std::string actualMapKey;
+    std::string actualMapValue;
+    if (parse_map_type(expected, expectedMapKey, expectedMapValue)) {
+        if (actual == "map<any,any>") return true;
+        if (!parse_map_type(actual, actualMapKey, actualMapValue)) return false;
+        return generic_type_compatible(expectedMapKey, actualMapKey) && generic_type_compatible(expectedMapValue, actualMapValue);
+    }
+
+    return false;
+}
+
+} // namespace
+
 // ================= ExprChecker =================
 TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
     if (!e) return {"void"};
@@ -79,6 +151,40 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
                 }
             }
         } else if constexpr (std::is_same_v<T, FunctionCallExpr>) {
+            if (node.name == "list_new") {
+                if (node.args.empty()) {
+                    inferred = {"array<any>"};
+                } else {
+                    std::string mergedElementType;
+                    for (const auto& arg : node.args) {
+                        mergedElementType = merge_inferred_type(mergedElementType, check(arg, ctx).name);
+                    }
+                    if (mergedElementType.empty() || mergedElementType == "unknown") mergedElementType = "any";
+                    inferred = {"array<" + mergedElementType + ">"};
+                }
+                return;
+            }
+
+            if (node.name == "dict_new" || node.name == "hashmap_new") {
+                if (node.args.empty()) {
+                    inferred = {"map<any,any>"};
+                } else {
+                    std::string mergedKeyType;
+                    std::string mergedValueType;
+                    for (size_t index = 0; index + 1 < node.args.size(); index += 2) {
+                        mergedKeyType = merge_inferred_type(mergedKeyType, check(node.args[index], ctx).name);
+                        mergedValueType = merge_inferred_type(mergedValueType, check(node.args[index + 1], ctx).name);
+                    }
+                    if ((node.args.size() % 2) != 0) {
+                        check(node.args.back(), ctx);
+                    }
+                    if (mergedKeyType.empty() || mergedKeyType == "unknown") mergedKeyType = "any";
+                    if (mergedValueType.empty() || mergedValueType == "unknown") mergedValueType = "any";
+                    inferred = {"map<" + mergedKeyType + "," + mergedValueType + ">"};
+                }
+                return;
+            }
+
             // action or builtin
             auto resolve_action = [&](const std::string& name) -> const Action* {
                 auto it = tc_.actions_.find(name);
@@ -263,10 +369,14 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                     expected = "bool";
                 } else if (decl == "string" || decl == "str" || decl == "char") {
                     expected = "string";
-                } else if (decl == "array" || decl.rfind("array<", 0) == 0) {
+                } else if (decl == "array") {
                     expected = "array<any>";
-                } else if (decl == "map" || decl.rfind("map<", 0) == 0 || decl == "dictionary") {
+                } else if (decl.rfind("array<", 0) == 0) {
+                    expected = decl;
+                } else if (decl == "map" || decl == "dictionary") {
                     expected = "map<any,any>";
+                } else if (decl.rfind("map<", 0) == 0) {
+                    expected = decl;
                 } else if (!decl.empty() && (decl.back() == '*' || decl.back() == '&')) {
                     expected = "pointer";
                 } else if (ctx.program) {
@@ -305,8 +415,7 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                     if (exp == "unknown" || actual == "unknown") return true;
                     if (exp == actual) return true;
                     if (exp == "pointer" && actual == "pointer") return true;
-                    if (exp == "array<any>" && actual.rfind("array", 0) == 0) return true;
-                    if (exp == "map<any,any>" && actual.rfind("map", 0) == 0) return true;
+                    if (collection_type_compatible(exp, actual)) return true;
                     if (exp.rfind("struct:", 0) == 0 && actual.rfind("dict:", 0) == 0) return true;
                     if (exp.rfind("struct:", 0) == 0 && (actual.rfind("map", 0) == 0 || actual == "map<any,any>")) return true;
                     return false;

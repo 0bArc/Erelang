@@ -362,6 +362,94 @@ static bool is_float_string(const std::string& s) {
     try { std::size_t idx; std::stod(s, &idx); return idx == s.size(); } catch (...) { return false; }
 }
 
+static std::string normalize_runtime_type_name(std::string typeName) {
+    std::string out;
+    out.reserve(typeName.size());
+    for (char ch : typeName) {
+        if (!std::isspace(static_cast<unsigned char>(ch))) {
+            out.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+        }
+    }
+    return out;
+}
+
+static bool parse_runtime_array_type(const std::string& typeName, std::string& elementType) {
+    constexpr const char* prefix = "array<";
+    if (typeName.rfind(prefix, 0) != 0 || typeName.back() != '>') return false;
+    elementType = typeName.substr(6, typeName.size() - 7);
+    return !elementType.empty();
+}
+
+static bool parse_runtime_map_type(const std::string& typeName, std::string& keyType, std::string& valueType) {
+    constexpr const char* prefix = "map<";
+    if (typeName.rfind(prefix, 0) != 0 || typeName.back() != '>') return false;
+    const std::string inner = typeName.substr(4, typeName.size() - 5);
+    int depth = 0;
+    for (size_t index = 0; index < inner.size(); ++index) {
+        const char ch = inner[index];
+        if (ch == '<') {
+            ++depth;
+            continue;
+        }
+        if (ch == '>') {
+            --depth;
+            continue;
+        }
+        if (ch == ',' && depth == 0) {
+            keyType = inner.substr(0, index);
+            valueType = inner.substr(index + 1);
+            return !keyType.empty() && !valueType.empty();
+        }
+    }
+    return false;
+}
+
+static bool runtime_generic_compatible(const std::string& expected, const std::string& actual) {
+    if (expected == "any" || expected == "unknown") return true;
+    if (actual == "any" || actual == "unknown") return true;
+    return expected == actual;
+}
+
+static bool runtime_declared_type_matches(const std::string& declaredTypeRaw, const std::string& actualTypeRaw) {
+    const std::string declaredType = normalize_runtime_type_name(declaredTypeRaw);
+    const std::string actualType = normalize_runtime_type_name(actualTypeRaw);
+    if (declaredType.empty() || declaredType == "auto" || declaredType == "any") return true;
+    if (declaredType == actualType) return true;
+
+    if (declaredType == "string" || declaredType == "str" || declaredType == "char") {
+        return actualType == "string";
+    }
+    if (declaredType == "bool") return actualType == "bool";
+    if (declaredType == "int" || declaredType == "u8" || declaredType == "u16" || declaredType == "u32" || declaredType == "u64" ||
+        declaredType == "i8" || declaredType == "i16" || declaredType == "i32" || declaredType == "i64" ||
+        declaredType == "uint" || declaredType == "unsigned" || declaredType == "unsignedint") {
+        return actualType == "int";
+    }
+    if (declaredType == "double" || declaredType == "float") {
+        return actualType == "double" || actualType == "int";
+    }
+
+    if (declaredType == "array") return actualType.rfind("array", 0) == 0;
+    std::string declaredArrayElem;
+    if (parse_runtime_array_type(declaredType, declaredArrayElem)) {
+        std::string actualArrayElem;
+        if (!parse_runtime_array_type(actualType, actualArrayElem)) return false;
+        return runtime_generic_compatible(declaredArrayElem, actualArrayElem);
+    }
+
+    if (declaredType == "map" || declaredType == "dictionary") return actualType.rfind("map", 0) == 0;
+    std::string declaredMapKey;
+    std::string declaredMapValue;
+    if (parse_runtime_map_type(declaredType, declaredMapKey, declaredMapValue)) {
+        std::string actualMapKey;
+        std::string actualMapValue;
+        if (!parse_runtime_map_type(actualType, actualMapKey, actualMapValue)) return false;
+        return runtime_generic_compatible(declaredMapKey, actualMapKey) && runtime_generic_compatible(declaredMapValue, actualMapValue);
+    }
+
+    return true;
+}
+
 // Simple dynamic containers as built-ins: lists and dicts
 int g_nextListId = 1;
 std::unordered_map<int, std::vector<std::string>> g_lists;
@@ -4120,6 +4208,26 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
             env.vars[st.name] = st.name;
         } else {
             std::string v = eval_string(*st.value, env);
+            if (!st.declaredType.empty()) {
+                auto infer_runtime_value_type = [&](const std::string& value) {
+                    if (value.rfind("list:", 0) == 0) return std::string("array<any>");
+                    if (value.rfind("dict:", 0) == 0) return std::string("map<string,any>");
+                    if (value.rfind("struct:", 0) == 0) return normalize_runtime_type_name(value);
+                    if (value == "true" || value == "false") return std::string("bool");
+                    if (is_int_string(value)) return std::string("int");
+                    if (is_float_string(value)) return std::string("double");
+                    if (auto it = env.objects.find(value); it != env.objects.end() && it->second) {
+                        return normalize_runtime_type_name(it->second->typeName);
+                    }
+                    return std::string("string");
+                };
+                const std::string actualType = infer_runtime_value_type(v);
+                if (!runtime_declared_type_matches(st.declaredType, actualType)) {
+                    throw std::runtime_error(
+                        "Type mismatch in declaration '" + st.name + "': declared " + st.declaredType + " but got " + actualType
+                    );
+                }
+            }
             env.vars[st.name] = v;
             if (std::holds_alternative<FunctionCallExpr>(st.value->node)) {
                 const auto& fc = std::get<FunctionCallExpr>(st.value->node);

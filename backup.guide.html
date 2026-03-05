@@ -71,21 +71,20 @@
     <aside class="sidebar" aria-label="Guide Navigation">
       <div class="brand">
         <h1>Erevos Guide Portal</h1>
-        <p>Unified language and runtime reference</p>
+        <p>Unified docs from <code>erevos_full_guide.md</code> and <code>erevos.fullguide.md</code></p>
       </div>
 
       <div class="toc-group">
         <h2>Quick Links</h2>
         <a class="toc-item level-1" href="#top">Top</a>
-        <a class="toc-item level-1" href="#language-reference">Language Reference</a>
-        <a class="toc-item level-1" href="#runtime-reference">Runtime &amp; Engine Reference</a>
-        <a class="toc-item level-1" href="#full-builtins">Builtins</a>
-        <a class="toc-item level-1" href="#full-plugin-system">Plugin System</a>
-        <a class="toc-item level-1" href="#full-cli-and-executables">CLI &amp; Executables</a>
+        <a class="toc-item level-1" href="#selfhost-update">2026 Self-Hosting Update</a>
+        <a class="toc-item level-1" href="#devlog-master-digest">Devlog Master Digest</a>
+        <a class="toc-item level-1" href="#classic-doc">Classic Guide Source</a>
+        <a class="toc-item level-1" href="#full-doc">Full Technical Source</a>
       </div>
 
       <div class="toc-group">
-        <h2>Language TOC</h2>
+        <h2>Classic Guide TOC</h2>
 <a class="toc-item level-1" href="#classic-erelang-the-complete-guide">Erelang: The Complete Guide</a>
 <a class="toc-item level-2" href="#classic-table-of-contents">Table of Contents</a>
 <a class="toc-item level-2" href="#classic-1-introduction">1. Introduction</a>
@@ -105,8 +104,8 @@
       </div>
 
       <div class="toc-group">
-        <h2>Runtime TOC</h2>
-<a class="toc-item level-1" href="#full-runtime-engine-reference">Runtime &amp; Engine Reference</a>
+        <h2>Full Guide TOC</h2>
+<a class="toc-item level-1" href="#full-erevosfullguidemd">erevos.fullguide.md</a>
 <a class="toc-item level-2" href="#full-scope">Scope</a>
 <a class="toc-item level-2" href="#full-high-level-architecture">High-Level Architecture</a>
 <a class="toc-item level-2" href="#full-build-and-outputs-cmakeliststxt">Build and Outputs (`CMakeLists.txt`)</a>
@@ -149,14 +148,14 @@
       <header class="hero">
         <h1>Erelang Documentation Hub</h1>
         <p>
-          Documentation-first reference for Erelang language semantics, runtime behavior, builtins, plugin model,
-          and toolchain architecture.
+          This page embeds both guide sources in one readable, print-friendly, security-hardened HTML reference.
+          Content is rendered as static escaped HTML (no runtime script execution, no dynamic HTML injection).
         </p>
         <p class="security">
           Security hardening active: strict CSP (<code>script-src 'none'</code>), no external assets,
           no JavaScript execution, no form endpoints, anti-XSS by HTML-encoding all source markdown before rendering.
         </p>
-        <a class="jump" href="#runtime-reference">Jump to Runtime &amp; Engine Reference</a>
+        <a class="jump" href="#full-doc">Jump to Full Technical Guide</a>
       
       <section class="card ref-index" aria-label="Reference Index">
         <div class="ref-grid">
@@ -196,8 +195,8 @@
         </div>
       </section>
 
-      <section class="card" id="language-reference">
-        <h2 class="section-title">Language Reference</h2>
+      <section class="card" id="selfhost-update">
+        <h2 class="section-title">2026 Self-Hosting Update</h2>
         <article class="doc" aria-label="Self-hosting feature update">
           <h3>Struct Member Methods</h3>
           <p><code>struct</code> now supports member <code>action</code> methods with <code>self.field</code> assignment and field shorthand synchronization.</p>
@@ -256,10 +255,127 @@
 <span class="tok-kw">run</span> main</code></pre>
         </article>
       </section>
+      <section class="card" id="devlog-master-digest">
+        <h2 class="section-title">Devlog Master Digest (All Logs)</h2>
+        <article class="doc" aria-label="Devlog digest from all tracked log files">
+          <p>This section consolidates every recorded update heading from the <code>devlog/</code> files currently present in the repository.</p>
+
+          <h3><code>devlog/02-03-2026.log</code></h3>
+          <ul>
+            <li>2026-03-02 — Compiler repair (runtime table builtins)</li>
+            <li>2026-03-02 — include/directive highlight + fs/path completion scoping + new extensions</li>
+            <li>2026-03-02 — VSIX highlight fix (all-white editor)</li>
+            <li>2026-03-02 — Sample parse crash fix (<code>Expected member name after '.'</code>)</li>
+            <li>2026-03-02 — fs alias + #include/module resolution improvements</li>
+            <li>2026-03-02 — Release + VSIX refresh</li>
+            <li>2026-03-02 — VSIX include color + @erelang typing fix</li>
+            <li>03.02.26 — VSIX syntax + autocomplete stabilization</li>
+            <li>2026-03-02 — Method-color highlight + .0bs -> .ere/.elan migration note</li>
+          </ul>
+
+          <h3><code>devlog/03-03-2026.log</code></h3>
+          <ul>
+            <li>2026-03-03 — Runtime/parser fixes for <code>examples/modules/dynamic.elan</code></li>
+            <li>2026-03-03 — Foreach color fix for <code>for</code> + <code>meta</code> (VSIX-only)</li>
+            <li>2026-03-03 — Control keyword color fix (<code>for</code>) + semantic override (VSIX-only)</li>
+            <li>2026-03-03 — Extension clash removal + color normalization (VSIX-only)</li>
+            <li>2026-03-03 — Identifier fallback coloring fix (VSIX-only)</li>
+            <li>2026-03-03 — VSIX-only theme scope normalization (no compiler rebuild)</li>
+            <li>2026-03-03 — UX color/completion fixes + dynamic_cast/json features + feature-module scaffold</li>
+            <li>2026-03-03 — Struct runtime support + interpolation/function coloring polish</li>
+            <li>2026-03-03 — Typed syntax expansion + modern control-flow/tooling pass</li>
+            <li>2026-03-03 — Typed declarations + collection-aware completion cleanup</li>
+            <li>2026-03-03 — Literal parsing fixes (durations/units/poly IDs/raw/base nums)</li>
+            <li>2026-03-03 — Module completion gating + dotted module call parsing fix</li>
+            <li>2026-03-03 — VS Code include/module completion improvements</li>
+            <li>2026-03-03 — <code>Expected 'global'</code> parse fix + module <code>^</code> operator support</li>
+            <li>2026-03-03 — Run command consistency note</li>
+            <li>2026-03-03 — Imported module call fix + direct input + stricter mixed-type arithmetic</li>
+            <li>2026-03-03 — Chainable string methods + toInt/toString + stricter <code>+</code> typing</li>
+            <li>2026-03-03 — Autocomplete fix for foreach loop variables</li>
+            <li>2026-03-03 — VSIX quality pass (completion context, highlights, snippets)</li>
+            <li>2026-03-03 — For-each syntax tightening (<code>:</code> only)</li>
+            <li>2026-03-03 — Comprehensive builtin validation suite (<code>final_builtin_validation.elan</code>)</li>
+            <li>2026-03-03 — Release build tree correction (Debug vs Release confusion resolved)</li>
+            <li>2026-03-03 — Local/global completion visibility fix (user-declared names)</li>
+            <li>2026-03-03 — VS Code completion context hardening (<code>:</code> method-only suggestions)</li>
+            <li>2026-03-03 — Editor UX tweak: <code>for</code> scope + auto-brace enter behavior</li>
+            <li>2026-03-03 — Clean rebuild + <code>erelang --compile</code> fix</li>
+          </ul>
+
+          <h3><code>devlog/03-03-part2-2026.log</code></h3>
+          <ul><li>No heading entries were present in this file at generation time.</li></ul>
+
+          <h3><code>devlog/04-03-2026.log</code></h3>
+          <ul>
+            <li>2026-03-05 — VSIX diagnostics/completion reliability pass (<code>;</code>, <code>run</code>, loop/generic UX)</li>
+            <li>2026-03-05 — Native execution semantics expanded (<code>sleep</code>/<code>pause</code>) + full matrix pass</li>
+            <li>2026-03-05 — Broader regression + lowering expansion toward bootstrap readiness</li>
+            <li>2026-03-05 — Lowering pass expansion: <code>for</code>, <code>method-call</code>, <code>input</code>, <code>try-catch</code> + stress validation</li>
+            <li>2026-03-05 — Gate 2 progress: Win64 call ABI for user functions (stack args 5+)</li>
+            <li>2026-03-05 — Native backend call-return correctness fix (IR call ordering)</li>
+            <li>2026-03-05 — Runtime codegen transition: dynamic IR ops + stack-frame backend</li>
+            <li>2026-03-05 — Control-flow lowering expansion (<code>if</code>/<code>while</code>/<code>switch</code>/<code>do</code>/<code>repeat</code>) + integrity check</li>
+            <li>2026-03-05 — <code>erelang</code> CLI parity for native backend + richer bootstrap demo</li>
+            <li>2026-03-05 — Native backend expanded: <code>program.elan</code> now compiles to runnable EXE</li>
+            <li>2026-03-05 — Full native backend demo (IR -> ASM -> EXE) running</li>
+            <li>2026-03-05 — P0 started: IR v0 + x64 backend bootstrap CLI</li>
+            <li>2026-03-05 — Batch: set algebra builtins + deterministic projections + Unicode-byte identifiers</li>
+            <li>2026-03-05 — Large batch: set/queue builtins + char helpers + VSIX grammar/completion sync</li>
+            <li>2026-03-04 — Entity field initializer support + dynamic example unblocked</li>
+            <li>2026-03-05 — Multi-feature batch: legacy collections deprecation + extern scaffold + Option/Result primitives</li>
+            <li>2026-03-04 — Strict semicolons + <code>do/while</code> + ternary + VSIX diagnostics wave</li>
+            <li>2026-03-04 — Self-hosting gap audit (<code>dev/missing.md</code>) + MinGW runtime bundle build fix</li>
+            <li>2026-03-04 — <code>for (... in ...)</code> compatibility fix after semicolon pass</li>
+            <li>2026-03-04 — C++-style semicolons + preprocessor + VSIX/runtime utility pass</li>
+            <li>2026-03-04 — Self-hosted rand module + practical guide rewrite</li>
+            <li>2026-03-04 — Struct member methods + HashMap compatibility + guide refresh</li>
+            <li>2026-03-04 — C++-style phase 6 (<code>bit_cast</code>, <code>malloc/free</code>, direct file I/O, string buffers)</li>
+            <li>2026-03-04 — Double literal semantics fix (<code>double x = 2.0</code>)</li>
+            <li>2026-03-04 — C++-style syntax phase 1 (namespace, attributes, type-introspection builtins)</li>
+            <li>2026-03-04 — C++-style syntax phase 2 (<code>unsafe</code> + pointer/smart-pointer runtime)</li>
+            <li>2026-03-04 — C++-style phase 3 + 4 (<code>*</code> pointer syntax + namespace-friendly call resolution)</li>
+            <li>2026-03-04 — Phase 5 + VSIX refresh (<code>reinterpret_cast</code>, typed pointers, <code>compiler.elan</code>)</li>
+            <li>2026-03-04 — Self-host bootstrap workspace (<code>erelang/</code>) started</li>
+            <li>2026-03-04 — Self-host pipeline made fully runnable (<code>erelang/compiler.elan</code>)</li>
+            <li>2026-03-04 — <code>nullptr</code> moved into C++ core (Release runtime)</li>
+            <li>2026-03-04 — Self-host layout cleanup (<code>erelang/src</code> C++-style stages)</li>
+            <li>2026-03-04 — <code>repeat</code> keyword + self-host native-provider pivot</li>
+            <li>2026-03-04 — Self-host native-provider progression (generic repeat + file execution)</li>
+            <li>2026-03-04 — <code>Impl</code> added in self-host Erelang (no C++ syntax work)</li>
+            <li>2026-03-04 — Impl compatibility pass for existing <code>struct { ... }</code> style</li>
+            <li>2026-03-04 — No-C++ <code>impl</code> execution path clarified (self-host runner)</li>
+          </ul>
+
+          <h3><code>devlog/06-10-2025.log</code></h3>
+          <ul><li>2025-10-06 — Erelang Language</li></ul>
+
+          <h3><code>devlog/07-10-2025.log</code></h3>
+          <ul><li>2025-10-07 — Erelang Dev</li></ul>
+
+          <h3><code>devlog/09-10-2025.log</code></h3>
+          <ul>
+            <li>2025-10-09 — Build Layout Refresh</li>
+            <li>2025-10-09 — Layout Docs &amp; LSP Sync</li>
+          </ul>
+
+          <h3><code>devlog/09-11-2025.log</code></h3>
+          <ul><li>2025-11-09 — Erelang Creation Kit</li></ul>
+
+          <h3><code>devlog/10-11-2025.log</code></h3>
+          <ul><li>2025-11-10 — Language profile plumbing polish</li></ul>
+
+          <h3><code>devlog/16-02-2026-builtins-path.log</code></h3>
+          <ul><li>2026-02-16 — Builtin modules: path/fs imports</li></ul>
+
+          <h3><code>devlog/16-02-2026.log</code></h3>
+          <ul><li>No heading entries were present in this file at generation time.</li></ul>
+        </article>
+      </section>
       </header>
 
       <section class="card" id="classic-doc">
-        <h2 class="section-title">Core Language &amp; Standard Usage</h2>
+        <h2 class="section-title">Guide Source: <code>erevos_full_guide.md</code></h2>
         <article class="doc" aria-label="Classic Guide">
 <h1 id="classic-erelang-the-complete-guide">Erelang: The Complete Guide</h1>
 <hr>
@@ -474,10 +590,10 @@
         </article>
       </section>
 
-      <section class="card" id="runtime-reference">
-        <h2 class="section-title">Runtime &amp; Engine Reference</h2>
+      <section class="card" id="full-doc">
+        <h2 class="section-title">Guide Source: <code>erevos.fullguide.md</code></h2>
         <article class="doc" aria-label="Full Technical Guide">
-<h1 id="full-runtime-engine-reference">Runtime &amp; Engine Reference</h1>
+<h1 id="full-erevosfullguidemd">erevos.fullguide.md</h1>
 <h2 id="full-scope">Scope</h2>
 <p>This guide is a full technical map of the code currently in this repository, centered on all code in <code>src/</code> and the directly-related &quot;and stuff&quot; around it (<code>include/</code>, <code>CMakeLists.txt</code>, runtime/plugin wiring).</p>
 <p>It covers:</p>

@@ -24,16 +24,20 @@ const MODULE_METHODS_BY_SPEC: Record<string, string[]> = {
 const CHAIN_METHODS = ['lstrip', 'rstrip', 'strip', 'lower', 'upper'];
 const ARRAY_METHODS = ['forEach', 'push', 'get', 'len'];
 const DICTIONARY_METHODS = ['set', 'put', 'get', 'has', 'contains', 'containsKey', 'getOr', 'getOrDefault', 'remove', 'clear', 'size', 'keys', 'values', 'merge'];
-const LANGUAGE_KEYWORDS = ['entity','action','field','let','const','global','int','double','string','bool','char','auto','Array','Map','HashMap','constexpr','static','struct','enum','type','match','try','catch','async','await','namespace','unsafe','repeat','do','extern','static_cast','dynamic_cast','reinterpret_cast','bit_cast','sizeof','typeof','decltype','alignof','offsetof','is_base_of','#if','#elif','#else','#endif','#ifdef','#ifndef','#define'];
+const LANGUAGE_KEYWORDS = ['entity','action','field','let','const','global','int','double','string','bool','char','auto','Array','Map','HashMap','constexpr','static','struct','enum','type','import','export','run','if','else','for','while','switch','break','continue','return','match','try','catch','async','await','namespace','unsafe','repeat','do','extern','static_cast','dynamic_cast','reinterpret_cast','bit_cast','sizeof','typeof','decltype','alignof','offsetof','is_base_of','#if','#elif','#else','#endif','#ifdef','#ifndef','#define'];
 
 function shouldRequireSemicolon(line: string): boolean {
   const t = line.trim();
   if (!t) return false;
   if (t.startsWith('//') || t.startsWith('#') || t.startsWith('@')) return false;
+  if (t.startsWith('/*') || t.startsWith('*') || t.endsWith('*/')) return false;
   if (t.endsWith(';') || t.endsWith('{') || t.endsWith('}') || t.endsWith(':')) return false;
+  if (t.endsWith(',') || t.endsWith('(') || t.endsWith('[')) return false;
   if (/^(if|else|while|for|switch|match|try|catch|do|repeat|unsafe|parallel|namespace)\b/.test(t)) return false;
   if (/^(public|private|export)?\s*(action|entity|struct|enum|hook)\b/.test(t)) return false;
-  return /^(let|const|constexpr|static|global|type|import|run|print|sleep|return|await|fire|input|[A-Za-z_][A-Za-z0-9_]*\s*(\.|=|\())/.test(t);
+  if (/^[A-Za-z_][A-Za-z0-9_]*\s*:\s*[A-Za-z_][A-Za-z0-9_<>,\s]*[,]?$/.test(t)) return false;
+  if (/^(?:"[^"]*"|'[^']*'|[A-Za-z_][A-Za-z0-9_]*)\s*:\s*.+[,]?$/.test(t)) return false;
+  return true;
 }
 
 function validateSemicolons(document: vscode.TextDocument, collection: vscode.DiagnosticCollection): void {
@@ -411,6 +415,11 @@ function collect(document: vscode.TextDocument, uptoLine: number = document.line
 class ErelangCompletionProvider implements vscode.CompletionItemProvider {
   provideCompletionItems(doc: vscode.TextDocument, pos: vscode.Position): vscode.CompletionItem[] {
     const linePrefix = doc.lineAt(pos.line).text.slice(0, pos.character);
+
+    if (/\{\s*$/.test(linePrefix) || /\{\s*\}\s*$/.test(linePrefix)) {
+      return [];
+    }
+
     const col = collect(doc, pos.line);
 
     const interpolationPartial = interpolationPrefixInPrintString(linePrefix);
@@ -544,15 +553,11 @@ class ErelangCompletionProvider implements vscode.CompletionItemProvider {
     }
 
     for (const b of BUILT_INS) {
+      if (DEPRECATED_BUILT_INS.has(b)) continue;
       if (seen.has(b)) continue;
       seen.add(b);
       const ci = new vscode.CompletionItem(b, vscode.CompletionItemKind.Function);
-      if (DEPRECATED_BUILT_INS.has(b)) {
-        ci.detail = 'builtin (deprecated)';
-        ci.tags = [vscode.CompletionItemTag.Deprecated];
-      } else {
-        ci.detail = 'builtin';
-      }
+      ci.detail = 'builtin';
       ci.sortText = `z_${b}`;
       items.push(ci);
     }
@@ -608,7 +613,7 @@ export function activate(context: vscode.ExtensionContext) {
   }
 
   context.subscriptions.push(
-    vscode.languages.registerCompletionItemProvider({ language: 'erelang' }, new ErelangCompletionProvider(), '.', ':', '{', '"')
+    vscode.languages.registerCompletionItemProvider({ language: 'erelang' }, new ErelangCompletionProvider(), '.', ':', '"')
   );
   context.subscriptions.push(
     vscode.languages.registerDocumentSymbolProvider({ language: 'erelang' }, new ErelangDocumentSymbolProvider())

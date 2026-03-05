@@ -7,10 +7,12 @@
 namespace erelang {
 
 static bool is_word_start(char c) {
-    return std::isalpha(static_cast<unsigned char>(c)) || c=='_' || c=='$' ;
+    const unsigned char uc = static_cast<unsigned char>(c);
+    return std::isalpha(uc) || uc >= 0x80 || c=='_' || c=='$' ;
 }
 static bool is_word_part(char c) {
-    return std::isalnum(static_cast<unsigned char>(c)) || c=='_' || c=='$' ;
+    const unsigned char uc = static_cast<unsigned char>(c);
+    return std::isalnum(uc) || uc >= 0x80 || c=='_' || c=='$' ;
 }
 
 static bool canEXPR() {
@@ -408,7 +410,7 @@ std::vector<Token> Lexer::lex() {
 
             // Unit number detection (e.g., 10kg, 9.81m/s^2, 5USD)
             if (opts_.enableUnits) {
-                auto isAlpha = [&](char ch)->bool{ return std::isalpha(static_cast<unsigned char>(ch)) != 0; };
+                auto isAlpha = [&](char ch)->bool{ const unsigned char uc = static_cast<unsigned char>(ch); return std::isalpha(uc) != 0 || uc >= 0x80; };
                 auto isUnitSym = [&](char ch)->bool{ return isAlpha(ch); };
                 size_t k = j; size_t startUnit = k; bool ok = false;
                 // First symbol must start with a letter (avoid treating things like 123_ as unit)
@@ -416,7 +418,11 @@ std::vector<Token> Lexer::lex() {
                     ok = true;
                     auto parseSymbol = [&](size_t& p)->bool {
                         if (!(p < src_.size() && isUnitSym(src_[p]))) return false;
-                        while (p < src_.size() && (std::isalnum(static_cast<unsigned char>(src_[p])))) ++p;
+                        while (p < src_.size()) {
+                            const unsigned char uc = static_cast<unsigned char>(src_[p]);
+                            if (std::isalnum(uc) == 0 && uc < 0x80) break;
+                            ++p;
+                        }
                         // optional exponent ^-?digits
                         if (p < src_.size() && src_[p] == '^') {
                             size_t q = p + 1; if (q < src_.size() && (src_[q]=='+' || src_[q]=='-')) ++q;
@@ -466,7 +472,7 @@ std::vector<Token> Lexer::lex() {
             // Keyword/boolean/null handling
             auto kw = opts_.keywords;
             if (kw.empty()) {
-                kw = { "if","else","while","repeat","for","switch","case","default","return","let","const","action","entity","hook","global","run","in","public","private","export","namespace","unsafe","true","false","null","nil","nullptr","sizeof","typeof","decltype","alignof","offsetof","is_base_of","reinterpret_cast" };
+                kw = { "if","else","while","do","repeat","for","switch","case","default","return","let","const","action","entity","hook","global","run","in","public","private","export","namespace","unsafe","true","false","null","nil","nullptr","sizeof","typeof","decltype","alignof","offsetof","is_base_of","reinterpret_cast","bit_cast","bitcast" };
             }
             std::string low = word; for (auto& ch : low) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
             if (kw.count(low)) push(TokenKind::Keyword, word); else push(TokenKind::Word, word);

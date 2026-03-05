@@ -1,0 +1,29 @@
+public action main() {
+  int i = 0;
+  while (i < 3) {
+    print "while:{i}";
+    i = i + 1;
+  }
+
+  do {
+    print "do-once";
+  } while (false);
+
+  repeat 2 {
+    print "repeat";
+  }
+
+  int mode = 2;
+  switch mode {
+    case 1 {
+      print "one";
+    }
+    case 2 {
+      print "two";
+    }
+    default {
+      print "other";
+    }
+  }
+}
+run main;

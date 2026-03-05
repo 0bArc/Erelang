@@ -1,0 +1,13 @@
+@erelang
+
+public action main {
+  int i = 0;
+  do {
+    i = i + 1;
+  } while (i < 2);
+
+  let label = (i == 2) ? "ok" : "bad";
+  print "{label}";
+}
+
+run main;

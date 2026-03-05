@@ -1,0 +1,17 @@
+; erelang IR v0
+entry main
+
+func main()
+  let base, 7
+  let bonus, 5
+  let total, (base + bonus)
+  print "bootstrap stage ok"
+  let steps, list_new("lex", "parse", "ir", "codegen")
+  print "step:lex"
+  print "step:parse"
+  print "step:ir"
+  print "step:codegen"
+  print "12"
+  ret
+end
+

@@ -1,0 +1,10 @@
+@erelang
+
+public action main {
+  Map<string> d = {"a": "1", "b": "2"};
+  for (k, v : d) {
+    print "{k}:{v}";
+  }
+}
+
+run main;

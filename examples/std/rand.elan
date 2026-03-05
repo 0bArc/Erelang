@@ -1,0 +1,25 @@
+@erelang
+
+private action next_raw(): int {
+  let t = now_ms();
+  return ((t * 1103515245) + 12345) % 2147483647;
+}
+
+public action int(): int {
+  return next_raw() - 1073741824;
+}
+
+public action gen(min: int, max: int): int {
+  int lo = min;
+  int hi = max;
+  if (hi < lo) {
+    let tmp = lo;
+    lo = hi;
+    hi = tmp;
+  }
+  let span = (hi - lo) + 1;
+  if (span <= 0) {
+    return lo;
+  }
+  return lo + (next_raw() % span);
+}

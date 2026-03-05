@@ -1,0 +1,8 @@
+public action main() {
+  print "native backend demo";
+  int age = 42;
+  print age;
+  string name = "Alex";
+  print name;
+}
+run main;

@@ -127,7 +127,18 @@ void Parser::skip_separators() {
     while (peek().kind == TokenKind::Newline || peek().kind == TokenKind::Semicolon) consume();
 }
 
-ExprPtr Parser::parse_expression() { return parse_coalesce(); }
+ExprPtr Parser::parse_expression() { return parse_ternary(); }
+
+ExprPtr Parser::parse_ternary() {
+    auto cond = parse_coalesce();
+    if (!match(TokenKind::Question)) {
+        return cond;
+    }
+    auto thenExpr = parse_expression();
+    expect(TokenKind::Colon, ":");
+    auto elseExpr = parse_expression();
+    return std::make_shared<Expr>(Expr{ TernaryExpr{ cond, thenExpr, elseExpr } });
+}
 
 // Coalesce binds looser than AND/OR? Typically it's between OR and assignment; here place below AND/OR for simplicity.
 ExprPtr Parser::parse_coalesce() {
@@ -223,7 +234,10 @@ ExprPtr Parser::parse_unary() {
 
 ExprPtr Parser::parse_primary() {
     auto apply_colon_chain = [&](ExprPtr target) -> ExprPtr {
-        while (match(TokenKind::Colon)) {
+        while (peek().kind == TokenKind::Colon &&
+               (peek(1).kind == TokenKind::Word || peek(1).kind == TokenKind::Keyword) &&
+               peek(2).kind == TokenKind::LParen) {
+            consume();
             const Token& methodTok = consume();
             if (!(methodTok.kind == TokenKind::Word || methodTok.kind == TokenKind::Keyword)) {
                 throw std::runtime_error("Expected method name after ':'");
@@ -295,6 +309,22 @@ ExprPtr Parser::parse_primary() {
         expect(TokenKind::RParen, ")");
         FunctionCallExpr call;
         call.name = "reinterpret_cast";
+        call.args.push_back(std::make_shared<Expr>(Expr{ ExprString{ castType } }));
+        call.args.push_back(inner);
+        return apply_colon_chain(std::make_shared<Expr>(Expr{ call }));
+    }
+    if ((t.kind == TokenKind::Word || t.kind == TokenKind::Keyword) && (t.text == "bit_cast" || t.text == "bitcast")) {
+        consume();
+        expect(TokenKind::Less, "<");
+        std::string castType = parse_type_annotation();
+        if (peek().kind == TokenKind::Greater) {
+            consume();
+        }
+        expect(TokenKind::LParen, "(");
+        auto inner = parse_expression();
+        expect(TokenKind::RParen, ")");
+        FunctionCallExpr call;
+        call.name = "bit_cast";
         call.args.push_back(std::make_shared<Expr>(Expr{ ExprString{ castType } }));
         call.args.push_back(inner);
         return apply_colon_chain(std::make_shared<Expr>(Expr{ call }));
@@ -532,11 +562,29 @@ ExprPtr Parser::parse_primary() {
 }
 
 Block Parser::parse_block() {
+    auto requires_semicolon = [](const Statement& stmt) {
+        if (std::holds_alternative<IfStmt>(stmt)) return false;
+        if (std::holds_alternative<SwitchStmt>(stmt)) return false;
+        if (std::holds_alternative<WhileStmt>(stmt)) return false;
+        if (std::holds_alternative<DoWhileStmt>(stmt)) return true;
+        if (std::holds_alternative<RepeatStmt>(stmt)) return false;
+        if (std::holds_alternative<ForStmt>(stmt)) return false;
+        if (std::holds_alternative<ForInStmt>(stmt)) return false;
+        if (std::holds_alternative<TryCatchStmt>(stmt)) return false;
+        if (std::holds_alternative<UnsafeStmt>(stmt)) return false;
+        if (std::holds_alternative<std::shared_ptr<ParallelStmt>>(stmt)) return false;
+        return true;
+    };
+
     Block b;
     expect(TokenKind::LBrace, "{");
     skip_separators();
     while (peek().kind != TokenKind::RBrace && peek().kind != TokenKind::End) {
-        b.stmts.push_back(parse_statement());
+        Statement stmt = parse_statement();
+        if (requires_semicolon(stmt)) {
+            expect(TokenKind::Semicolon, ";");
+        }
+        b.stmts.push_back(std::move(stmt));
         skip_separators();
     }
     expect(TokenKind::RBrace, "}");
@@ -623,6 +671,35 @@ GlobalDecl Parser::parse_global() {
     return GlobalDecl{ qualify_name(ident_text(nameTok)), val, std::string{} };
 }
 
+ExternDecl Parser::parse_extern_decl() {
+    if (!match_word("extern")) throw std::runtime_error("Expected 'extern'");
+    (void)match_word("action");
+    const Token& nameTok = consume();
+    if (!(nameTok.kind == TokenKind::Word || nameTok.kind == TokenKind::Keyword)) {
+        throw std::runtime_error("Extern action name");
+    }
+    ExternDecl decl;
+    decl.name = qualify_name(ident_text(nameTok));
+    if (match(TokenKind::LParen)) {
+        if (!match(TokenKind::RParen)) {
+            do {
+                const Token& pn = consume();
+                if (!(pn.kind == TokenKind::Word || pn.kind == TokenKind::Keyword)) throw std::runtime_error("Param name");
+                std::string ptype;
+                if (match(TokenKind::Colon)) {
+                    ptype = parse_type_annotation();
+                }
+                decl.params.push_back(Param{ident_text(pn), ptype});
+            } while (match(TokenKind::Comma));
+            expect(TokenKind::RParen, ")");
+        }
+    }
+    if (match(TokenKind::Colon)) {
+        decl.returnType = parse_type_annotation();
+    }
+    return decl;
+}
+
 Statement Parser::parse_statement() {
     // C++-style pointer assignment: *p = expr
     if (peek().kind == TokenKind::Star) {
@@ -693,6 +770,9 @@ Statement Parser::parse_statement() {
     if (is_word_or_kw(peek(), "while")) {
         return parse_while();
     }
+    if (is_word_or_kw(peek(), "do")) {
+        return parse_do_while();
+    }
     // repeat N { ... }
     if (is_word_or_kw(peek(), "repeat")) {
         consume();
@@ -702,11 +782,13 @@ Statement Parser::parse_statement() {
     }
     // for / for-each
     if ((peek().kind == TokenKind::Word || peek().kind == TokenKind::Keyword) && peek().text == "for") {
-        // Lookahead for for-each forms (colon-only):
-        // for (item : iterable), for (k, v : iterable)
+        // Lookahead for for-each forms:
+        // for (item : iterable), for (item in iterable), for (k, v : iterable)
         bool isForIn = false;
         if (peek(1).kind == TokenKind::LParen && (peek(2).kind == TokenKind::Word || peek(2).kind == TokenKind::Keyword)) {
             if (peek(3).kind == TokenKind::Colon) {
+                isForIn = true;
+            } else if ((peek(3).kind == TokenKind::Word || peek(3).kind == TokenKind::Keyword) && peek(3).text == "in") {
                 isForIn = true;
             } else if (peek(3).kind == TokenKind::Comma && (peek(4).kind == TokenKind::Word || peek(4).kind == TokenKind::Keyword)) {
                 if (peek(5).kind == TokenKind::Colon) {
@@ -836,19 +918,28 @@ Statement Parser::parse_statement() {
                 return SetStmt{ true, ident_text(mem), ident_text(objTok), val };
             }
             // method call (single-dot) or dotted function-style call (multi-dot)
-            std::string dottedName = ident_text(objTok) + "." + ident_text(mem);
+            const std::string objectName = ident_text(objTok);
+            const std::string firstMember = ident_text(mem);
+            std::string dottedName = objectName + "." + firstMember;
+            bool hasExtraSegments = false;
             while (match(TokenKind::Dot)) {
                 const Token& seg = consume();
                 if (!(seg.kind == TokenKind::Word || seg.kind == TokenKind::Keyword)) throw std::runtime_error("Expected member name after '.'");
                 dottedName += "." + ident_text(seg);
+                hasExtraSegments = true;
             }
             if (match(TokenKind::LParen)) {
-                ActionCallStmt call;
-                call.name = dottedName;
+                std::vector<ExprPtr> args;
                 if (!match(TokenKind::RParen)) {
-                    do { call.args.push_back(parse_expression()); } while (match(TokenKind::Comma));
+                    do { args.push_back(parse_expression()); } while (match(TokenKind::Comma));
                     expect(TokenKind::RParen, ")");
                 }
+                if (!hasExtraSegments) {
+                    return MethodCallStmt{ objectName, firstMember, std::move(args) };
+                }
+                ActionCallStmt call;
+                call.name = dottedName;
+                call.args = std::move(args);
                 return call;
             }
             throw std::runtime_error("Expected '=' or '(' after member name");
@@ -988,6 +1079,7 @@ Program Parser::parse_program() {
                 if (w == "struct") return std::string("struct");
                 if (w == "enum") return std::string("enum");
                 if (w == "type") return std::string("type");
+                if (w == "extern") return std::string("extern");
                 if (w == "namespace") return std::string("namespace");
                 if (w == "run") return std::string("run");
             }
@@ -1003,6 +1095,10 @@ Program Parser::parse_program() {
             prog.hooks.push_back(parse_hook());
         } else if (kind == "global") {
             prog.globals.push_back(parse_global());
+            expect(TokenKind::Semicolon, ";");
+        } else if (kind == "extern") {
+            prog.externs.push_back(parse_extern_decl());
+            expect(TokenKind::Semicolon, ";");
         } else if (kind == "import") {
             consume();
             ImportDecl decl;
@@ -1048,6 +1144,7 @@ Program Parser::parse_program() {
                 prog.pluginAliases.push_back(*decl.alias);
             }
             prog.imports.push_back(std::move(decl));
+            expect(TokenKind::Semicolon, ";");
         } else if (kind == "struct") {
             prog.structs.push_back(parse_struct());
         } else if (kind == "enum") {
@@ -1059,9 +1156,10 @@ Program Parser::parse_program() {
             const Token& firstNs = consume();
             if (!(firstNs.kind == TokenKind::Word || firstNs.kind == TokenKind::Keyword)) throw std::runtime_error("Expected namespace name");
             std::string nsName = ident_text(firstNs);
-            while (match(TokenKind::Scope)) {
+            while (peek().kind == TokenKind::Scope || peek().kind == TokenKind::Dot) {
+                consume();
                 const Token& seg = consume();
-                if (!(seg.kind == TokenKind::Word || seg.kind == TokenKind::Keyword)) throw std::runtime_error("Expected namespace segment after '::'");
+                if (!(seg.kind == TokenKind::Word || seg.kind == TokenKind::Keyword)) throw std::runtime_error("Expected namespace segment after scope separator");
                 nsName += "::" + ident_text(seg);
             }
             expect(TokenKind::LBrace, "{");
@@ -1077,6 +1175,7 @@ Program Parser::parse_program() {
                 runName += "::" + ident_text(seg);
             }
             prog.runTarget = qualify_name(runName);
+            expect(TokenKind::Semicolon, ";");
         } else {
             // allow stray separators and ignore unknown top-level '@' blocks handled above
             skip_separators();
@@ -1101,6 +1200,16 @@ WhileStmt Parser::parse_while() {
     expect(TokenKind::RParen, ")");
     auto body = std::make_shared<Block>(parse_block());
     return WhileStmt{ cond, body };
+}
+
+DoWhileStmt Parser::parse_do_while() {
+    if (!match_word("do")) throw std::runtime_error("Expected 'do'");
+    auto body = std::make_shared<Block>(parse_block());
+    if (!match_word("while")) throw std::runtime_error("Expected 'while' after do-block");
+    expect(TokenKind::LParen, "(");
+    auto cond = parse_expression();
+    expect(TokenKind::RParen, ")");
+    return DoWhileStmt{ body, cond };
 }
 
 ForStmt Parser::parse_for() {
@@ -1197,8 +1306,14 @@ ForInStmt Parser::parse_for_in_after_lparen() {
         valueVar = ident_text(valueTok);
     }
     bool usedColon = false;
-    if (match(TokenKind::Colon)) usedColon = true;
-    else throw std::runtime_error("Expected ':' in for-each loop");
+    if (match(TokenKind::Colon)) {
+        usedColon = true;
+    } else if ((peek().kind == TokenKind::Word || peek().kind == TokenKind::Keyword) && peek().text == "in") {
+        consume();
+        usedColon = false;
+    } else {
+        throw std::runtime_error("Expected ':' or 'in' in for-each loop");
+    }
     auto it = parse_expression();
     expect(TokenKind::RParen, ")");
     auto body = std::make_shared<Block>(parse_block());
@@ -1397,6 +1512,48 @@ StructDecl Parser::parse_struct() {
     expect(TokenKind::LBrace, "{");
     skip_separators();
     while (peek().kind != TokenKind::RBrace && peek().kind != TokenKind::End) {
+        bool parseMethod = false;
+        size_t i = 0;
+        while (peek(i).kind == TokenKind::At || peek(i).kind == TokenKind::LBracket) {
+            if (peek(i).kind == TokenKind::At) {
+                ++i;
+                if (!(peek(i).kind == TokenKind::Word || peek(i).kind == TokenKind::Keyword)) break;
+                ++i;
+                if (peek(i).kind == TokenKind::LParen) {
+                    ++i;
+                    while (peek(i).kind != TokenKind::RParen && peek(i).kind != TokenKind::End) ++i;
+                    if (peek(i).kind == TokenKind::RParen) ++i;
+                }
+            } else {
+                ++i;
+                if (!(peek(i).kind == TokenKind::Word || peek(i).kind == TokenKind::Keyword)) break;
+                ++i;
+                if (peek(i).kind == TokenKind::LParen) {
+                    ++i;
+                    while (peek(i).kind != TokenKind::RParen && peek(i).kind != TokenKind::End) ++i;
+                    if (peek(i).kind == TokenKind::RParen) ++i;
+                }
+                if (peek(i).kind == TokenKind::RBracket) ++i;
+            }
+            while (peek(i).kind == TokenKind::Newline || peek(i).kind == TokenKind::Semicolon) ++i;
+        }
+        while ((peek(i).kind == TokenKind::Word || peek(i).kind == TokenKind::Keyword) &&
+               (peek(i).text == "public" || peek(i).text == "private" || peek(i).text == "export" || peek(i).text == "async")) {
+            ++i;
+            while (peek(i).kind == TokenKind::Newline || peek(i).kind == TokenKind::Semicolon) ++i;
+        }
+        if ((peek(i).kind == TokenKind::Word || peek(i).kind == TokenKind::Keyword) && peek(i).text == "action") {
+            parseMethod = true;
+        }
+
+        if (parseMethod) {
+            parsingEntityMethod_ = true;
+            decl.methods.push_back(parse_action());
+            parsingEntityMethod_ = false;
+            skip_separators();
+            continue;
+        }
+
         const Token& fieldName = consume();
         if (!(fieldName.kind == TokenKind::Word || fieldName.kind == TokenKind::Keyword)) throw std::runtime_error("Struct field name");
         expect(TokenKind::Colon, ":");
@@ -1453,7 +1610,6 @@ TypeAliasDecl Parser::parse_type_alias() {
     if (!(nameTok.kind == TokenKind::Word || nameTok.kind == TokenKind::Keyword)) throw std::runtime_error("Type alias name");
     expect(TokenKind::Assign, "=");
     std::string targetType = parse_type_annotation();
-    (void)match(TokenKind::Semicolon);
     return TypeAliasDecl{ qualify_name(ident_text(nameTok)), targetType };
 }
 

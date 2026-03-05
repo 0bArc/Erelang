@@ -1,74 +1,16 @@
 @erelang
 
-namespace LangKit {
-  [Sync]
-  global player_hp = 100
+public action main {
+  int age = 10;
+  char GRADING = 'A';
+  double math_score = 100.0;
+  string name = "Alex";
 
-  struct ASTNode {
-    kind: string
-    tokens: string
-  }
+  Array<string> names = ["Alex", "Adam", "Bob"];
 
-  public entity Profile {
-    string name = "root"
-  }
-
-  public entity Admin : LangKit::Profile {
-    int clearance = 5
-  }
-
-  public action tokenize(src: string) {
-    Array<string> out = [src]
-    return out
-  }
-
-  public action parse(tokens: Array<string>) {
-    return { "kind": "Program", "tokens": to_json(tokens) }
-  }
-
-  [Deprecated("Use LangKit::parse")]
-  public action old_parse(tokens: Array<string>) {
-    return LangKit::parse(tokens)
-  }
-
-  public action eval(ast: LangKit::ASTNode) {
-    print "AST Kind => {ast.kind}"
-    print "AST Tokens => {ast.tokens}"
-  }
-
-  public action main {
-    string src = "print 1 + 2"
-    auto ast_map = parse(tokenize(src))
-    eval(static_cast<LangKit::ASTNode>(ast_map))
-
-    print "typeof(src) => {typeof(src)}"
-    print "decltype(ast_map) => {decltype(ast_map)}"
-    print "sizeof<int> => {sizeof<int>()}"
-    print "alignof<int> => {alignof<int>()}"
-    print "offsetof(ASTNode, tokens) => {offsetof(LangKit::ASTNode, tokens)}"
-    print "is_base_of<Profile, Admin> => {is_base_of<LangKit::Profile, LangKit::Admin>()}"
-
-    unsafe {
-      int score = 7
-      auto score_ptr = &score
-      print "*score_ptr => {*score_ptr}"
-      *score_ptr = 88
-      print "score after *score_ptr write => {score}"
-
-      int* raw = reinterpret_cast<int*>(&score)
-      print "*raw => {*raw}"
-      *raw = 99
-      print "score after *raw write => {score}"
-
-      auto p = make_unique(1337)
-      print "ptr_valid => {ptr_valid(p)}"
-      print "*p => {*p}"
-      *p = 9001
-      print "*p after set => {*p}"
-      unique_reset(p)
-      print "ptr_valid after reset => {ptr_valid(p)}"
-    }
+  for (name : names) {
+    print "{name}";
   }
 }
 
-run LangKit::main
+run main;

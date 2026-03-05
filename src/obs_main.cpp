@@ -31,6 +31,8 @@
 #include "erelang/version.hpp"
 #include "erelang/policy.hpp"
 #include "erelang/plugins.hpp"
+#include "erelang/ir.hpp"
+#include "erelang/codegen_x64.hpp"
 #else
 // Dynamic path: only C ABI
 #include "erelang/cabi.h"
@@ -90,6 +92,9 @@ static void print_help() {
                  "  erelang --bootstrap  (force show bootstrap manifest UI even if args given)\n"
                  "  erelang <path\\to\\file.(elan|ere)> [--debug]\n"
                  "  erelang --compile <path\\to\\file.(elan|ere)> [--output <path\\to\\out.exe>] [--static|--dynamic]\n"
+                 "  erelang --emit-ir <path\\to\\file.(elan|ere)> [--out <path\\to\\out.eir>]\n"
+                 "  erelang --emit-asm <path\\to\\file.(elan|ere)> [--out <path\\to\\out.s>]\n"
+                 "  erelang --build-native <path\\to\\file.(elan|ere)> [--out <path\\to\\out.exe>]\n"
                  "  erelang --make-debug [--output <path\\to\\debug.exe>]\n"
                  "\n"
                  "Description:\n"
@@ -116,6 +121,138 @@ static std::string read_all_text(const std::string& abspath) {
     if (!in) throw std::runtime_error(std::string("File not found: ") + abspath);
     std::ostringstream ss; ss << in.rdbuf();
     return ss.str();
+}
+
+static std::string trim_copy(std::string s) {
+    auto is_ws = [](unsigned char ch) { return std::isspace(ch) != 0; };
+    while (!s.empty() && is_ws(static_cast<unsigned char>(s.front()))) s.erase(s.begin());
+    while (!s.empty() && is_ws(static_cast<unsigned char>(s.back()))) s.pop_back();
+    return s;
+}
+
+static std::string upper_ascii_copy(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::toupper(ch));
+    });
+    return s;
+}
+
+static bool eval_preprocessor_condition(const std::string& exprRaw,
+                                        const std::unordered_set<std::string>& defines,
+                                        const std::string& osName) {
+    const std::string expr = trim_copy(exprRaw);
+    if (expr.empty()) return false;
+
+    const auto eqPos = expr.find("==");
+    if (eqPos != std::string::npos) {
+        std::string lhs = trim_copy(expr.substr(0, eqPos));
+        std::string rhs = trim_copy(expr.substr(eqPos + 2));
+        if (!rhs.empty() && rhs.front() == '"' && rhs.back() == '"' && rhs.size() >= 2) {
+            rhs = rhs.substr(1, rhs.size() - 2);
+        }
+        lhs = upper_ascii_copy(lhs);
+        rhs = upper_ascii_copy(rhs);
+        if (lhs == "OS") return rhs == osName;
+        return false;
+    }
+
+    if (expr.rfind("defined(", 0) == 0 && !expr.empty() && expr.back() == ')') {
+        std::string sym = trim_copy(expr.substr(8, expr.size() - 9));
+        sym = upper_ascii_copy(sym);
+        return defines.count(sym) > 0;
+    }
+
+    std::string symbol = upper_ascii_copy(expr);
+    if (symbol == "WINDOWS" || symbol == "LINUX" || symbol == "MAC") {
+        return symbol == osName;
+    }
+    return defines.count(symbol) > 0;
+}
+
+static std::string preprocess_source(const std::string& source) {
+#ifdef _WIN32
+    const std::string osName = "WINDOWS";
+#elif defined(__linux__)
+    const std::string osName = "LINUX";
+#elif defined(__APPLE__)
+    const std::string osName = "MAC";
+#else
+    const std::string osName = "UNKNOWN";
+#endif
+
+    std::unordered_set<std::string> defines;
+    defines.insert("OS");
+    defines.insert(osName);
+
+    struct Frame {
+        bool parentActive{true};
+        bool active{true};
+        bool branchTaken{false};
+    };
+    std::vector<Frame> stack;
+    auto current_active = [&]() { return stack.empty() ? true : stack.back().active; };
+
+    std::ostringstream out;
+    std::istringstream in(source);
+    std::string line;
+    while (std::getline(in, line)) {
+        std::string trimmed = trim_copy(line);
+        if (!trimmed.empty() && trimmed[0] == '#') {
+            if (trimmed.rfind("#define", 0) == 0) {
+                if (current_active()) {
+                    std::string sym = trim_copy(trimmed.substr(7));
+                    if (!sym.empty()) defines.insert(upper_ascii_copy(sym));
+                }
+                continue;
+            }
+            if (trimmed.rfind("#if", 0) == 0 && trimmed.rfind("#ifdef", 0) != 0 && trimmed.rfind("#ifndef", 0) != 0) {
+                const bool parent = current_active();
+                const bool cond = eval_preprocessor_condition(trim_copy(trimmed.substr(3)), defines, osName);
+                stack.push_back(Frame{parent, parent && cond, parent && cond});
+                continue;
+            }
+            if (trimmed.rfind("#ifdef", 0) == 0) {
+                const bool parent = current_active();
+                std::string sym = upper_ascii_copy(trim_copy(trimmed.substr(6)));
+                const bool cond = defines.count(sym) > 0;
+                stack.push_back(Frame{parent, parent && cond, parent && cond});
+                continue;
+            }
+            if (trimmed.rfind("#ifndef", 0) == 0) {
+                const bool parent = current_active();
+                std::string sym = upper_ascii_copy(trim_copy(trimmed.substr(7)));
+                const bool cond = defines.count(sym) == 0;
+                stack.push_back(Frame{parent, parent && cond, parent && cond});
+                continue;
+            }
+            if (trimmed.rfind("#elif", 0) == 0) {
+                if (!stack.empty()) {
+                    Frame& f = stack.back();
+                    const bool cond = eval_preprocessor_condition(trim_copy(trimmed.substr(5)), defines, osName);
+                    f.active = f.parentActive && !f.branchTaken && cond;
+                    if (f.active) f.branchTaken = true;
+                }
+                continue;
+            }
+            if (trimmed == "#else") {
+                if (!stack.empty()) {
+                    Frame& f = stack.back();
+                    f.active = f.parentActive && !f.branchTaken;
+                    f.branchTaken = true;
+                }
+                continue;
+            }
+            if (trimmed == "#endif") {
+                if (!stack.empty()) stack.pop_back();
+                continue;
+            }
+        }
+
+        if (current_active()) {
+            out << line << "\n";
+        }
+    }
+    return out.str();
 }
 
 static std::optional<std::string> resolve_import_local(const std::string& basePath, const std::string& imp,
@@ -214,8 +351,9 @@ static void load_program_recursive(const std::string& file,
     std::string key = p.string();
     if (visited.count(key)) return;
     visited.insert(key);
+    std::string source = preprocess_source(load_file_local(key));
     erelang::LexerOptions lxopts; lxopts.enableDurations = true; lxopts.enableUnits = true; lxopts.enablePolyIdentifiers = true; lxopts.emitDocComments = true; lxopts.emitComments = false;
-    erelang::Lexer lx(load_file_local(key), lxopts);
+    erelang::Lexer lx(std::move(source), lxopts);
     auto tokens = lx.lex();
     erelang::Parser ps(std::move(tokens));
     erelang::Program prog = ps.parse();
@@ -830,10 +968,12 @@ struct ExecutionContext {
 [[nodiscard]] int handle_list_builtins() {
     constexpr std::array builtins{
         "now_ms","now_iso","env","username","computer_name","machine_guid","uuid","rand_int","hwid","args_count","args_get",
+        "os.args","os.args_count","os.args_get","exec","os.exec","spawn","os.spawn","exit","stdin_read",
         "read_text","write_text","append_text","file_exists","mkdirs","copy_file","move_file","delete_file","list_files","cwd","chdir",
-        "path_join","path_dirname","path_basename","path_ext",
+        "path_join","path_dirname","path_basename","path_ext","file_mtime",
         "list_new","list_push","list_get","list_len","list_join","list_clear","list_remove_at",
         "dict_new","dict_set","dict_get","dict_has","dict_keys","dict_values",
+        "color.red","color.green","color.yellow","color.blue","color.magenta","color.cyan","color.bold","color.reset",
     "http_get","http_download","hls_download_best","url_encode",
     "network.ip.flush","network.ip.release","network.ip.renew","network.ip.registerdns",
     "win_window_create","win_button_create","win_checkbox_create","win_radiobutton_create","win_slider_create","win_textbox_create","win_label_create","win_on","win_show","win_loop","win_get_text","win_set_text","win_get_check","win_set_check","win_get_slider","win_set_slider","win_close","win_auto_scale","win_set_scale","win_message_box",
@@ -1134,6 +1274,81 @@ struct ExecutionContext {
     }
 }
 
+#ifdef ERELANG_STATIC_RUNNER
+static bool load_merged_program_for_script(const fs::path& script,
+                                           const std::vector<erelang::PluginManifest>& plugins,
+                                           erelang::Program& outProgram,
+                                           std::string& error) {
+    try {
+        std::unordered_set<std::string> visited;
+        std::vector<erelang::Program> ordered;
+        load_plugins_into_programs(plugins, visited, ordered);
+        load_program_recursive(fs::absolute(script).string(), visited, ordered);
+        if (ordered.empty()) {
+            error = "No program loaded";
+            return false;
+        }
+
+        erelang::Program merged;
+        for (std::size_t i = 0; i + 1 < ordered.size(); ++i) {
+            const auto& mod = ordered[i];
+            merged.actions.insert(merged.actions.end(), mod.actions.begin(), mod.actions.end());
+            merged.hooks.insert(merged.hooks.end(), mod.hooks.begin(), mod.hooks.end());
+            merged.entities.insert(merged.entities.end(), mod.entities.begin(), mod.entities.end());
+        }
+
+        erelang::Program mainProgram = ordered.back();
+        if (!merged.actions.empty()) {
+            mainProgram.actions.insert(mainProgram.actions.begin(), merged.actions.begin(), merged.actions.end());
+        }
+        if (!merged.hooks.empty()) {
+            mainProgram.hooks.insert(mainProgram.hooks.begin(), merged.hooks.begin(), merged.hooks.end());
+        }
+        if (!merged.entities.empty()) {
+            mainProgram.entities.insert(mainProgram.entities.begin(), merged.entities.begin(), merged.entities.end());
+        }
+
+        const auto append_aliases = [&](const erelang::Program& src) {
+            for (const auto& alias : src.pluginAliases) {
+                if (std::find(mainProgram.pluginAliases.begin(), mainProgram.pluginAliases.end(), alias) == mainProgram.pluginAliases.end()) {
+                    mainProgram.pluginAliases.push_back(alias);
+                }
+            }
+        };
+        for (const auto& programSrc : ordered) append_aliases(programSrc);
+
+        if (!mainProgram.runTarget) {
+            for (const auto& action : mainProgram.actions) {
+                if (action.name == "main") {
+                    mainProgram.runTarget = std::string{"main"};
+                    break;
+                }
+            }
+        }
+
+        outProgram = std::move(mainProgram);
+        return true;
+    } catch (const std::exception& ex) {
+        error = ex.what();
+        return false;
+    }
+}
+
+static int run_system_command_in_dir(const std::string& command, const fs::path& workingDirectory) {
+    if (workingDirectory.empty()) return -1;
+#ifdef _WIN32
+    const std::string full = "cmd /c \"" + command + "\"";
+#else
+    const std::string full = command;
+#endif
+    auto old = fs::current_path();
+    fs::current_path(workingDirectory);
+    const int rc = std::system(full.c_str());
+    fs::current_path(old);
+    return rc;
+}
+#endif
+
 } // namespace erelang
 
 int main(int argc, char** argv) {
@@ -1168,6 +1383,99 @@ int main(int argc, char** argv) {
     [[maybe_unused]] auto& runtimePluginRecords = ctx.runtimePlugins;
 #endif
     if (args.size() == 1 && (args[0] == "--help" || args[0] == "-h")) { print_help(); return 0; }
+
+#ifdef ERELANG_STATIC_RUNNER
+    if (args.size() >= 2 && (args[0] == "--emit-ir" || args[0] == "--emit-asm" || args[0] == "--build-native")) {
+        const std::string mode = args[0];
+        fs::path input = args[1];
+        if (!fs::exists(input)) {
+            std::cerr << "Input not found: " << input << "\n";
+            return 1;
+        }
+
+        fs::path output;
+        for (size_t i = 2; i < args.size(); ++i) {
+            if ((args[i] == "--out" || args[i] == "--output") && i + 1 < args.size()) {
+                output = fs::path(args[i + 1]);
+                ++i;
+            }
+        }
+
+        erelang::Program mergedProgram;
+        std::string loadError;
+        if (!erelang::load_merged_program_for_script(input, ctx.pluginManifests, mergedProgram, loadError)) {
+            std::cerr << "Emit error: " << loadError << "\n";
+            return 1;
+        }
+
+        erelang::IRBuilder irBuilder;
+        erelang::IRModule module = irBuilder.build(mergedProgram);
+
+        if (mode == "--emit-ir") {
+            if (output.empty()) {
+                output = input;
+                output.replace_extension(".eir");
+            }
+            if (!output.parent_path().empty()) fs::create_directories(output.parent_path());
+            std::ofstream outFile(output, std::ios::binary);
+            if (!outFile) {
+                std::cerr << "Failed to open output: " << output << "\n";
+                return 1;
+            }
+            outFile << erelang::ir_to_text(module);
+            std::cout << "Wrote " << output.string() << "\n";
+            return 0;
+        }
+
+        erelang::X64Codegen codegen;
+        if (mode == "--emit-asm") {
+            if (output.empty()) {
+                output = input;
+                output.replace_extension(".s");
+            }
+            if (!output.parent_path().empty()) fs::create_directories(output.parent_path());
+            std::ofstream outFile(output, std::ios::binary);
+            if (!outFile) {
+                std::cerr << "Failed to open output: " << output << "\n";
+                return 1;
+            }
+            outFile << codegen.emit_gas_win64_demo(module);
+            std::cout << "Wrote " << output.string() << "\n";
+            return 0;
+        }
+
+        if (mode == "--build-native") {
+            if (output.empty()) {
+                output = input;
+                output.replace_extension(".exe");
+            }
+            fs::path asmOut = output;
+            asmOut.replace_extension(".s");
+            if (!asmOut.parent_path().empty()) fs::create_directories(asmOut.parent_path());
+            if (!output.parent_path().empty()) fs::create_directories(output.parent_path());
+
+            {
+                std::ofstream outAsm(asmOut, std::ios::binary);
+                if (!outAsm) {
+                    std::cerr << "Failed to open output: " << asmOut << "\n";
+                    return 1;
+                }
+                outAsm << codegen.emit_gas_win64_demo(module);
+            }
+
+            const std::string cmd = std::string("gcc \"") + asmOut.string() + "\" -o \"" + output.string() + "\"";
+            std::cout << "[native] " << cmd << "\n";
+            const int rc = erelang::run_system_command_in_dir(cmd, fs::current_path());
+            if (rc != 0) {
+                std::cerr << "Native build failed (exit " << rc << ")\n";
+                return 1;
+            }
+            std::cout << "Wrote " << output.string() << "\n";
+            return 0;
+        }
+    }
+#endif
+
     if (!args.empty() && !args[0].empty() && args[0][0] != '-') {
         erelang::cli::RunOptions runOptions;
         runOptions.script = fs::path(args[0]);
@@ -1261,7 +1569,7 @@ int main(int argc, char** argv) {
                 if (visited.count(key)) return;
                 visited.insert(key);
                 erelang::LexerOptions lxopts; lxopts.enableDurations = true; lxopts.enableUnits = true; lxopts.enablePolyIdentifiers = true; lxopts.emitDocComments = true; lxopts.emitComments = false;
-                std::string text = read_all_text(key);
+                std::string text = preprocess_source(read_all_text(key));
                 erelang::Lexer lx(text, lxopts);
                 auto toks = lx.lex();
                 erelang::Parser ps(std::move(toks));

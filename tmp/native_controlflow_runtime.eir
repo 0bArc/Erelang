@@ -1,0 +1,44 @@
+; erelang IR v1
+entry main
+
+func main()
+  mov $i, #0
+  label L_while_start_0
+  cmp_lt %t0, $i, #3
+  jz %t0, L_while_end_1
+  print_s "while:{i}"
+  add %t1, $i, #1
+  mov $i, %t1
+  jmp L_while_start_0
+  label L_while_end_1
+  label L_do_start_2
+  print_s "do-once"
+  jnz #0, L_do_start_2
+  mov %t2, #0
+  label L_repeat_loop_3
+  cmp_lt %t3, %t2, #2
+  jz %t3, L_repeat_end_4
+  print_s "repeat"
+  mov %t4, #1
+  add %t5, %t2, %t4
+  mov %t2, %t5
+  jmp L_repeat_loop_3
+  label L_repeat_end_4
+  mov $mode, #2
+  cmp_eq %t6, $mode, #1
+  jnz %t6, L_switch_case_6
+  cmp_eq %t7, $mode, #2
+  jnz %t7, L_switch_case_7
+  jmp L_switch_default_8
+  label L_switch_case_6
+  print_s "one"
+  jmp L_switch_end_5
+  label L_switch_case_7
+  print_s "two"
+  jmp L_switch_end_5
+  label L_switch_default_8
+  print_s "other"
+  label L_switch_end_5
+  ret #0
+end
+

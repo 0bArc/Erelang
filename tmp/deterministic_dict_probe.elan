@@ -1,0 +1,6 @@
+public action main() {
+  let d = dict_new("b", "2", "a", "1", "c", "3");
+  print(list_join(dict_keys(d), ","));
+  print(list_join(dict_values(d), ","));
+}
+run main;

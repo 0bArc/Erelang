@@ -1,0 +1,10 @@
+public action sum6(a: int, b: int, c: int, d: int, e: int, f: int): int {
+  return a + b + c + d + e + f;
+}
+
+public action main() {
+  int total = sum6(1, 2, 3, 4, 5, 6);
+  print "sum6:{total}";
+}
+
+run main;

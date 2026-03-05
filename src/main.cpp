@@ -6,11 +6,15 @@
 #include <unordered_set>
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include "erelang/lexer.hpp"
 #include "erelang/parser.hpp"
 #include "erelang/runtime.hpp"
+#include "erelang/ir.hpp"
+#include "erelang/codegen_x64.hpp"
 #include "erelang/plugins.hpp"
 #include "erelang/creation_kit.hpp"
 #include "erelang/erodsl/spec.hpp"
@@ -75,11 +79,50 @@ int main(int argc, char** argv) {
     }
 
     if (argc < 2) {
-        std::cerr << "Usage: obc <file> [more ...]\n";
+        std::cerr << "Usage: obc <file> [more ...]\n"
+                     "       obc --emit-ir <file> [--out <path>]\n"
+                     "       obc --emit-asm <file> [--out <path>]\n"
+                     "       obc --build-native <file> [--out <path-to-exe>]\n";
         return 1;
     }
 
     try {
+        bool emitIr = false;
+        bool emitAsm = false;
+        bool buildNative = false;
+        std::optional<std::string> outputPath;
+        std::vector<std::string> inputs;
+        for (int i = 1; i < argc; ++i) {
+            const std::string arg = argv[i] ? std::string(argv[i]) : std::string();
+            if (arg == "--emit-ir") {
+                emitIr = true;
+                continue;
+            }
+            if (arg == "--emit-asm") {
+                emitAsm = true;
+                continue;
+            }
+            if (arg == "--build-native") {
+                buildNative = true;
+                continue;
+            }
+            if (arg == "--out" || arg == "-o") {
+                if (i + 1 >= argc) {
+                    throw std::runtime_error("Missing output path after --out/-o");
+                }
+                outputPath = std::string(argv[++i]);
+                continue;
+            }
+            inputs.push_back(arg);
+        }
+        const int modeCount = (emitIr ? 1 : 0) + (emitAsm ? 1 : 0) + (buildNative ? 1 : 0);
+        if (modeCount > 1) {
+            throw std::runtime_error("Use exactly one of --emit-ir, --emit-asm, or --build-native");
+        }
+        if ((emitIr || emitAsm || buildNative) && inputs.empty()) {
+            throw std::runtime_error("No input file provided for emit mode");
+        }
+
         std::vector<erodsl::DslSpec> languageSpecs;
         languageSpecs.push_back(erodsl::make_default_spec());
         std::unordered_map<std::string, std::size_t> extensionToLanguage;
@@ -210,7 +253,10 @@ int main(int argc, char** argv) {
                 pluginCallbacks.push_back(std::move(rec));
             }
         }
-        for (int i=1; i<argc; ++i) load_prog(argv[i]);
+        for (const auto& input : inputs) load_prog(input);
+        if (inputs.empty()) {
+            throw std::runtime_error("No input files provided");
+        }
         // Merge in load order, run last file as main
         Program merged;
         for (size_t i=0; i+1<ordered.size(); ++i) {
@@ -231,6 +277,88 @@ int main(int argc, char** argv) {
             }
         };
         for (const auto& progSrc : ordered) append_aliases(progSrc);
+
+        if (emitIr || emitAsm) {
+            IRBuilder irBuilder;
+            IRModule module = irBuilder.build(mainProg);
+            std::string artifact;
+            std::string suffix;
+            if (emitIr) {
+                artifact = ir_to_text(module);
+                suffix = ".eir";
+            } else {
+                X64Codegen codegen;
+                artifact = codegen.emit_nasm_win64(module);
+                suffix = ".asm";
+            }
+
+            fs::path output;
+            if (outputPath.has_value()) {
+                output = *outputPath;
+            } else {
+                output = fs::path(inputs.back()).filename();
+                output.replace_extension(suffix);
+            }
+            if (output.has_parent_path()) {
+                std::error_code ec;
+                fs::create_directories(output.parent_path(), ec);
+            }
+            std::ofstream outFile(output, std::ios::binary);
+            if (!outFile) {
+                throw std::runtime_error("Failed to open output: " + output.string());
+            }
+            outFile << artifact;
+            outFile.close();
+            std::cout << "Wrote " << output.string() << "\n";
+            return 0;
+        }
+
+        if (buildNative) {
+            IRBuilder irBuilder;
+            IRModule module = irBuilder.build(mainProg);
+            X64Codegen codegen;
+            std::string asmText = codegen.emit_gas_win64_demo(module);
+
+            fs::path exeOut;
+            if (outputPath.has_value()) {
+                exeOut = fs::path(*outputPath);
+            } else {
+                exeOut = fs::path(inputs.back()).filename();
+                exeOut.replace_extension(".exe");
+            }
+            fs::path asmOut = exeOut;
+            asmOut.replace_extension(".s");
+
+            if (exeOut.has_parent_path()) {
+                std::error_code ec;
+                fs::create_directories(exeOut.parent_path(), ec);
+            }
+            if (asmOut.has_parent_path()) {
+                std::error_code ec;
+                fs::create_directories(asmOut.parent_path(), ec);
+            }
+
+            {
+                std::ofstream asmFile(asmOut, std::ios::binary);
+                if (!asmFile) {
+                    throw std::runtime_error("Failed to open asm output: " + asmOut.string());
+                }
+                asmFile << asmText;
+            }
+
+            auto quote = [](const fs::path& p) {
+                return std::string("\"") + p.string() + "\"";
+            };
+            const std::string cmd = std::string("gcc ") + quote(asmOut) + " -o " + quote(exeOut);
+            std::cout << "[native] " << cmd << "\n";
+            const int rc = std::system(cmd.c_str());
+            if (rc != 0) {
+                throw std::runtime_error("Native build failed via gcc (exit " + std::to_string(rc) + ")");
+            }
+            std::cout << "Wrote " << exeOut.string() << "\n";
+            return 0;
+        }
+
         static_check(mainProg);
         // If there is no entry point in the final program, treat as module-only invocation
         bool hasMain = false; for (const auto& a : mainProg.actions) if (a.name=="main") { hasMain = true; break; }

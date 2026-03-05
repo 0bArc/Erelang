@@ -1,0 +1,17 @@
+public action main() {
+  let s = set_new();
+  set_add(s, "a");
+  set_add(s, "b");
+  print(set_has(s, "a"));
+  print(set_size(s));
+  let q = queue_new();
+  queue_push(q, "x");
+  queue_push(q, "y");
+  print(queue_peek(q));
+  print(queue_pop(q));
+  print(queue_len(q));
+  print(char_is_digit("8"));
+  print(char_is_ident_start("_"));
+  stderr_print("errline");
+}
+run main;

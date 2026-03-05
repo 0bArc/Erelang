@@ -1,0 +1,17 @@
+public action main() {
+  int base = 7;
+  int bonus = 5;
+  int total = base + bonus;
+
+  if (total == 12) {
+    print "bootstrap stage ok";
+  }
+
+  Array<string> steps = ["lex", "parse", "ir", "codegen"];
+  for (step : steps) {
+    print "step:{step}";
+  }
+
+  print total;
+}
+run main;

@@ -1,0 +1,13 @@
+@erelang
+
+public action main {
+  let x = list_new();
+  list_push(x, "A");
+  print list_len(x);
+
+  let m = dict_new();
+  dict_set(m, "k", "v");
+  print dict_get(m, "k");
+}
+
+run main;

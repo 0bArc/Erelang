@@ -1,0 +1,14 @@
+public action main() {
+  let a = set_new("a", "b", "c");
+  let b = set_new("b", "c", "d");
+  let u = set_union(a, b);
+  let i = set_intersect(a, b);
+  let d = set_diff(a, b);
+  print(set_size(u));
+  print(set_size(i));
+  print(set_size(d));
+  print(list_join(set_values(u), ","));
+  print(list_join(set_values(i), ","));
+  print(list_join(set_values(d), ","));
+}
+run main;

@@ -10,10 +10,15 @@
 #include <string_view>
 
 #include <algorithm>
+#include <bit>
 #include <cctype>
+#include <cstdint>
+#include <cstring>
+#include <memory>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
+#include <deque>
 #include <vector>
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -364,6 +369,15 @@ int g_nextDictId = 1;
 std::unordered_map<int, std::unordered_map<std::string, std::string>> g_dicts;
 int g_nextPtrId = 1;
 std::unordered_map<int, std::string> g_ptrs;
+int g_nextFileId = 1;
+std::unordered_map<int, std::unique_ptr<std::fstream>> g_fileStreams;
+int g_nextStrBufId = 1;
+std::unordered_map<int, std::string> g_strBuffers;
+std::unordered_set<std::string> g_deprecationWarningsShown;
+int g_nextSetId = 1;
+std::unordered_map<int, std::unordered_set<std::string>> g_sets;
+int g_nextQueueId = 1;
+std::unordered_map<int, std::deque<std::string>> g_queues;
 
 #ifdef _WIN32
 // Portable integer rounding helper (avoids std::lround issues on some MinGW setups)
@@ -1079,6 +1093,41 @@ std::string __erelang_builtin_monitor_dispatch(Runtime* rt, const std::string& n
 std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<ExprPtr>& args, const Runtime::Env& env) const {
     // Local owning string for APIs expecting std::string
     std::string nameStr(name);
+    auto warn_deprecated = [&](const char* builtin, const char* replacement) {
+        const std::string key = std::string("deprecated:") + builtin;
+        if (g_deprecationWarningsShown.insert(key).second) {
+            std::cerr << "[warn] deprecated builtin '" << builtin << "' (prefer " << replacement << ")\n";
+        }
+    };
+    if (nameStr == "bitcast") nameStr = "bit_cast";
+    if (nameStr == "fopen") nameStr = "file_open";
+    if (nameStr == "fclose") nameStr = "file_close";
+    if (nameStr == "fread") nameStr = "file_read";
+    if (nameStr == "fwrite") nameStr = "file_write";
+    if (nameStr == "fseek") nameStr = "file_seek";
+    if (nameStr == "ftell") nameStr = "file_tell";
+    if (nameStr == "fflush") nameStr = "file_flush";
+    if (nameStr == "string_buffer_new") nameStr = "strbuf_new";
+    if (nameStr == "string_buffer_append") nameStr = "strbuf_append";
+    if (nameStr == "string_buffer_clear") nameStr = "strbuf_clear";
+    if (nameStr == "string_buffer_len") nameStr = "strbuf_len";
+    if (nameStr == "string_buffer_to_string") nameStr = "strbuf_to_string";
+    if (nameStr == "string_buffer_free") nameStr = "strbuf_free";
+    if (nameStr == "string_buffer_reserve") nameStr = "strbuf_reserve";
+    if (nameStr == "hashmap_new") nameStr = "dict_new";
+    if (nameStr == "hashmap_set") nameStr = "dict_set";
+    if (nameStr == "hashmap_put") nameStr = "dict_set";
+    if (nameStr == "hashmap_get") nameStr = "dict_get";
+    if (nameStr == "hashmap_has") nameStr = "dict_has";
+    if (nameStr == "hashmap_contains") nameStr = "dict_has";
+    if (nameStr == "hashmap_get_or") nameStr = "dict_get_or";
+    if (nameStr == "hashmap_get_or_default") nameStr = "dict_get_or";
+    if (nameStr == "hashmap_remove") nameStr = "dict_remove";
+    if (nameStr == "hashmap_clear") nameStr = "dict_clear";
+    if (nameStr == "hashmap_size") nameStr = "dict_size";
+    if (nameStr == "hashmap_keys") nameStr = "dict_keys";
+    if (nameStr == "hashmap_values") nameStr = "dict_values";
+    if (nameStr == "hashmap_merge") nameStr = "dict_merge";
     // Check both local and global vars for alias binding
     if (auto aliasIt = env.vars.find(nameStr); aliasIt != env.vars.end()) {
         const std::string& aliasTarget = aliasIt->second;
@@ -1503,9 +1552,92 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return value;
     }
+    if (nameStr == "bit_cast") {
+        if (args.size() < 2) return {};
+        std::string targetType = argS(0);
+        std::string value = argS(1);
+        std::string low;
+        low.reserve(targetType.size());
+        for (char ch : targetType) {
+            if (!std::isspace(static_cast<unsigned char>(ch))) {
+                low.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+            }
+        }
+
+        if (low == "double") {
+            uint64_t bits = 0;
+            if (value.rfind("ptr:", 0) == 0) {
+                bits = static_cast<uint64_t>(to_int(value.substr(4)));
+            } else if (value.rfind("ref:", 0) == 0) {
+                bits = static_cast<uint64_t>(std::hash<std::string>{}(value));
+            } else {
+                bits = static_cast<uint64_t>(to_int(value));
+            }
+            const double out = std::bit_cast<double>(bits);
+            std::ostringstream oss;
+            oss << out;
+            return oss.str();
+        }
+        if (low == "float") {
+            uint32_t bits = static_cast<uint32_t>(to_int(value));
+            const float out = std::bit_cast<float>(bits);
+            std::ostringstream oss;
+            oss << out;
+            return oss.str();
+        }
+        if (low == "int" || low == "int64" || low == "long" || low == "longlong") {
+            if (is_float_string(value)) {
+                const double dv = to_double(value);
+                const uint64_t bits = std::bit_cast<uint64_t>(dv);
+                return std::to_string(static_cast<long long>(bits));
+            }
+            if (value.rfind("ptr:", 0) == 0) return value.substr(4);
+            if (value.rfind("ref:", 0) == 0) {
+                return std::to_string(static_cast<long long>(std::hash<std::string>{}(value)));
+            }
+            return std::to_string(static_cast<long long>(to_int(value)));
+        }
+        if (low == "uint32" || low == "u32") {
+            if (is_float_string(value)) {
+                const float fv = static_cast<float>(to_double(value));
+                const uint32_t bits = std::bit_cast<uint32_t>(fv);
+                return std::to_string(static_cast<unsigned long long>(bits));
+            }
+            return std::to_string(static_cast<unsigned long long>(static_cast<uint32_t>(to_int(value))));
+        }
+        if (low == "uint64" || low == "u64") {
+            if (is_float_string(value)) {
+                const double dv = to_double(value);
+                const uint64_t bits = std::bit_cast<uint64_t>(dv);
+                return std::to_string(static_cast<unsigned long long>(bits));
+            }
+            return std::to_string(static_cast<unsigned long long>(to_int(value)));
+        }
+        const bool pointerLike = (!low.empty() && (low.back() == '*' || low.back() == '&')) ||
+                                 (low.find("ptr") != std::string::npos) ||
+                                 (low == "pointer");
+        if (pointerLike) {
+            if (value.rfind("ptr:", 0) == 0 || value.rfind("ref:", 0) == 0) return value;
+            const int id = g_nextPtrId++;
+            g_ptrs[id] = value;
+            return std::string("ptr:") + std::to_string(id);
+        }
+        return value;
+    }
     if (nameStr == "ptr_new" || nameStr == "make_unique" || nameStr == "make_shared") {
         const int id = g_nextPtrId++;
         g_ptrs[id] = argS(0);
+        return std::string("ptr:") + std::to_string(id);
+    }
+    if (nameStr == "malloc") {
+        const int id = g_nextPtrId++;
+        const std::string sizeOrValue = argS(0);
+        if (is_int_string(sizeOrValue)) {
+            const long long n = std::max<long long>(0, to_int(sizeOrValue));
+            g_ptrs[id] = std::string(static_cast<std::size_t>(n), '\0');
+        } else {
+            g_ptrs[id] = sizeOrValue;
+        }
         return std::string("ptr:") + std::to_string(id);
     }
     if (nameStr == "ptr_get") {
@@ -1530,6 +1662,14 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         if (handle.rfind("ptr:", 0) != 0) return {};
         const int id = to_int(handle.substr(4));
         g_ptrs.erase(id);
+        return {};
+    }
+    if (nameStr == "free") {
+        const std::string handle = argS(0);
+        if (handle.rfind("ptr:", 0) == 0) {
+            const int id = to_int(handle.substr(4));
+            g_ptrs.erase(id);
+        }
         return {};
     }
     if (nameStr == "ptr_valid") {
@@ -1660,6 +1800,20 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
     if (idx >= 0 && idx < (int)s_cliArgs.size()) return s_cliArgs[idx];
     return {};
     }
+    if (nameStr == "os.args") {
+        int id = g_nextListId++;
+        g_lists[id] = {};
+        for (const auto& a : s_cliArgs) g_lists[id].push_back(a);
+        return std::string("list:") + std::to_string(id);
+    }
+    if (nameStr == "os.args_count") {
+        return std::to_string((int)s_cliArgs.size());
+    }
+    if (nameStr == "os.args_get") {
+        int idx = to_int(argS(0));
+        if (idx >= 0 && idx < (int)s_cliArgs.size()) return s_cliArgs[idx];
+        return {};
+    }
     if (nameStr == "exec") {
     // Execute arbitrary command (shell). Return exit code as string.
     std::string cmd = argS(0);
@@ -1671,6 +1825,76 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
     int code = std::system(full.c_str());
     return std::to_string(code);
     }
+        if (nameStr == "os.exec") {
+        std::string cmd = argS(0);
+    #ifdef _WIN32
+        std::string full = std::string("cmd /c ") + cmd;
+    #else
+        std::string full = cmd;
+    #endif
+        int code = std::system(full.c_str());
+        return std::to_string(code);
+        }
+        if (nameStr == "spawn") {
+        std::string cmd = argS(0);
+    #ifdef _WIN32
+        STARTUPINFOA si{};
+        PROCESS_INFORMATION pi{};
+        si.cb = sizeof(si);
+        std::string commandLine = std::string("cmd /c ") + cmd;
+        BOOL ok = CreateProcessA(
+            nullptr,
+            commandLine.data(),
+            nullptr,
+            nullptr,
+            FALSE,
+            DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+            nullptr,
+            nullptr,
+            &si,
+            &pi);
+        if (!ok) return "-1";
+        const DWORD pid = pi.dwProcessId;
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        return std::to_string((long long)pid);
+    #else
+        std::thread([command = std::move(cmd)](){ std::system(command.c_str()); }).detach();
+        return "1";
+    #endif
+        }
+        if (nameStr == "os.spawn") {
+        std::string cmd = argS(0);
+    #ifdef _WIN32
+        STARTUPINFOA si{};
+        PROCESS_INFORMATION pi{};
+        si.cb = sizeof(si);
+        std::string commandLine = std::string("cmd /c ") + cmd;
+        BOOL ok = CreateProcessA(
+            nullptr,
+            commandLine.data(),
+            nullptr,
+            nullptr,
+            FALSE,
+            DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+            nullptr,
+            nullptr,
+            &si,
+            &pi);
+        if (!ok) return "-1";
+        const DWORD pid = pi.dwProcessId;
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        return std::to_string((long long)pid);
+    #else
+        std::thread([command = std::move(cmd)](){ std::system(command.c_str()); }).detach();
+        return "1";
+    #endif
+        }
+        if (nameStr == "exit") {
+        int code = (int)to_int(argS(0));
+        std::exit(code);
+        }
     if (nameStr == "run_file") {
     // Run a file with default OS association (like double-click). No output capture; returns empty.
     std::string fp = argS(0);
@@ -1689,6 +1913,47 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
     }
     if (nameStr == "read_line") {
         std::string s; std::getline(std::cin, s); return s;
+    }
+    if (nameStr == "stdin_read") {
+        std::string s; std::getline(std::cin, s); return s;
+    }
+    if (nameStr == "stderr_print") {
+        std::cerr << argS(0) << "\n";
+        return {};
+    }
+    if (nameStr == "option_none" || nameStr == "option.none") {
+        return "option:none";
+    }
+    if (nameStr == "option_some" || nameStr == "option.some") {
+        return std::string("option:some:") + argS(0);
+    }
+    if (nameStr == "option_is_some" || nameStr == "option.is_some") {
+        const std::string v = argS(0);
+        return (v.rfind("option:some:", 0) == 0) ? "true" : "false";
+    }
+    if (nameStr == "option_unwrap_or" || nameStr == "option.unwrap_or") {
+        const std::string v = argS(0);
+        if (v.rfind("option:some:", 0) == 0) {
+            return v.substr(std::string("option:some:").size());
+        }
+        return argS(1);
+    }
+    if (nameStr == "result_ok" || nameStr == "result.ok") {
+        return std::string("result:ok:") + argS(0);
+    }
+    if (nameStr == "result_err" || nameStr == "result.err") {
+        return std::string("result:err:") + argS(0);
+    }
+    if (nameStr == "result_is_ok" || nameStr == "result.is_ok") {
+        const std::string v = argS(0);
+        return (v.rfind("result:ok:", 0) == 0) ? "true" : "false";
+    }
+    if (nameStr == "result_unwrap_or" || nameStr == "result.unwrap_or") {
+        const std::string v = argS(0);
+        if (v.rfind("result:ok:", 0) == 0) {
+            return v.substr(std::string("result:ok:").size());
+        }
+        return argS(1);
     }
     if (nameStr == "input") {
         if (!args.empty()) {
@@ -1722,8 +1987,119 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         out << argS(1);
         return {};
     }
+    if (nameStr == "file_open") {
+        std::string mode = argS(1);
+        std::ios::openmode openMode = std::ios::binary;
+        if (mode == "r" || mode == "rb") {
+            openMode |= std::ios::in;
+        } else if (mode == "w" || mode == "wb") {
+            openMode |= std::ios::out | std::ios::trunc;
+        } else if (mode == "a" || mode == "ab") {
+            openMode |= std::ios::out | std::ios::app;
+        } else if (mode == "r+" || mode == "rb+") {
+            openMode |= std::ios::in | std::ios::out;
+        } else if (mode == "w+" || mode == "wb+") {
+            openMode |= std::ios::in | std::ios::out | std::ios::trunc;
+        } else if (mode == "a+" || mode == "ab+") {
+            openMode |= std::ios::in | std::ios::out | std::ios::app;
+        } else {
+            return {};
+        }
+        auto file = std::make_unique<std::fstream>(argS(0), openMode);
+        if (!(*file)) return {};
+        const int id = g_nextFileId++;
+        g_fileStreams[id] = std::move(file);
+        return std::string("file:") + std::to_string(id);
+    }
+    if (nameStr == "file_close") {
+        const std::string handle = argS(0);
+        if (handle.rfind("file:", 0) != 0) return "false";
+        const int id = to_int(handle.substr(5));
+        auto it = g_fileStreams.find(id);
+        if (it == g_fileStreams.end()) return "false";
+        if (it->second && it->second->is_open()) it->second->close();
+        g_fileStreams.erase(it);
+        return "true";
+    }
+    if (nameStr == "file_read") {
+        const std::string handle = argS(0);
+        if (handle.rfind("file:", 0) != 0) return {};
+        const int id = to_int(handle.substr(5));
+        auto it = g_fileStreams.find(id);
+        if (it == g_fileStreams.end() || !it->second) return {};
+        auto& stream = *it->second;
+        if (!stream.good()) {
+            stream.clear();
+        }
+        if (args.size() >= 2) {
+            const long long count = std::max<long long>(0, to_int(argS(1)));
+            std::string out(static_cast<std::size_t>(count), '\0');
+            stream.read(out.data(), static_cast<std::streamsize>(count));
+            out.resize(static_cast<std::size_t>(stream.gcount()));
+            return out;
+        }
+        std::ostringstream ss;
+        ss << stream.rdbuf();
+        return ss.str();
+    }
+    if (nameStr == "file_write") {
+        const std::string handle = argS(0);
+        if (handle.rfind("file:", 0) != 0) return "0";
+        const int id = to_int(handle.substr(5));
+        auto it = g_fileStreams.find(id);
+        if (it == g_fileStreams.end() || !it->second) return "0";
+        auto& stream = *it->second;
+        const std::string data = argS(1);
+        stream.write(data.data(), static_cast<std::streamsize>(data.size()));
+        if (!stream.good()) return "0";
+        return std::to_string(static_cast<long long>(data.size()));
+    }
+    if (nameStr == "file_seek") {
+        const std::string handle = argS(0);
+        if (handle.rfind("file:", 0) != 0) return "false";
+        const int id = to_int(handle.substr(5));
+        auto it = g_fileStreams.find(id);
+        if (it == g_fileStreams.end() || !it->second) return "false";
+        auto& stream = *it->second;
+        const long long offset = to_int(argS(1));
+        std::string whence = args.size() >= 3 ? argS(2) : "set";
+        std::ios::seekdir dir = std::ios::beg;
+        if (whence == "cur" || whence == "current" || whence == "1") dir = std::ios::cur;
+        else if (whence == "end" || whence == "2") dir = std::ios::end;
+        stream.clear();
+        stream.seekg(static_cast<std::streamoff>(offset), dir);
+        stream.seekp(static_cast<std::streamoff>(offset), dir);
+        return stream.fail() ? "false" : "true";
+    }
+    if (nameStr == "file_tell") {
+        const std::string handle = argS(0);
+        if (handle.rfind("file:", 0) != 0) return "-1";
+        const int id = to_int(handle.substr(5));
+        auto it = g_fileStreams.find(id);
+        if (it == g_fileStreams.end() || !it->second) return "-1";
+        auto& stream = *it->second;
+        auto pos = stream.tellg();
+        if (pos < 0) pos = stream.tellp();
+        if (pos < 0) return "-1";
+        return std::to_string(static_cast<long long>(pos));
+    }
+    if (nameStr == "file_flush") {
+        const std::string handle = argS(0);
+        if (handle.rfind("file:", 0) != 0) return "false";
+        const int id = to_int(handle.substr(5));
+        auto it = g_fileStreams.find(id);
+        if (it == g_fileStreams.end() || !it->second) return "false";
+        it->second->flush();
+        return it->second->good() ? "true" : "false";
+    }
     if (nameStr == "file_exists") {
         return std::filesystem::exists(argS(0)) ? std::string("true") : std::string("false");
+    }
+    if (nameStr == "file_size") {
+        std::error_code ec;
+        auto size = std::filesystem::file_size(argS(0), ec);
+        if (ec) return "-1";
+        return std::to_string(static_cast<long long>(size));
     }
     if (nameStr == "mkdirs") {
         std::error_code ec; std::filesystem::create_directories(argS(0), ec); return {};
@@ -1746,6 +2122,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         std::error_code ec; for (auto& e : std::filesystem::directory_iterator(argS(0), ec)) {
             g_lists[id].push_back(e.path().string());
         }
+        std::sort(g_lists[id].begin(), g_lists[id].end());
         return std::string("list:") + std::to_string(id);
     }
     if (nameStr == "cwd") {
@@ -1770,6 +2147,245 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
     }
     if (nameStr == "path_ext") {
         return std::filesystem::path(argS(0)).extension().string();
+    }
+    if (nameStr == "file_mtime") {
+        std::error_code ec;
+        auto ft = std::filesystem::last_write_time(argS(0), ec);
+        if (ec) return "0";
+        auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+            ft - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now());
+        auto sec = std::chrono::duration_cast<std::chrono::seconds>(sctp.time_since_epoch()).count();
+        return std::to_string((long long)sec);
+    }
+    if (nameStr == "color.red") return std::string("\x1b[31m") + argS(0) + "\x1b[0m";
+    if (nameStr == "color.green") return std::string("\x1b[32m") + argS(0) + "\x1b[0m";
+    if (nameStr == "color.yellow") return std::string("\x1b[33m") + argS(0) + "\x1b[0m";
+    if (nameStr == "color.blue") return std::string("\x1b[34m") + argS(0) + "\x1b[0m";
+    if (nameStr == "color.magenta") return std::string("\x1b[35m") + argS(0) + "\x1b[0m";
+    if (nameStr == "color.cyan") return std::string("\x1b[36m") + argS(0) + "\x1b[0m";
+    if (nameStr == "color.bold") return std::string("\x1b[1m") + argS(0) + "\x1b[0m";
+    if (nameStr == "color.reset") return std::string("\x1b[0m");
+    if (nameStr == "strbuf_new") {
+        const int id = g_nextStrBufId++;
+        g_strBuffers[id] = args.empty() ? std::string() : argS(0);
+        return std::string("strbuf:") + std::to_string(id);
+    }
+    if (nameStr == "strbuf_append") {
+        const std::string handle = argS(0);
+        if (handle.rfind("strbuf:", 0) != 0) return {};
+        const int id = to_int(handle.substr(7));
+        auto it = g_strBuffers.find(id);
+        if (it == g_strBuffers.end()) return {};
+        it->second += argS(1);
+        return {};
+    }
+    if (nameStr == "strbuf_clear") {
+        const std::string handle = argS(0);
+        if (handle.rfind("strbuf:", 0) != 0) return {};
+        const int id = to_int(handle.substr(7));
+        auto it = g_strBuffers.find(id);
+        if (it == g_strBuffers.end()) return {};
+        it->second.clear();
+        return {};
+    }
+    if (nameStr == "strbuf_len") {
+        const std::string handle = argS(0);
+        if (handle.rfind("strbuf:", 0) != 0) return "0";
+        const int id = to_int(handle.substr(7));
+        auto it = g_strBuffers.find(id);
+        if (it == g_strBuffers.end()) return "0";
+        return std::to_string(static_cast<long long>(it->second.size()));
+    }
+    if (nameStr == "strbuf_to_string") {
+        const std::string handle = argS(0);
+        if (handle.rfind("strbuf:", 0) != 0) return {};
+        const int id = to_int(handle.substr(7));
+        auto it = g_strBuffers.find(id);
+        if (it == g_strBuffers.end()) return {};
+        return it->second;
+    }
+    if (nameStr == "strbuf_free") {
+        const std::string handle = argS(0);
+        if (handle.rfind("strbuf:", 0) != 0) return {};
+        const int id = to_int(handle.substr(7));
+        g_strBuffers.erase(id);
+        return {};
+    }
+    if (nameStr == "strbuf_reserve") {
+        const std::string handle = argS(0);
+        if (handle.rfind("strbuf:", 0) != 0) return {};
+        const int id = to_int(handle.substr(7));
+        auto it = g_strBuffers.find(id);
+        if (it == g_strBuffers.end()) return {};
+        const long long cap = std::max<long long>(0, to_int(argS(1)));
+        it->second.reserve(static_cast<std::size_t>(cap));
+        return {};
+    }
+    if (nameStr == "set_new") {
+        const int id = g_nextSetId++;
+        g_sets[id] = {};
+        for (const auto& a : args) g_sets[id].insert(eval_string(*a, env));
+        return std::string("set:") + std::to_string(id);
+    }
+    if (nameStr == "set_add") {
+        const std::string h = argS(0);
+        if (h.rfind("set:", 0) != 0) return "false";
+        const int id = to_int(h.substr(4));
+        const auto inserted = g_sets[id].insert(argS(1));
+        return inserted.second ? "true" : "false";
+    }
+    if (nameStr == "set_has") {
+        const std::string h = argS(0);
+        if (h.rfind("set:", 0) != 0) return "false";
+        const int id = to_int(h.substr(4));
+        return g_sets[id].count(argS(1)) ? "true" : "false";
+    }
+    if (nameStr == "set_remove") {
+        const std::string h = argS(0);
+        if (h.rfind("set:", 0) != 0) return "false";
+        const int id = to_int(h.substr(4));
+        return g_sets[id].erase(argS(1)) > 0 ? "true" : "false";
+    }
+    if (nameStr == "set_size") {
+        const std::string h = argS(0);
+        if (h.rfind("set:", 0) != 0) return "0";
+        const int id = to_int(h.substr(4));
+        return std::to_string(static_cast<long long>(g_sets[id].size()));
+    }
+    if (nameStr == "set_values") {
+        const std::string h = argS(0);
+        if (h.rfind("set:", 0) != 0) return {};
+        const int id = to_int(h.substr(4));
+        const int lid = g_nextListId++;
+        g_lists[lid] = {};
+        for (const auto& value : g_sets[id]) g_lists[lid].push_back(value);
+        std::sort(g_lists[lid].begin(), g_lists[lid].end());
+        return std::string("list:") + std::to_string(lid);
+    }
+    if (nameStr == "set_union") {
+        const std::string h1 = argS(0);
+        const std::string h2 = argS(1);
+        if (h1.rfind("set:", 0) != 0 || h2.rfind("set:", 0) != 0) return {};
+        const int id1 = to_int(h1.substr(4));
+        const int id2 = to_int(h2.substr(4));
+        const int outId = g_nextSetId++;
+        auto& out = g_sets[outId];
+        auto it1 = g_sets.find(id1);
+        if (it1 != g_sets.end()) out.insert(it1->second.begin(), it1->second.end());
+        auto it2 = g_sets.find(id2);
+        if (it2 != g_sets.end()) out.insert(it2->second.begin(), it2->second.end());
+        return std::string("set:") + std::to_string(outId);
+    }
+    if (nameStr == "set_intersect") {
+        const std::string h1 = argS(0);
+        const std::string h2 = argS(1);
+        if (h1.rfind("set:", 0) != 0 || h2.rfind("set:", 0) != 0) return {};
+        const int id1 = to_int(h1.substr(4));
+        const int id2 = to_int(h2.substr(4));
+        const int outId = g_nextSetId++;
+        auto& out = g_sets[outId];
+        auto it1 = g_sets.find(id1);
+        auto it2 = g_sets.find(id2);
+        if (it1 == g_sets.end() || it2 == g_sets.end()) return std::string("set:") + std::to_string(outId);
+        const auto& lhs = it1->second;
+        const auto& rhs = it2->second;
+        const auto& probe = lhs.size() <= rhs.size() ? lhs : rhs;
+        const auto& other = lhs.size() <= rhs.size() ? rhs : lhs;
+        for (const auto& v : probe) {
+            if (other.count(v) > 0) out.insert(v);
+        }
+        return std::string("set:") + std::to_string(outId);
+    }
+    if (nameStr == "set_diff") {
+        const std::string h1 = argS(0);
+        const std::string h2 = argS(1);
+        if (h1.rfind("set:", 0) != 0 || h2.rfind("set:", 0) != 0) return {};
+        const int id1 = to_int(h1.substr(4));
+        const int id2 = to_int(h2.substr(4));
+        const int outId = g_nextSetId++;
+        auto& out = g_sets[outId];
+        auto it1 = g_sets.find(id1);
+        if (it1 == g_sets.end()) return std::string("set:") + std::to_string(outId);
+        auto it2 = g_sets.find(id2);
+        if (it2 == g_sets.end()) {
+            out.insert(it1->second.begin(), it1->second.end());
+            return std::string("set:") + std::to_string(outId);
+        }
+        for (const auto& v : it1->second) {
+            if (it2->second.count(v) == 0) out.insert(v);
+        }
+        return std::string("set:") + std::to_string(outId);
+    }
+    if (nameStr == "queue_new") {
+        const int id = g_nextQueueId++;
+        g_queues[id] = {};
+        for (const auto& a : args) g_queues[id].push_back(eval_string(*a, env));
+        return std::string("queue:") + std::to_string(id);
+    }
+    if (nameStr == "queue_push") {
+        const std::string h = argS(0);
+        if (h.rfind("queue:", 0) != 0) return {};
+        const int id = to_int(h.substr(6));
+        g_queues[id].push_back(argS(1));
+        return {};
+    }
+    if (nameStr == "queue_pop") {
+        const std::string h = argS(0);
+        if (h.rfind("queue:", 0) != 0) return {};
+        const int id = to_int(h.substr(6));
+        auto& q = g_queues[id];
+        if (q.empty()) return {};
+        std::string out = q.front();
+        q.pop_front();
+        return out;
+    }
+    if (nameStr == "queue_peek") {
+        const std::string h = argS(0);
+        if (h.rfind("queue:", 0) != 0) return {};
+        const int id = to_int(h.substr(6));
+        auto& q = g_queues[id];
+        if (q.empty()) return {};
+        return q.front();
+    }
+    if (nameStr == "queue_len") {
+        const std::string h = argS(0);
+        if (h.rfind("queue:", 0) != 0) return "0";
+        const int id = to_int(h.substr(6));
+        return std::to_string(static_cast<long long>(g_queues[id].size()));
+    }
+    if (nameStr == "queue_clear") {
+        const std::string h = argS(0);
+        if (h.rfind("queue:", 0) != 0) return {};
+        const int id = to_int(h.substr(6));
+        g_queues[id].clear();
+        return {};
+    }
+    if (nameStr == "char_is_digit") {
+        const std::string s = argS(0);
+        if (s.empty()) return "false";
+        return std::isdigit(static_cast<unsigned char>(s[0])) ? "true" : "false";
+    }
+    if (nameStr == "char_is_space") {
+        const std::string s = argS(0);
+        if (s.empty()) return "false";
+        return std::isspace(static_cast<unsigned char>(s[0])) ? "true" : "false";
+    }
+    if (nameStr == "char_is_alpha") {
+        const std::string s = argS(0);
+        if (s.empty()) return "false";
+        return std::isalpha(static_cast<unsigned char>(s[0])) ? "true" : "false";
+    }
+    if (nameStr == "char_is_ident_start") {
+        const std::string s = argS(0);
+        if (s.empty()) return "false";
+        const unsigned char ch = static_cast<unsigned char>(s[0]);
+        return (std::isalpha(ch) || ch == '_') ? "true" : "false";
+    }
+    if (nameStr == "char_is_ident_part") {
+        const std::string s = argS(0);
+        if (s.empty()) return "false";
+        const unsigned char ch = static_cast<unsigned char>(s[0]);
+        return (std::isalnum(ch) || ch == '_') ? "true" : "false";
     }
     // Time utilities
     if (nameStr == "now_iso") {
@@ -1824,6 +2440,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         return std::string("list:") + std::to_string(id);
     }
     if (nameStr == "list_push") {
+        warn_deprecated("list_push", "method call list.push(value)");
         std::string h = argS(0); std::string v = argS(1);
         if (h.rfind("list:", 0) == 0) {
             int id = to_int(h.substr(5)); g_lists[id].push_back(v);
@@ -1882,6 +2499,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         return oss.str();
     };
     if (nameStr == "dict_set") {
+        warn_deprecated("dict_set", "method call dict.set(key, value)");
         std::string h = argS(0);
         if (args.size() < 3) return {};
         std::string k = join_builtin_path(1, args.size() - 1);
@@ -1907,12 +2525,17 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         std::string h = argS(0); if (h.rfind("dict:", 0) != 0) return {};
         int id = to_int(h.substr(5)); int lid = g_nextListId++; g_lists[lid] = {};
         for (const auto& kv : g_dicts[id]) g_lists[lid].push_back(kv.first);
+        std::sort(g_lists[lid].begin(), g_lists[lid].end());
         return std::string("list:") + std::to_string(lid);
     }
     if (nameStr == "dict_values") {
         std::string h = argS(0); if (h.rfind("dict:", 0) != 0) return {};
         int id = to_int(h.substr(5)); int lid = g_nextListId++; g_lists[lid] = {};
-        for (const auto& kv : g_dicts[id]) g_lists[lid].push_back(kv.second);
+        std::vector<std::pair<std::string, std::string>> ordered;
+        ordered.reserve(g_dicts[id].size());
+        for (const auto& kv : g_dicts[id]) ordered.push_back(kv);
+        std::sort(ordered.begin(), ordered.end(), [](const auto& a, const auto& b){ return a.first < b.first; });
+        for (const auto& kv : ordered) g_lists[lid].push_back(kv.second);
         return std::string("list:") + std::to_string(lid);
     }
     if (nameStr == "dict_get_or") {
@@ -1984,6 +2607,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         for (const auto& kv : g_dicts[id]) {
             g_lists[lid].push_back(kv.first + "=" + kv.second);
         }
+        std::sort(g_lists[lid].begin(), g_lists[lid].end());
         return std::string("list:") + std::to_string(lid);
     }
     if (nameStr == "dict_set_path") {
@@ -2083,6 +2707,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         int lid = g_nextListId++;
         g_lists[lid] = {};
         for (const auto& row : rows) g_lists[lid].push_back(row);
+        std::sort(g_lists[lid].begin(), g_lists[lid].end());
         return std::string("list:") + std::to_string(lid);
     }
     if (nameStr == "table_columns") {
@@ -2099,6 +2724,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         int lid = g_nextListId++;
         g_lists[lid] = {};
         for (const auto& col : cols) g_lists[lid].push_back(col);
+        std::sort(g_lists[lid].begin(), g_lists[lid].end());
         return std::string("list:") + std::to_string(lid);
     }
     if (nameStr == "table_row_keys") {
@@ -2114,6 +2740,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
                 g_lists[lid].push_back(kv.first.substr(prefix.size()));
             }
         }
+        std::sort(g_lists[lid].begin(), g_lists[lid].end());
         return std::string("list:") + std::to_string(lid);
     }
     if (nameStr == "table_clear_row") {
@@ -3262,6 +3889,12 @@ std::string Runtime::eval_string(const Expr& e, const Env& env) const {
             }
         }
     }
+    if (std::holds_alternative<TernaryExpr>(e.node)) {
+        const auto& t = std::get<TernaryExpr>(e.node);
+        const std::string cond = eval_string(*t.cond, env);
+        const bool truthy = (cond == "true" || to_int(cond) != 0);
+        return truthy ? eval_string(*t.thenExpr, env) : eval_string(*t.elseExpr, env);
+    }
     if (std::holds_alternative<MemberExpr>(e.node)) {
         const auto& m = std::get<MemberExpr>(e.node);
         auto oit = env.objects.find(m.objectName);
@@ -3323,6 +3956,13 @@ const Entity* Runtime::find_entity(const Program& program, std::string_view name
 static const StructDecl* find_struct_decl(const Program& program, std::string_view name) {
     for (const auto& s : program.structs) {
         if (s.name == name) return &s;
+    }
+    return nullptr;
+}
+
+static const Action* find_struct_method(const StructDecl& decl, std::string_view name) {
+    for (const auto& m : decl.methods) {
+        if (m.name == name) return &m;
     }
     return nullptr;
 }
@@ -3560,11 +4200,22 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
         }
         return;
     }
+    if (std::holds_alternative<DoWhileStmt>(s)) {
+        const auto& st = std::get<DoWhileStmt>(s);
+        while (true) {
+            exec_block(*st.body, program, ctx, env);
+            if (ctx.returned) {
+                break;
+            }
+            std::string c = eval_string(*st.cond, env);
+            if (!is_truthy(c)) {
+                break;
+            }
+        }
+        return;
+    }
     if (std::holds_alternative<ForInStmt>(s)) {
         const auto& st = std::get<ForInStmt>(s);
-        if (!st.usedColon) {
-            throw std::runtime_error("For-each iteration must use ':' syntax");
-        }
         std::string iter = eval_string(*st.iterable, env);
         if (iter.rfind("list:", 0) == 0) {
             if (st.valueVar) {
@@ -3684,6 +4335,11 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
     }
     if (std::holds_alternative<MethodCallStmt>(s)) {
         const auto& mc = std::get<MethodCallStmt>(s);
+        std::string methodName = mc.method;
+        if (methodName == "put") methodName = "set";
+        if (methodName == "contains") methodName = "has";
+        if (methodName == "containsKey") methodName = "has";
+        if (methodName == "getOrDefault") methodName = "getOr";
         if (auto moduleBuiltin = env.vars.find(mc.objectName + "." + mc.method); moduleBuiltin != env.vars.end()) {
             if (moduleBuiltin->second.rfind(kBuiltinAliasPrefix.data(), 0) == 0) {
                 env.vars["_"] = eval_builtin_call(mc.objectName + "." + mc.method, mc.args, env);
@@ -3694,11 +4350,41 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
             env.vars["_"] = eval_builtin_call(*builtinTarget, mc.args, env);
             return;
         }
+        for (const auto& importDecl : program.imports) {
+            if (!importDecl.alias || *importDecl.alias != mc.objectName || importDecl.path.empty()) {
+                continue;
+            }
+            std::string normalizedPath = importDecl.path;
+            for (auto& ch : normalizedPath) if (ch == '\\') ch = '/';
+            std::transform(normalizedPath.begin(), normalizedPath.end(), normalizedPath.begin(), [](unsigned char ch) {
+                return static_cast<char>(std::tolower(ch));
+            });
+            const bool isBuiltinAlias = (normalizedPath == "builtin/fs" || normalizedPath == "builtin/erefs" ||
+                                         normalizedPath == "builtin/path" || normalizedPath == "builtin/erepath");
+            if (isBuiltinAlias) {
+                continue;
+            }
+            if (const Action* aliased = find_action(program, methodName)) {
+                if (program.strict && aliased->visibility != Visibility::Public) {
+                    throw std::runtime_error("Action not public: " + aliased->name);
+                }
+                Env calleeEnv;
+                for (const auto& kv : globalVars_) calleeEnv.vars[kv.first] = kv.second;
+                for (size_t i = 0; i < aliased->params.size() && i < mc.args.size(); ++i) {
+                    calleeEnv.vars[aliased->params[i].name] = eval_string(*mc.args[i], env);
+                }
+                ExecContext calleeCtx;
+                exec_block(aliased->body, program, calleeCtx, calleeEnv);
+                for (auto& th : calleeCtx.threads) if (th.joinable()) th.join();
+                return;
+            }
+            break;
+        }
         // Support dynamic list/dict method calls using handles stored in variables
         auto vhit = env.vars.find(mc.objectName);
         if (vhit != env.vars.end()) {
             const std::string& handle = vhit->second;
-            if (handle.rfind("list:", 0) == 0 && mc.method == "forEach") {
+            if (handle.rfind("list:", 0) == 0 && methodName == "forEach") {
                 int id = to_int(handle.substr(5));
                 // forEach(actionName)
                 std::string actionName = eval_string(*mc.args[0], env);
@@ -3709,7 +4395,7 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 }
                 return;
             }
-            if (handle.rfind("list:", 0) == 0 && mc.method == "push") {
+            if (handle.rfind("list:", 0) == 0 && methodName == "push") {
 
                 int id = to_int(handle.substr(5));
                 if (!mc.args.empty()) {
@@ -3718,7 +4404,7 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 }
                 return;
             }
-            if (handle.rfind("list:", 0) == 0 && mc.method == "get") {
+            if (handle.rfind("list:", 0) == 0 && methodName == "get") {
                 int id = to_int(handle.substr(5));
                 if (!mc.args.empty()) {
                     int idx = to_int(eval_string(*mc.args[0], env));
@@ -3732,12 +4418,12 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 }
                 return;
             }
-            if (handle.rfind("list:", 0) == 0 && mc.method == "len") {
+            if (handle.rfind("list:", 0) == 0 && methodName == "len") {
                 int id = to_int(handle.substr(5));
                 env.vars["_"] = std::to_string((int)g_lists[id].size());
                 return;
             }
-            if (handle.rfind("dict:", 0) == 0 && mc.method == "forEach") {
+            if (handle.rfind("dict:", 0) == 0 && methodName == "forEach") {
                 int id = to_int(handle.substr(5));
                 std::string actionName = eval_string(*mc.args[0], env);
                 for (const auto& kv : g_dicts[id]) {
@@ -3747,7 +4433,7 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 }
                 return;
             }
-            if (handle.rfind("dict:", 0) == 0 && mc.method == "set") {
+            if (handle.rfind("dict:", 0) == 0 && methodName == "set") {
                 int id = to_int(handle.substr(5));
                 if (mc.args.size() >= 2) {
                     std::ostringstream key;
@@ -3761,7 +4447,7 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 }
                 return;
             }
-            if (handle.rfind("dict:", 0) == 0 && mc.method == "get") {
+            if (handle.rfind("dict:", 0) == 0 && methodName == "get") {
                 int id = to_int(handle.substr(5));
                 if (!mc.args.empty()) {
                     std::ostringstream key;
@@ -3775,7 +4461,7 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 }
                 return;
             }
-            if (handle.rfind("dict:", 0) == 0 && mc.method == "has") {
+            if (handle.rfind("dict:", 0) == 0 && methodName == "has") {
                 int id = to_int(handle.substr(5));
                 if (!mc.args.empty()) {
                     std::ostringstream key;
@@ -3788,7 +4474,7 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 }
                 return;
             }
-            if (handle.rfind("dict:", 0) == 0 && mc.method == "getOr") {
+            if (handle.rfind("dict:", 0) == 0 && methodName == "getOr") {
                 int id = to_int(handle.substr(5));
                 if (mc.args.size() >= 2) {
                     std::ostringstream key;
@@ -3803,7 +4489,7 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 }
                 return;
             }
-            if (handle.rfind("dict:", 0) == 0 && mc.method == "remove") {
+            if (handle.rfind("dict:", 0) == 0 && methodName == "remove") {
                 int id = to_int(handle.substr(5));
                 if (!mc.args.empty()) {
                     std::ostringstream key;
@@ -3816,17 +4502,17 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 }
                 return;
             }
-            if (handle.rfind("dict:", 0) == 0 && mc.method == "clear") {
+            if (handle.rfind("dict:", 0) == 0 && methodName == "clear") {
                 int id = to_int(handle.substr(5));
                 g_dicts[id].clear();
                 return;
             }
-            if (handle.rfind("dict:", 0) == 0 && mc.method == "size") {
+            if (handle.rfind("dict:", 0) == 0 && methodName == "size") {
                 int id = to_int(handle.substr(5));
                 env.vars["_"] = std::to_string((int)g_dicts[id].size());
                 return;
             }
-            if (handle.rfind("dict:", 0) == 0 && mc.method == "keys") {
+            if (handle.rfind("dict:", 0) == 0 && methodName == "keys") {
                 int id = to_int(handle.substr(5));
                 int lid = g_nextListId++;
                 g_lists[lid] = {};
@@ -3834,7 +4520,7 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 env.vars["_"] = std::string("list:") + std::to_string(lid);
                 return;
             }
-            if (handle.rfind("dict:", 0) == 0 && mc.method == "values") {
+            if (handle.rfind("dict:", 0) == 0 && methodName == "values") {
                 int id = to_int(handle.substr(5));
                 int lid = g_nextListId++;
                 g_lists[lid] = {};
@@ -3842,7 +4528,7 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 env.vars["_"] = std::string("list:") + std::to_string(lid);
                 return;
             }
-            if (handle.rfind("dict:", 0) == 0 && mc.method == "merge") {
+            if (handle.rfind("dict:", 0) == 0 && methodName == "merge") {
                 int id = to_int(handle.substr(5));
                 if (!mc.args.empty()) {
                     std::string otherHandle = eval_string(*mc.args[0], env);
@@ -3851,6 +4537,53 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                         for (const auto& kv : g_dicts[sourceId]) {
                             g_dicts[id][kv.first] = kv.second;
                         }
+                    }
+                }
+                return;
+            }
+            if (handle.rfind("struct:", 0) == 0) {
+                const std::string structName = handle.substr(7);
+                const StructDecl* sd = find_struct_decl(program, structName);
+                const Action* method = sd ? find_struct_method(*sd, methodName) : nullptr;
+                if (!method) {
+                    throw std::runtime_error("Unknown struct method: " + structName + "." + methodName);
+                }
+                if (program.strict && method->visibility != Visibility::Public && mc.objectName != "self") {
+                    throw std::runtime_error("Method not visible: " + methodName);
+                }
+                bool isHidden = false;
+                for (const auto& at : method->attributes) if (at.name == "hidden") { isHidden = true; break; }
+                if (isHidden && mc.objectName != "self") {
+                    throw std::runtime_error("Method hidden: " + methodName);
+                }
+
+                Env callEnv;
+                for (const auto& kv : globalVars_) callEnv.vars[kv.first] = kv.second;
+                for (size_t i = 0; i < method->params.size() && i < mc.args.size(); ++i) {
+                    callEnv.vars[method->params[i].name] = eval_string(*mc.args[i], env);
+                }
+
+                callEnv.vars["self"] = handle;
+                for (const auto& f : sd->fields) {
+                    const std::string objectField = mc.objectName + "." + f.name;
+                    auto fit = env.vars.find(objectField);
+                    const std::string value = (fit != env.vars.end()) ? fit->second : std::string{};
+                    callEnv.vars[f.name] = value;
+                    callEnv.vars["self." + f.name] = value;
+                }
+
+                ExecContext child;
+                exec_block(method->body, program, child, callEnv);
+                for (auto& th : child.threads) if (th.joinable()) th.join();
+
+                for (const auto& f : sd->fields) {
+                    const std::string selfKey = "self." + f.name;
+                    auto selfIt = callEnv.vars.find(selfKey);
+                    auto fieldIt = callEnv.vars.find(f.name);
+                    if (selfIt != callEnv.vars.end()) {
+                        env.vars[mc.objectName + "." + f.name] = selfIt->second;
+                    } else if (fieldIt != callEnv.vars.end()) {
+                        env.vars[mc.objectName + "." + f.name] = fieldIt->second;
                     }
                 }
                 return;
@@ -4082,6 +4815,11 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
             }
         }
         else {
+            for (const auto& ex : program.externs) {
+                if (ex.name == call.name) {
+                    throw std::runtime_error("Extern action not bound at runtime: " + call.name);
+                }
+            }
             // Fallback: treat as built-in call with side effects
             (void)eval_builtin_call(call.name, call.args, env);
         }

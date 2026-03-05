@@ -1,0 +1,15 @@
+; erelang IR v0
+entry main
+
+func main()
+  let age, 10
+  let GRADING, "A"
+  let math_score, 100.0
+  let name, "Alex"
+  let names, list_new("Alex", "Adam", "Bob")
+  print "Alex"
+  print "Adam"
+  print "Bob"
+  ret
+end
+

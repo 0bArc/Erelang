@@ -40,6 +40,17 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
                 case BinOp::And: case BinOp::Or: inferred={"bool"}; break;
                 default: inferred={"bool"}; break; // comparisons
             }
+        } else if constexpr (std::is_same_v<T, TernaryExpr>) {
+            auto ct = check(node.cond, ctx);
+            if (!TypeChecker::is_bool(ct) && ct.name != "unknown") {
+                DiagBuilder(result_, Severity::Error, "Ternary condition not bool", "TC012", ctx.actionName()).emit();
+            }
+            auto tt = check(node.thenExpr, ctx);
+            auto et = check(node.elseExpr, ctx);
+            if (tt.name == et.name) inferred = tt;
+            else if (tt.name == "unknown") inferred = et;
+            else if (et.name == "unknown") inferred = tt;
+            else inferred = {"unknown"};
         } else if constexpr (std::is_same_v<T, UnaryExpr>) {
             if (node.op == UnOp::AddressOf) inferred = {"pointer"};
             else if (node.op == UnOp::Deref) inferred = {"unknown"};
@@ -133,16 +144,86 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
             if (it != tc_.actions_.end()) {
                 tc_.actionUsage_[it->second->name].referenced = true;
                 if (it->second->params.size() != stmt.args.size()) DiagBuilder(result_, Severity::Error, "Param count mismatch calling action " + stmt.name, "TC020", ctx.actionName()).emit();
+            } else if (tc_.externActions_.count(stmt.name)) {
+                // extern action declared: allow unresolved runtime binding
             } else {
-                auto bIt = tc_.builtins_.find(stmt.name);
-                if (bIt == tc_.builtins_.end()) {
-                    DiagBuilder(result_, Severity::Error, "Unknown action: " + stmt.name, "TC001", ctx.actionName()).emit();
-                } else {
-                    auto& bi = bIt->second;
-                    if ((int)stmt.args.size() < bi.minParams || (bi.maxParams>=0 && (int)stmt.args.size() > bi.maxParams)) DiagBuilder(result_, Severity::Error, "Param count mismatch calling builtin " + stmt.name, "TC021", ctx.actionName()).emit();
+                static const std::unordered_set<std::string> deprecatedBuiltins = {
+                    "list_new", "list_push", "dict_new", "dict_set"
+                };
+                if (deprecatedBuiltins.count(stmt.name) > 0) {
+                    DiagBuilder(result_, Severity::Warning,
+                        "Deprecated builtin: " + stmt.name + " (prefer array/map literals and method-style usage)",
+                        "TC140", ctx.actionName()).emit();
+                }
+                bool externResolved = false;
+                if (stmt.name.find("::") == std::string::npos) {
+                    const std::string suffix = "::" + stmt.name;
+                    std::string foundExtern;
+                    for (const auto& extName : tc_.externActions_) {
+                        if (extName == stmt.name ||
+                            (extName.size() > suffix.size() && extName.rfind(suffix) == extName.size() - suffix.size())) {
+                            if (!foundExtern.empty()) {
+                                foundExtern.clear();
+                                break;
+                            }
+                            foundExtern = extName;
+                        }
+                    }
+                    externResolved = !foundExtern.empty();
+                }
+                if (!externResolved) {
+                    auto bIt = tc_.builtins_.find(stmt.name);
+                    if (bIt == tc_.builtins_.end()) {
+                        DiagBuilder(result_, Severity::Error, "Unknown action: " + stmt.name, "TC001", ctx.actionName()).emit();
+                    } else {
+                        auto& bi = bIt->second;
+                        if ((int)stmt.args.size() < bi.minParams || (bi.maxParams>=0 && (int)stmt.args.size() > bi.maxParams)) DiagBuilder(result_, Severity::Error, "Param count mismatch calling builtin " + stmt.name, "TC021", ctx.actionName()).emit();
+                    }
                 }
             }
             for (auto& a : stmt.args) expr_.check(a, ctx);
+        } else if constexpr (std::is_same_v<T, MethodCallStmt>) {
+            for (auto& a : stmt.args) expr_.check(a, ctx);
+            std::string methodName = stmt.method;
+            if (methodName == "put") methodName = "set";
+            if (methodName == "contains") methodName = "has";
+            if (methodName == "containsKey") methodName = "has";
+            if (methodName == "getOrDefault") methodName = "getOr";
+
+            if (auto* owner = scopes.lookup(stmt.objectName)) {
+                if (owner->type.name.rfind("entity:", 0) == 0) {
+                    const std::string entityName = owner->type.name.substr(7);
+                    auto mit = tc_.methods_.find(entityName);
+                    if (mit != tc_.methods_.end()) {
+                        auto hit = mit->second.find(methodName);
+                        if (hit == mit->second.end()) {
+                            DiagBuilder(result_, Severity::Error, "Unknown method: " + stmt.objectName + "." + methodName, "TC022", ctx.actionName()).emit();
+                        } else {
+                            tc_.methodUsage_[entityName][methodName].referenced = true;
+                            if (hit->second->params.size() != stmt.args.size()) {
+                                DiagBuilder(result_, Severity::Error, "Param count mismatch calling method " + stmt.objectName + "." + methodName, "TC023", ctx.actionName()).emit();
+                            }
+                        }
+                    }
+                } else if (owner->type.name.rfind("struct:", 0) == 0 && ctx.program) {
+                    const std::string structName = owner->type.name.substr(7);
+                    const StructDecl* sd = nullptr;
+                    for (const auto& s : ctx.program->structs) {
+                        if (s.name == structName) { sd = &s; break; }
+                    }
+                    if (sd) {
+                        const Action* method = nullptr;
+                        for (const auto& m : sd->methods) {
+                            if (m.name == methodName) { method = &m; break; }
+                        }
+                        if (!method) {
+                            DiagBuilder(result_, Severity::Error, "Unknown struct method: " + structName + "." + methodName, "TC024", ctx.actionName()).emit();
+                        } else if (method->params.size() != stmt.args.size()) {
+                            DiagBuilder(result_, Severity::Error, "Param count mismatch calling struct method " + structName + "." + methodName, "TC025", ctx.actionName()).emit();
+                        }
+                    }
+                }
+            }
         } else if constexpr (std::is_same_v<T, LetStmt>) {
             if (scopes.lookup(stmt.name)) DiagBuilder(result_, Severity::Error, "Variable redeclaration: " + stmt.name, "TC030", ctx.actionName()).emit();
             VarInfo vi; vi.type = expr_.check(stmt.value, ctx); vi.isConst = stmt.isConst; vi.assigned=true;
@@ -171,6 +252,10 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                 } else if (decl == "any") {
                     expected = "unknown";
                 } else if (decl == "int") {
+                    expected = "int";
+                } else if (decl == "u8" || decl == "u16" || decl == "u32" || decl == "u64" ||
+                           decl == "i8" || decl == "i16" || decl == "i32" || decl == "i64" ||
+                           decl == "uint" || decl == "unsigned" || decl == "unsignedint") {
                     expected = "int";
                 } else if (decl == "double" || decl == "float") {
                     expected = "double";
@@ -269,6 +354,11 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
             auto guard = scopes.push();
             CheckContext inner = ctx; inner.loop = LoopCtx::InLoop; inner.scopes = ctx.scopes;
             check_block(*stmt.body, inner, scopes, retType);
+        } else if constexpr (std::is_same_v<T, DoWhileStmt>) {
+            auto guard = scopes.push();
+            CheckContext inner = ctx; inner.loop = LoopCtx::InLoop; inner.scopes = ctx.scopes;
+            check_block(*stmt.body, inner, scopes, retType);
+            expr_.require_bool(stmt.cond, ctx, "TC064", "Do-while condition not bool");
         } else if constexpr (std::is_same_v<T, RepeatStmt>) {
             auto countType = expr_.check(stmt.count, ctx);
             if (countType.name != "unknown" && !TypeChecker::is_int(countType)) {
@@ -338,8 +428,10 @@ ReturnFlow StmtChecker::check_block(const Block& b, CheckContext& ctx, ScopeMana
 void TypeChecker::pass_collect(const Program& program) {
     actions_.clear(); entities_.clear(); methods_.clear(); entityFields_.clear();
     actionUsage_.clear(); entityUsage_.clear(); methodUsage_.clear();
+    externActions_.clear();
     init_builtins();
     for (const auto& a : program.actions) { actions_[a.name] = &a; actionUsage_[a.name]; }
+    for (const auto& e : program.externs) { externActions_.insert(e.name); }
     for (const auto& e : program.entities) {
         entities_[e.name] = &e; entityUsage_[e.name];
         std::unordered_map<std::string,const Action*> mm; std::unordered_set<std::string> fields;
@@ -355,6 +447,14 @@ void TypeChecker::pass_check_program(const Program& program, TCResult& out) {
     for (auto& a : program.actions) if (!seen.insert(a.name).second) DiagBuilder(out, Severity::Error, "Duplicate action: " + a.name, "TC100", a.name).emit();
     std::unordered_set<std::string> seenStruct;
     for (auto& s : program.structs) if (!seenStruct.insert(s.name).second) DiagBuilder(out, Severity::Error, "Duplicate struct: " + s.name, "TC104", s.name).emit();
+    for (auto& s : program.structs) {
+        std::unordered_set<std::string> structMethodSeen;
+        for (auto& m : s.methods) {
+            if (!structMethodSeen.insert(m.name).second) {
+                DiagBuilder(out, Severity::Error, "Duplicate method " + m.name + " in struct " + s.name, "TC107", s.name).emit();
+            }
+        }
+    }
     std::unordered_set<std::string> seenEnum;
     for (auto& e : program.enums) if (!seenEnum.insert(e.name).second) DiagBuilder(out, Severity::Error, "Duplicate enum: " + e.name, "TC105", e.name).emit();
     std::unordered_set<std::string> seenAlias;
@@ -401,10 +501,19 @@ void TypeChecker::init_builtins() {
     add("now_ms",0,0,"int"); add("now_iso",0,0,"string");
     add("env",1,1,"string"); add("username",0,0,"string"); add("machine_guid",0,0,"string"); add("computer_name",0,0,"string"); add("volume_serial",0,0,"string"); add("hwid",0,0,"string"); add("rand_int",0,2,"int"); add("uuid",0,0,"string");
     add("args_count",0,0,"int"); add("args_get",1,1,"string");
+    add("os.args",0,0,"array<any>"); add("os.args_count",0,0,"int"); add("os.args_get",1,1,"string");
     add("exec",1,1,"int"); add("run_file",1,1,"void"); add("run_bat",1,1,"void"); add("read_line",0,0,"string"); add("input",0,1,"string"); add("prompt",1,1,"string");
+    add("os.exec",1,1,"int"); add("spawn",1,1,"int"); add("os.spawn",1,1,"int"); add("exit",1,1,"void"); add("stdin_read",0,0,"string");
+    add("stderr_print",1,1,"void");
+    add("option_none",0,0,"unknown"); add("option_some",1,1,"unknown"); add("option_is_some",1,1,"bool"); add("option_unwrap_or",2,2,"unknown");
+    add("option.none",0,0,"unknown"); add("option.some",1,1,"unknown"); add("option.is_some",1,1,"bool"); add("option.unwrap_or",2,2,"unknown");
+    add("result_ok",1,1,"unknown"); add("result_err",1,1,"unknown"); add("result_is_ok",1,1,"bool"); add("result_unwrap_or",2,2,"unknown");
+    add("result.ok",1,1,"unknown"); add("result.err",1,1,"unknown"); add("result.is_ok",1,1,"bool"); add("result.unwrap_or",2,2,"unknown");
     add("toint",1,1,"int"); add("toInt",1,1,"int"); add("tostr",1,1,"string"); add("toString",1,1,"string"); add("tofloat",1,1,"double"); add("tobool",1,1,"bool");
     add("dynamic_cast",2,2,"unknown");
     add("reinterpret_cast",2,2,"pointer");
+    add("bit_cast",2,2,"unknown");
+    add("bitcast",2,2,"unknown");
     add("__builtin_sizeof",1,1,"int");
     add("__builtin_alignof",1,1,"int");
     add("__builtin_typeof",1,1,"string");
@@ -416,6 +525,8 @@ void TypeChecker::init_builtins() {
     add("ptr_set",2,2,"void");
     add("ptr_free",1,1,"void");
     add("ptr_valid",1,1,"bool");
+    add("malloc",1,1,"pointer");
+    add("free",1,1,"void");
     add("make_unique",1,1,"pointer");
     add("make_shared",1,1,"pointer");
     add("unique_reset",1,1,"void");
@@ -425,14 +536,33 @@ void TypeChecker::init_builtins() {
     add("string.starts_with",2,2,"bool"); add("string.ends_with",2,2,"bool"); add("string.find",2,2,"int"); add("string.substr",2,3,"string"); add("string.len",1,1,"int");
     // Filesystem
     add("read_text",1,1,"string"); add("write_text",2,2,"void"); add("append_text",2,2,"void"); add("file_exists",1,1,"bool"); add("mkdirs",1,1,"void"); add("copy_file",2,2,"bool"); add("move_file",2,2,"bool"); add("delete_file",1,1,"bool");
+    add("file_size",1,1,"int");
     add("list_files",1,1,"unknown"); add("cwd",0,0,"string"); add("chdir",1,1,"bool");
     add("path_join",1,-1,"string"); add("path_dirname",1,1,"string"); add("path_basename",1,1,"string"); add("path_ext",1,1,"string");
+    add("file_mtime",1,1,"int");
+    add("file_open",2,2,"string"); add("file_close",1,1,"bool"); add("file_read",1,2,"string");
+    add("file_write",2,2,"int"); add("file_seek",2,3,"bool"); add("file_tell",1,1,"int"); add("file_flush",1,1,"bool");
+    add("fopen",2,2,"string"); add("fclose",1,1,"bool"); add("fread",1,2,"string");
+    add("fwrite",2,2,"int"); add("fseek",2,3,"bool"); add("ftell",1,1,"int"); add("fflush",1,1,"bool");
+    add("strbuf_new",0,1,"string"); add("strbuf_append",2,2,"void"); add("strbuf_clear",1,1,"void");
+    add("strbuf_len",1,1,"int"); add("strbuf_to_string",1,1,"string"); add("strbuf_free",1,1,"void"); add("strbuf_reserve",2,2,"void");
+    add("string_buffer_new",0,1,"string"); add("string_buffer_append",2,2,"void"); add("string_buffer_clear",1,1,"void");
+    add("string_buffer_len",1,1,"int"); add("string_buffer_to_string",1,1,"string"); add("string_buffer_free",1,1,"void"); add("string_buffer_reserve",2,2,"void");
+    add("color.red",1,1,"string"); add("color.green",1,1,"string"); add("color.yellow",1,1,"string"); add("color.blue",1,1,"string");
+    add("color.magenta",1,1,"string"); add("color.cyan",1,1,"string"); add("color.bold",1,1,"string"); add("color.reset",0,0,"string");
     // Collections
     add("list_new",0,-1,"array<any>"); add("list_push",2,2,"void"); add("list_get",2,2,"unknown"); add("list_len",1,1,"int"); add("list_join",2,2,"string"); add("list_clear",1,1,"void"); add("list_remove_at",2,2,"void");
+    add("set_new",0,-1,"unknown"); add("set_add",2,2,"bool"); add("set_has",2,2,"bool"); add("set_remove",2,2,"bool"); add("set_size",1,1,"int"); add("set_values",1,1,"array<any>");
+    add("set_union",2,2,"unknown"); add("set_intersect",2,2,"unknown"); add("set_diff",2,2,"unknown");
+    add("queue_new",0,-1,"unknown"); add("queue_push",2,2,"void"); add("queue_pop",1,1,"unknown"); add("queue_peek",1,1,"unknown"); add("queue_len",1,1,"int"); add("queue_clear",1,1,"void");
     add("dict_new",0,-1,"map<any,any>"); add("dict_set",3,-1,"void"); add("dict_get",2,-1,"unknown"); add("dict_has",2,-1,"bool"); add("dict_keys",1,1,"array<any>"); add("dict_values",1,1,"array<any>");
     add("dict_get_or",3,-1,"unknown"); add("dict_remove",2,-1,"bool"); add("dict_clear",1,1,"void"); add("dict_size",1,1,"int");
     add("dict_merge",2,2,"void"); add("dict_clone",1,1,"map<any,any>"); add("dict_items",1,1,"array<any>"); add("dict_entries",1,1,"array<any>");
     add("dict_set_path",3,3,"void"); add("dict_get_path",2,3,"unknown"); add("dict_has_path",2,2,"bool"); add("dict_remove_path",2,2,"bool");
+    add("hashmap_new",0,-1,"map<any,any>"); add("hashmap_set",3,-1,"void"); add("hashmap_put",3,-1,"void"); add("hashmap_get",2,-1,"unknown");
+    add("hashmap_has",2,-1,"bool"); add("hashmap_contains",2,-1,"bool"); add("hashmap_get_or",3,-1,"unknown"); add("hashmap_get_or_default",3,-1,"unknown");
+    add("hashmap_remove",2,-1,"bool"); add("hashmap_clear",1,1,"void"); add("hashmap_size",1,1,"int"); add("hashmap_keys",1,1,"array<any>");
+    add("hashmap_values",1,1,"array<any>"); add("hashmap_merge",2,2,"void");
     add("table_new",0,0,"unknown"); add("table_put",4,4,"void"); add("table_get",3,4,"unknown"); add("table_has",3,3,"bool");
     add("table_remove",3,3,"bool"); add("table_rows",1,1,"unknown"); add("table_columns",1,1,"unknown"); add("table_row_keys",2,2,"unknown");
     add("table_clear_row",2,2,"void"); add("table_count_row",2,2,"int");
@@ -442,6 +572,7 @@ void TypeChecker::init_builtins() {
     add("network.debug.enable",0,1,"string"); add("network.debug.disable",0,0,"string");
     add("network.debug.status",0,0,"string"); add("network.debug.last",0,0,"string");
     add("network.debug.clear",0,0,"string"); add("network.debug.log_tail",0,1,"string");
+    add("char_is_digit",1,1,"bool"); add("char_is_space",1,1,"bool"); add("char_is_alpha",1,1,"bool"); add("char_is_ident_start",1,1,"bool"); add("char_is_ident_part",1,1,"bool");
     // Language info
     add("language_name",0,0,"string"); add("language_version",0,0,"string"); add("language_about",0,0,"string"); add("language_limitations",0,0,"string");
     // GUI / windowing (Windows only semantics, but we still typecheck symbol existence)

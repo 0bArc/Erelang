@@ -10,9 +10,9 @@ const STRUCT_RE = /^\s*(?:public|private|export)?\s*struct\s+([A-Za-z_][A-Za-z0-
 const ENUM_RE = /^\s*(?:public|private|export)?\s*enum\s+([A-Za-z_][A-Za-z0-9_]*)/;
 const TYPE_ALIAS_RE = /^\s*(?:public|private|export)?\s*type\s+([A-Za-z_][A-Za-z0-9_]*)\s*=/;
 const HOOK_RE   = /^\s*hook\s+([A-Za-z_][A-Za-z0-9_]*)/;
-const LET_RE    = /^\s*(?:let|const|constexpr|static|int|string|str|bool|char|auto|double|float|array|dictionary|Array<[^>]+>|Map<[^>]+>)\s+([A-Za-z_][A-Za-z0-9_]*)/;
+const LET_RE    = /^\s*(?:let|const|constexpr|static|int|string|str|bool|char|auto|double|float|array|dictionary|Array<[^>]+>|Map<[^>]+>|HashMap<[^>]+>)\s+([A-Za-z_][A-Za-z0-9_]*)/;
 const GLOBAL_RE = /^\s*(?:public|private|export)?\s*global\s+([A-Za-z_][A-Za-z0-9_]*)/;
-const FOREACH_RE = /^\s*for\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)(?:\s*,\s*([A-Za-z_][A-Za-z0-9_]*))?\s*:\s*[^)]+\)/;
+const FOREACH_RE = /^\s*for\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)(?:\s*,\s*([A-Za-z_][A-Za-z0-9_]*))?\s*(?::|in)\s*[^)]+\)/;
 const INCLUDE_ALIAS_RE = /^\s*#include\s*(<[^>]+>|"[^"]+")\s*(?:as\s+([A-Za-z_][A-Za-z0-9_]*))?/;
 const IMPORT_ALIAS_RE = /^\s*import\s+([A-Za-z_][A-Za-z0-9_./-]*)\s*(?:as\s+([A-Za-z_][A-Za-z0-9_]*))?/;
 
@@ -23,8 +23,34 @@ const MODULE_METHODS_BY_SPEC: Record<string, string[]> = {
 
 const CHAIN_METHODS = ['lstrip', 'rstrip', 'strip', 'lower', 'upper'];
 const ARRAY_METHODS = ['forEach', 'push', 'get', 'len'];
-const DICTIONARY_METHODS = ['set', 'get', 'has', 'getOr', 'remove', 'clear', 'size', 'keys', 'values', 'merge'];
-const LANGUAGE_KEYWORDS = ['entity','action','field','let','const','global','int','double','string','bool','char','auto','Array','Map','constexpr','static','struct','enum','type','match','try','catch','async','await','namespace','unsafe','repeat','static_cast','dynamic_cast','reinterpret_cast','sizeof','typeof','decltype','alignof','offsetof','is_base_of'];
+const DICTIONARY_METHODS = ['set', 'put', 'get', 'has', 'contains', 'containsKey', 'getOr', 'getOrDefault', 'remove', 'clear', 'size', 'keys', 'values', 'merge'];
+const LANGUAGE_KEYWORDS = ['entity','action','field','let','const','global','int','double','string','bool','char','auto','Array','Map','HashMap','constexpr','static','struct','enum','type','match','try','catch','async','await','namespace','unsafe','repeat','do','extern','static_cast','dynamic_cast','reinterpret_cast','bit_cast','sizeof','typeof','decltype','alignof','offsetof','is_base_of','#if','#elif','#else','#endif','#ifdef','#ifndef','#define'];
+
+function shouldRequireSemicolon(line: string): boolean {
+  const t = line.trim();
+  if (!t) return false;
+  if (t.startsWith('//') || t.startsWith('#') || t.startsWith('@')) return false;
+  if (t.endsWith(';') || t.endsWith('{') || t.endsWith('}') || t.endsWith(':')) return false;
+  if (/^(if|else|while|for|switch|match|try|catch|do|repeat|unsafe|parallel|namespace)\b/.test(t)) return false;
+  if (/^(public|private|export)?\s*(action|entity|struct|enum|hook)\b/.test(t)) return false;
+  return /^(let|const|constexpr|static|global|type|import|run|print|sleep|return|await|fire|input|[A-Za-z_][A-Za-z0-9_]*\s*(\.|=|\())/.test(t);
+}
+
+function validateSemicolons(document: vscode.TextDocument, collection: vscode.DiagnosticCollection): void {
+  if (document.languageId !== 'erelang') return;
+  const diagnostics: vscode.Diagnostic[] = [];
+  for (let i = 0; i < document.lineCount; i++) {
+    const line = document.lineAt(i);
+    if (!shouldRequireSemicolon(line.text)) continue;
+    const trimmedLength = line.text.trimEnd().length;
+    const start = Math.max(0, trimmedLength - 1);
+    const range = new vscode.Range(i, start, i, trimmedLength);
+    const diagnostic = new vscode.Diagnostic(range, 'Missing semicolon (;)', vscode.DiagnosticSeverity.Error);
+    diagnostic.source = 'erelang';
+    diagnostics.push(diagnostic);
+  }
+  collection.set(document.uri, diagnostics);
+}
 
 function isForeachColonContext(linePrefix: string): boolean {
   const loopPrefix = /\bfor\s*\([^)]*:\s*[A-Za-z_]*$/;
@@ -36,23 +62,52 @@ function isLikelyDictLiteralValueContext(linePrefix: string): boolean {
   return dictKeyValuePrefix.test(linePrefix);
 }
 
+function interpolationPrefixInPrintString(linePrefix: string): string | null {
+  const printIndex = linePrefix.indexOf('print');
+  if (printIndex < 0) return null;
+  const quoteIndex = linePrefix.indexOf('"', printIndex);
+  if (quoteIndex < 0) return null;
+
+  const stringPortion = linePrefix.slice(quoteIndex + 1);
+  const lastOpen = stringPortion.lastIndexOf('{');
+  if (lastOpen < 0) return null;
+  const afterOpen = stringPortion.slice(lastOpen + 1);
+  if (afterOpen.includes('}')) return null;
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(afterOpen) && afterOpen.length > 0) return null;
+  return afterOpen;
+}
+
 // Built‑in functions & keywords (extended)
 const BUILT_INS = [
   // Core / time / env
   'print','PRINT','sleep','now_ms','now_iso','env','username','computer_name','machine_guid','uuid','rand_int','hwid','args_count','args_get','input',
+  'os.args','os.args_count','os.args_get',
   'toint','toInt','tofloat','tostr','toString',
-  'dynamic_cast','reinterpret_cast','to_json','from_json',
+  'dynamic_cast','reinterpret_cast','bit_cast','bitcast','to_json','from_json',
   'sizeof','typeof','decltype','alignof','offsetof','is_base_of',
   'string.starts_with','string.ends_with','string.find','string.substr','string.len',
-  'ptr_new','ptr_get','ptr_set','ptr_free','ptr_valid','make_unique','make_shared','unique_reset','shared_reset',
+  'ptr_new','ptr_get','ptr_set','ptr_free','ptr_valid','malloc','free','make_unique','make_shared','unique_reset','shared_reset',
   'string.lstrip','string.rstrip','string.strip','string.lower','string.upper',
   // Filesystem
   'read_text','write_text','append_text','file_exists','mkdirs','copy_file','move_file','delete_file','list_files','cwd','chdir',
+  'exec','os.exec','spawn','os.spawn','exit','read_line','stdin_read','stderr_print','file_mtime','file_size',
+  'option_none','option_some','option_is_some','option_unwrap_or',
+  'option.none','option.some','option.is_some','option.unwrap_or',
+  'result_ok','result_err','result_is_ok','result_unwrap_or',
+  'result.ok','result.err','result.is_ok','result.unwrap_or',
+  'file_open','file_close','file_read','file_write','file_seek','file_tell','file_flush',
+  'fopen','fclose','fread','fwrite','fseek','ftell','fflush',
   'path_join','path_dirname','path_basename','path_ext',
+  'strbuf_new','strbuf_append','strbuf_clear','strbuf_len','strbuf_to_string','strbuf_free','strbuf_reserve',
+  'string_buffer_new','string_buffer_append','string_buffer_clear','string_buffer_len','string_buffer_to_string','string_buffer_free','string_buffer_reserve',
+  'color.red','color.green','color.yellow','color.blue','color.magenta','color.cyan','color.bold','color.reset',
   // Collections
   'list_new','list_push','list_get','list_len','list_join','list_clear','list_remove_at',
+  'set_new','set_add','set_has','set_remove','set_size','set_values','set_union','set_intersect','set_diff',
+  'queue_new','queue_push','queue_pop','queue_peek','queue_len','queue_clear',
   'dict_new','dict_set','dict_get','dict_has','dict_keys','dict_values','dict_get_or','dict_remove','dict_clear','dict_size','dict_merge','dict_clone','dict_items','dict_entries',
   'dict_set_path','dict_get_path','dict_has_path','dict_remove_path',
+  'hashmap_new','hashmap_set','hashmap_put','hashmap_get','hashmap_has','hashmap_contains','hashmap_get_or','hashmap_get_or_default','hashmap_remove','hashmap_clear','hashmap_size','hashmap_keys','hashmap_values','hashmap_merge',
   'table_new','table_put','table_get','table_has','table_remove','table_rows','table_columns','table_row_keys','table_clear_row','table_count_row',
   // Network
   'http_get','http_download','hls_download_best','url_encode','network.ip.flush','network.ip.release','network.ip.renew','network.ip.registerdns',
@@ -75,8 +130,14 @@ const BUILT_INS = [
   // Threads
   'thread_run','thread_join','thread_done',
   // Collatz / math extras
-  'collatz_len','collatz_sweep','collatz_best_steps','collatz_avg_steps'
+  'collatz_len','collatz_sweep','collatz_best_steps','collatz_avg_steps',
+  // Character helpers
+  'char_is_digit','char_is_space','char_is_alpha','char_is_ident_start','char_is_ident_part'
 ];
+
+const DEPRECATED_BUILT_INS = new Set<string>([
+  'list_new', 'list_push', 'dict_new', 'dict_set'
+]);
 
 interface CollectedSymbols {
   entities: Set<string>;
@@ -308,7 +369,7 @@ function collect(document: vscode.TextDocument, uptoLine: number = document.line
     m = HOOK_RE.exec(text); if (m) out.hooks.add(m[1]);
     m = GLOBAL_RE.exec(text); if (m) out.globals.add(m[1]);
     m = LET_RE.exec(text); if (m) out.locals.add(m[1]);
-    const declMatch = /^\s*(let|const|constexpr|static|int|string|str|bool|char|auto|double|float|array|dictionary)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)\s*$/.exec(text);
+    const declMatch = /^\s*(let|const|constexpr|static|int|string|str|bool|char|auto|double|float|array|dictionary|hashmap)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)\s*$/.exec(text);
     if (declMatch) {
       const typeWord = declMatch[1].toLowerCase();
       const varName = declMatch[2];
@@ -316,16 +377,16 @@ function collect(document: vscode.TextDocument, uptoLine: number = document.line
       if (typeWord === 'array' || rhs.startsWith('list_new(') || rhs.startsWith('[')) {
         out.arrays.add(varName);
       }
-      if (typeWord === 'dictionary' || rhs.startsWith('dict_new(') || rhs.startsWith('{')) {
+      if (typeWord === 'dictionary' || typeWord === 'hashmap' || rhs.startsWith('dict_new(') || rhs.startsWith('hashmap_new(') || rhs.startsWith('{')) {
         out.dictionaries.add(varName);
       }
     }
-    const typedDeclMatch = /^\s*(?:constexpr\s+)?(?:static\s+)?(Array<[^>]+>|Map<[^>]+>)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(text);
+    const typedDeclMatch = /^\s*(?:constexpr\s+)?(?:static\s+)?(Array<[^>]+>|Map<[^>]+>|HashMap<[^>]+>)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(text);
     if (typedDeclMatch) {
       const typeWord = typedDeclMatch[1];
       const varName = typedDeclMatch[2];
       if (typeWord.startsWith('Array<')) out.arrays.add(varName);
-      if (typeWord.startsWith('Map<')) out.dictionaries.add(varName);
+      if (typeWord.startsWith('Map<') || typeWord.startsWith('HashMap<')) out.dictionaries.add(varName);
       out.locals.add(varName);
     }
     if (activeStruct) {
@@ -351,6 +412,32 @@ class ErelangCompletionProvider implements vscode.CompletionItemProvider {
   provideCompletionItems(doc: vscode.TextDocument, pos: vscode.Position): vscode.CompletionItem[] {
     const linePrefix = doc.lineAt(pos.line).text.slice(0, pos.character);
     const col = collect(doc, pos.line);
+
+    const interpolationPartial = interpolationPrefixInPrintString(linePrefix);
+    if (interpolationPartial !== null) {
+      const partial = interpolationPartial;
+      const names = new Set<string>([
+        ...col.locals,
+        ...col.globals,
+        ...col.fields,
+        ...col.actions,
+      ]);
+      return [...names]
+        .filter((name) => partial.length === 0 || name.startsWith(partial))
+        .map((name) => {
+          const ci = new vscode.CompletionItem(name, vscode.CompletionItemKind.Variable);
+          ci.insertText = `${name}}`;
+          ci.detail = 'interpolation variable';
+          return ci;
+        });
+    }
+
+    if (/^\s*print\s*$/.test(linePrefix)) {
+      const ci = new vscode.CompletionItem('print "{value}";', vscode.CompletionItemKind.Snippet);
+      ci.insertText = new vscode.SnippetString('print "{$1}";');
+      ci.detail = 'print interpolation';
+      return [ci];
+    }
 
     const includeItems = provideIncludePathCompletions(doc, linePrefix);
     if (includeItems) return includeItems;
@@ -460,7 +547,12 @@ class ErelangCompletionProvider implements vscode.CompletionItemProvider {
       if (seen.has(b)) continue;
       seen.add(b);
       const ci = new vscode.CompletionItem(b, vscode.CompletionItemKind.Function);
-      ci.detail = 'builtin';
+      if (DEPRECATED_BUILT_INS.has(b)) {
+        ci.detail = 'builtin (deprecated)';
+        ci.tags = [vscode.CompletionItemTag.Deprecated];
+      } else {
+        ci.detail = 'builtin';
+      }
       ci.sortText = `z_${b}`;
       items.push(ci);
     }
@@ -504,8 +596,19 @@ class ErelangWorkspaceSymbolProvider implements vscode.WorkspaceSymbolProvider {
 
 export function activate(context: vscode.ExtensionContext) {
   console.log('Erelang language extension active');
+  const semicolonDiagnostics = vscode.languages.createDiagnosticCollection('erelang-semicolons');
+  context.subscriptions.push(semicolonDiagnostics);
+
+  const refreshSemicolons = (doc: vscode.TextDocument) => validateSemicolons(doc, semicolonDiagnostics);
+  context.subscriptions.push(vscode.workspace.onDidOpenTextDocument(refreshSemicolons));
+  context.subscriptions.push(vscode.workspace.onDidChangeTextDocument((e) => refreshSemicolons(e.document)));
+  context.subscriptions.push(vscode.workspace.onDidSaveTextDocument(refreshSemicolons));
+  for (const document of vscode.workspace.textDocuments) {
+    refreshSemicolons(document);
+  }
+
   context.subscriptions.push(
-    vscode.languages.registerCompletionItemProvider({ language: 'erelang' }, new ErelangCompletionProvider(), '.', ':')
+    vscode.languages.registerCompletionItemProvider({ language: 'erelang' }, new ErelangCompletionProvider(), '.', ':', '{', '"')
   );
   context.subscriptions.push(
     vscode.languages.registerDocumentSymbolProvider({ language: 'erelang' }, new ErelangDocumentSymbolProvider())

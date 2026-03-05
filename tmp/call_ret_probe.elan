@@ -1,0 +1,10 @@
+public action add(a: int, b: int): int {
+    return a + b;
+}
+
+public action main() {
+    int value = add(2, 3);
+    print "sum:{value}";
+}
+
+run main;

@@ -125,6 +125,7 @@ private:
     std::unordered_map<std::string, EntityUsage> entityUsage_;
     std::unordered_map<std::string, std::unordered_map<std::string, MethodUsage>> methodUsage_;
     std::unordered_map<std::string, BuiltinInfo> builtins_;
+    std::unordered_set<std::string> externActions_;
 };
 
 } // namespace erelang

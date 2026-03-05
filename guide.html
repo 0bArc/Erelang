@@ -77,6 +77,7 @@
       <div class="toc-group">
         <h2>Quick Links</h2>
         <a class="toc-item level-1" href="#top">Top</a>
+        <a class="toc-item level-1" href="#selfhost-update">2026 Self-Hosting Update</a>
         <a class="toc-item level-1" href="#classic-doc">Classic Guide Source</a>
         <a class="toc-item level-1" href="#full-doc">Full Technical Source</a>
       </div>
@@ -191,6 +192,67 @@
             </ul>
           </div>
         </div>
+      </section>
+
+      <section class="card" id="selfhost-update">
+        <h2 class="section-title">2026 Self-Hosting Update</h2>
+        <article class="doc" aria-label="Self-hosting feature update">
+          <h3>Struct Member Methods</h3>
+          <p><code>struct</code> now supports member <code>action</code> methods with <code>self.field</code> assignment and field shorthand synchronization.</p>
+          <pre class="code"><code><span class="tok-kw">struct</span> Counter <span class="tok-op">{</span>
+  value: int
+  <span class="tok-kw">public</span> <span class="tok-kw">action</span> bump(step: int) <span class="tok-op">{</span>
+    self.value <span class="tok-op">=</span> value <span class="tok-op">+</span> step
+  <span class="tok-op">}</span>
+<span class="tok-op">}</span></code></pre>
+
+          <h3>HashMap Compatibility Layer</h3>
+          <p>Dictionary runtime APIs now expose HashMap aliases: <code>hashmap_new</code>, <code>hashmap_set</code>/<code>hashmap_put</code>, <code>hashmap_get</code>, <code>hashmap_has</code>/<code>hashmap_contains</code>, <code>hashmap_get_or</code>/<code>hashmap_get_or_default</code>, <code>hashmap_remove</code>, <code>hashmap_clear</code>, <code>hashmap_size</code>, <code>hashmap_keys</code>, <code>hashmap_values</code>, <code>hashmap_merge</code>.</p>
+
+          <h3>Low-Level Runtime Surface</h3>
+          <ul>
+            <li>Pointers/memory: <code>&amp;var</code>, <code>*ptr</code>, <code>*ptr = value</code>, <code>malloc</code>, <code>free</code>, and <code>ptr_*</code> helpers.</li>
+            <li>Casts: <code>static_cast</code>, <code>dynamic_cast</code>, <code>reinterpret_cast</code>, <code>bit_cast</code>, <code>bitcast</code>.</li>
+            <li>Direct file handles: <code>file_open/read/write/seek/tell/flush/close</code> plus C-style aliases <code>fopen/fread/fwrite/fseek/ftell/fflush/fclose</code>.</li>
+            <li>String buffers: <code>strbuf_*</code> and <code>string_buffer_*</code> aliases.</li>
+          </ul>
+
+          <h3>How to Use Pointers and <code>malloc/free</code></h3>
+          <pre class="code"><code><span class="tok-kw">public</span> <span class="tok-kw">action</span> main <span class="tok-op">{</span>
+  <span class="tok-kw">int</span> score <span class="tok-op">=</span> <span class="tok-number">7</span>
+  <span class="tok-kw">let</span> score_ptr <span class="tok-op">=</span> <span class="tok-op">&amp;</span>score
+  <span class="tok-kw">print</span> <span class="tok-op">*</span>score_ptr
+  <span class="tok-op">*</span>score_ptr <span class="tok-op">=</span> <span class="tok-number">88</span>
+
+  <span class="tok-kw">let</span> raw <span class="tok-op">=</span> malloc(<span class="tok-number">64</span>)
+  <span class="tok-builtin">ptr_set</span>(raw, <span class="tok-string">"payload"</span>)
+  <span class="tok-kw">print</span> <span class="tok-builtin">ptr_get</span>(raw)
+  free(raw)
+<span class="tok-op">}</span></code></pre>
+
+          <h3>When to Use Each Cast</h3>
+          <ul>
+            <li><code>static_cast&lt;T&gt;(x)</code>: normal compile-time/intended conversion (safest default for numeric/data shape conversion).</li>
+            <li><code>dynamic_cast&lt;T&gt;(x)</code>: checked cast for entity/object hierarchy style conversions.</li>
+            <li><code>reinterpret_cast&lt;T&gt;(x)</code>: reinterpret pointer/object identity without value conversion; use only for low-level interop.</li>
+            <li><code>bit_cast&lt;T&gt;(x)</code>: reinterpret raw bits (e.g., float bits to integer) with no arithmetic conversion.</li>
+          </ul>
+
+          <h3>Collection and Struct Methods</h3>
+          <p>Dictionary handles support method aliases: <code>put</code>, <code>contains</code>, <code>containsKey</code>, and <code>getOrDefault</code>. Struct methods call with dot syntax, e.g. <code>counter.bump(4)</code>.</p>
+
+          <h3>Self-Hosted Random Module (<code>rand</code>)</h3>
+          <p>First self-hosting utility module lives at <code>examples/std/rand.elan</code> and is implemented directly in Erelang (no C++ random helper required).</p>
+          <pre class="code"><code><span class="tok-directive">@erelang</span>
+<span class="tok-kw">import</span> <span class="tok-string">"std/rand.elan"</span> <span class="tok-kw">as</span> rand
+
+<span class="tok-kw">public</span> <span class="tok-kw">action</span> main <span class="tok-op">{</span>
+  <span class="tok-kw">print</span> rand.int()
+  <span class="tok-kw">print</span> rand.gen(<span class="tok-number">1</span>, <span class="tok-number">20000</span>)
+<span class="tok-op">}</span>
+
+<span class="tok-kw">run</span> main</code></pre>
+        </article>
       </section>
       </header>
 

@@ -1,0 +1,12 @@
+@erelang
+
+import "std/rand.elan" as rand;
+
+public action main {
+  let a = rand.int();
+  let b = rand.gen(1, 20000);
+  print "{a}";
+  print "{b}";
+}
+
+run main;

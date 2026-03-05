@@ -1,7 +1,9 @@
 @erelang
 
 public action main {
-    repeat 5 { print "Hi" }
+    int score = 7
+    let score_ptr = &score
+    print *score_ptr
 }
 
 run main

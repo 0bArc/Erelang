@@ -61,8 +61,6 @@ Desktop.ini
 # Crash dumps
 *.dmp
 
-# Devlog and debug output
-devlog/
 
 
 

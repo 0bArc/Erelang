@@ -62,8 +62,9 @@ Desktop.ini
 *.dmp
 
 
+*.html
 
-
+guide.html
 # Plugin build artifacts
 plugins/*/build/
 plugins/*/bin/

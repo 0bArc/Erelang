@@ -15,7 +15,7 @@ public action main {
   names.push_back("Emma");
   
   for (name : names) {
-    print "{name}";
+    print "";
   }
 }
 

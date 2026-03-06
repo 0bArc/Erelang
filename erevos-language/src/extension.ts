@@ -157,6 +157,11 @@ interface ImportedSymbols {
   allActions:     Set<string>;
 }
 
+interface PolicyCacheEntry {
+  mtimeMs: number;
+  values: Map<string, string>;
+}
+
 type PrintStringContext = {
   interpolation:           boolean;
   partial:                 string;
@@ -456,6 +461,7 @@ function includePathCompletions(doc: vscode.TextDocument, prefix: string): vscod
 // ─── Debug Logging ──────────────────────────────────────────────────────────
 
 let _debugChannel: vscode.OutputChannel | undefined;
+const _policyCache = new Map<string, PolicyCacheEntry>();
 
 function dbg(msg: string): void {
   if (!vscode.workspace.getConfiguration('erelang').get<boolean>('debugCompletion', false)) return;
@@ -464,6 +470,61 @@ function dbg(msg: string): void {
 
 function dbgCompletion(branch: string, pos: vscode.Position, prefix: string, detail?: string): void {
   dbg(`[completion] ${branch} @ ${pos.line + 1}:${pos.character + 1}  prefix="${prefix}"${detail ? '  ' + detail : ''}`);
+}
+
+function parsePolicyBoolean(raw: string | undefined, fallback: boolean): boolean {
+  if (!raw) return fallback;
+  const value = raw.trim().toLowerCase();
+  if (value === 'true' || value === '1' || value === 'yes' || value === 'on') return true;
+  if (value === 'false' || value === '0' || value === 'no' || value === 'off') return false;
+  return fallback;
+}
+
+function findPolicyFile(doc: vscode.TextDocument): string | null {
+  const folder = vscode.workspace.getWorkspaceFolder(doc.uri);
+  if (folder) {
+    const candidate = path.join(folder.uri.fsPath, 'policy.cfg');
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  for (const workspaceFolder of vscode.workspace.workspaceFolders ?? []) {
+    const candidate = path.join(workspaceFolder.uri.fsPath, 'policy.cfg');
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+function readPolicyValues(policyPath: string): Map<string, string> {
+  try {
+    const stat = fs.statSync(policyPath);
+    const cached = _policyCache.get(policyPath);
+    if (cached && cached.mtimeMs === stat.mtimeMs) {
+      return cached.values;
+    }
+
+    const values = new Map<string, string>();
+    const text = fs.readFileSync(policyPath, 'utf8');
+    for (const rawLine of text.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith('#')) continue;
+      const idx = line.indexOf('=');
+      if (idx <= 0) continue;
+      const key = line.slice(0, idx).trim().toLowerCase();
+      const value = line.slice(idx + 1).trim();
+      values.set(key, value);
+    }
+
+    _policyCache.set(policyPath, { mtimeMs: stat.mtimeMs, values });
+    return values;
+  } catch {
+    return new Map<string, string>();
+  }
+}
+
+function suggestVariablesInQuotesEnabled(doc: vscode.TextDocument): boolean {
+  const policyPath = findPolicyFile(doc);
+  if (!policyPath) return true;
+  const values = readPolicyValues(policyPath);
+  return parsePolicyBoolean(values.get('suggest_variable_in_quotes'), true);
 }
 
 // ─── Completion Provider ────────────────────────────────────────────────────
@@ -477,6 +538,11 @@ class ErelangCompletionProvider implements vscode.CompletionItemProvider {
     // ── Print / interpolation context ──────────────────────────────────
     const pctx = parsePrintStringContext(fullLine, pos.character);
     if (pctx) {
+      const allowPlainQuoteSuggest = suggestVariablesInQuotesEnabled(doc);
+      if (!pctx.interpolation && !allowPlainQuoteSuggest) {
+        dbgCompletion('print-ctx-disabled-by-policy', pos, prefix, 'suggest_variable_in_quotes=false');
+        return [];
+      }
       dbgCompletion('print-ctx', pos, prefix, pctx.interpolation ? 'interpolation' : 'plain');
       const names = new Set([...col.locals, ...col.globals, ...col.fields, ...col.actions]);
       const range = new vscode.Range(pos.line, pctx.replaceStart, pos.line, pctx.replaceEnd);
@@ -696,9 +762,15 @@ function shouldRetrigger(change: vscode.TextDocumentContentChangeEvent, prefix: 
   const typed   = change.text.length === 1 && /[A-Za-z0-9_]/.test(change.text);
   const openBrace = change.text.includes('{');
   const deleted = change.text.length === 0 && change.rangeLength > 0;
-  if (!typed && !openBrace && !deleted) return false;
-  if (change.text.includes('\n') || change.text.includes('\r')) return false;
+  const insertedNewline = change.text.includes('\n') || change.text.includes('\r');
+  if (!typed && !openBrace && !deleted && !insertedNewline) return false;
   if (/^\s*\/\//.test(prefix)) return false;   // inside comment
+
+  if (insertedNewline) {
+    // Keep suggestions responsive after pressing Enter (or accepting completion
+    // via Enter in some editor states) so autocomplete doesn't "die".
+    return true;
+  }
 
   const printCtx = parsePrintStringContext(fullLine, cursor.character);
   if (printCtx) {
@@ -738,20 +810,23 @@ export function activate(ctx: vscode.ExtensionContext) {
   ctx.subscriptions.push(
     vscode.workspace.onDidChangeTextDocument(event => {
       if (event.document.languageId !== 'erelang') return;
-      if (event.contentChanges.length !== 1) return;
+      if (event.contentChanges.length === 0) return;
       const editor = vscode.window.activeTextEditor;
       if (!editor || editor.document.uri.toString() !== event.document.uri.toString()) return;
 
-      const change   = event.contentChanges[0];
       const cursor   = editor.selection.active;
       const lineText = event.document.lineAt(cursor.line).text;
       const prefix   = lineText.slice(0, cursor.character);
-      if (!shouldRetrigger(change, prefix, lineText, cursor)) return;
+
+      const shouldTrigger = event.contentChanges.some(change =>
+        shouldRetrigger(change, prefix, lineText, cursor)
+      );
+      if (!shouldTrigger) return;
 
       if (retriggerTimer) clearTimeout(retriggerTimer);
       retriggerTimer = setTimeout(() => {
         void vscode.commands.executeCommand('editor.action.triggerSuggest');
-      }, 20);
+      }, 15);
     })
   );
 

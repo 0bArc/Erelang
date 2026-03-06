@@ -1,6 +1,7 @@
 #include "erelang/typechecker.hpp"
 #include <algorithm>
 #include <cctype>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace erelang {
@@ -253,13 +254,20 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
             } else if (tc_.externActions_.count(stmt.name)) {
                 // extern action declared: allow unresolved runtime binding
             } else {
-                static const std::unordered_set<std::string> deprecatedBuiltins = {
-                    "list_new", "list_push", "dict_new", "dict_set"
+                static const std::unordered_set<std::string> removedCollectionBuiltins = {
+                    "list_new", "list_push", "list_get", "list_len", "list_join", "list_clear", "list_remove_at",
+                    "dict_new", "dict_set", "dict_get", "dict_has", "dict_keys", "dict_values", "dict_get_or",
+                    "dict_remove", "dict_clear", "dict_size", "dict_merge", "dict_clone", "dict_items", "dict_entries",
+                    "dict_set_path", "dict_get_path", "dict_has_path", "dict_remove_path",
+                    "hashmap_new", "hashmap_set", "hashmap_put", "hashmap_get", "hashmap_has", "hashmap_contains",
+                    "hashmap_get_or", "hashmap_get_or_default", "hashmap_remove", "hashmap_clear", "hashmap_size",
+                    "hashmap_keys", "hashmap_values", "hashmap_merge"
                 };
-                if (deprecatedBuiltins.count(stmt.name) > 0) {
-                    DiagBuilder(result_, Severity::Warning,
-                        "Deprecated builtin: " + stmt.name + " (prefer array/map literals and method-style usage)",
-                        "TC140", ctx.actionName()).emit();
+                const bool removedCollectionBuiltin = removedCollectionBuiltins.count(stmt.name) > 0;
+                if (removedCollectionBuiltin) {
+                    DiagBuilder(result_, Severity::Error,
+                        "Collection helper removed: " + stmt.name + " (use method syntax on arrays/maps)",
+                        "TC141", ctx.actionName()).emit();
                 }
                 bool externResolved = false;
                 if (stmt.name.find("::") == std::string::npos) {
@@ -277,7 +285,7 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                     }
                     externResolved = !foundExtern.empty();
                 }
-                if (!externResolved) {
+                if (!externResolved && !removedCollectionBuiltin) {
                     auto bIt = tc_.builtins_.find(stmt.name);
                     if (bIt == tc_.builtins_.end()) {
                         DiagBuilder(result_, Severity::Error, "Unknown action: " + stmt.name, "TC001", ctx.actionName()).emit();
@@ -291,12 +299,93 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
         } else if constexpr (std::is_same_v<T, MethodCallStmt>) {
             for (auto& a : stmt.args) expr_.check(a, ctx);
             std::string methodName = stmt.method;
-            if (methodName == "put") methodName = "set";
-            if (methodName == "contains") methodName = "has";
-            if (methodName == "containsKey") methodName = "has";
-            if (methodName == "getOrDefault") methodName = "getOr";
+
+            auto valid_arity = [](size_t count, int minParams, int maxParams) {
+                if (static_cast<int>(count) < minParams) return false;
+                if (maxParams >= 0 && static_cast<int>(count) > maxParams) return false;
+                return true;
+            };
 
             if (auto* owner = scopes.lookup(stmt.objectName)) {
+                if (owner->type.name == "array<any>" || owner->type.name.rfind("array<", 0) == 0) {
+                    if (methodName == "append" || methodName == "push_back" || methodName == "emplace_back" || methodName == "emplace") methodName = "push";
+                    if (methodName == "pop_back") methodName = "pop";
+                    if (methodName == "remove_at" || methodName == "remove") methodName = "erase";
+                    if (methodName == "length") methodName = "len";
+                    if (methodName == "at") methodName = "get";
+                    if (methodName == "first") methodName = "front";
+                    if (methodName == "last") methodName = "back";
+
+                    static const std::unordered_map<std::string, std::pair<int, int>> arrayMethods = {
+                        {"forEach", {1, 1}},
+                        {"push", {1, 1}},
+                        {"insert", {2, 2}},
+                        {"set", {2, 2}},
+                        {"get", {1, 1}},
+                        {"len", {0, 0}},
+                        {"size", {0, 0}},
+                        {"clear", {0, 0}},
+                        {"erase", {1, 1}},
+                        {"pop", {0, 0}},
+                        {"front", {0, 0}},
+                        {"back", {0, 0}},
+                        {"empty", {0, 0}},
+                        {"contains", {1, 1}},
+                        {"find", {1, 1}},
+                        {"index_of", {1, 1}},
+                        {"join", {1, 1}},
+                        {"reserve", {1, 1}},
+                        {"capacity", {0, 0}},
+                        {"shrink_to_fit", {0, 0}}
+                    };
+                    auto hit = arrayMethods.find(methodName);
+                    if (hit == arrayMethods.end()) {
+                        DiagBuilder(result_, Severity::Error, "Unknown array method: " + stmt.objectName + "." + methodName, "TC022", ctx.actionName()).emit();
+                    } else if (!valid_arity(stmt.args.size(), hit->second.first, hit->second.second)) {
+                        DiagBuilder(result_, Severity::Error, "Param count mismatch calling array method " + stmt.objectName + "." + methodName, "TC023", ctx.actionName()).emit();
+                    }
+                    return;
+                }
+
+                if (owner->type.name == "map<any,any>" || owner->type.name.rfind("map<", 0) == 0) {
+                    if (methodName == "put" || methodName == "insert" || methodName == "emplace" || methodName == "try_emplace" || methodName == "insert_or_assign") methodName = "set";
+                    if (methodName == "contains" || methodName == "containsKey" || methodName == "count") methodName = "has";
+                    if (methodName == "getOrDefault" || methodName == "get_or" || methodName == "get_or_default") methodName = "getOr";
+                    if (methodName == "length") methodName = "len";
+                    if (methodName == "at") methodName = "get";
+                    if (methodName == "erase") methodName = "remove";
+
+                    static const std::unordered_map<std::string, std::pair<int, int>> mapMethods = {
+                        {"forEach", {1, 1}},
+                        {"set", {2, -1}},
+                        {"get", {1, -1}},
+                        {"has", {1, -1}},
+                        {"getOr", {2, -1}},
+                        {"remove", {1, -1}},
+                        {"clear", {0, 0}},
+                        {"size", {0, 0}},
+                        {"len", {0, 0}},
+                        {"empty", {0, 0}},
+                        {"keys", {0, 0}},
+                        {"values", {0, 0}},
+                        {"items", {0, 0}},
+                        {"entries", {0, 0}},
+                        {"merge", {1, 1}},
+                        {"clone", {0, 0}},
+                        {"set_path", {2, -1}},
+                        {"get_path", {1, -1}},
+                        {"has_path", {1, -1}},
+                        {"remove_path", {1, -1}}
+                    };
+                    auto hit = mapMethods.find(methodName);
+                    if (hit == mapMethods.end()) {
+                        DiagBuilder(result_, Severity::Error, "Unknown map method: " + stmt.objectName + "." + methodName, "TC022", ctx.actionName()).emit();
+                    } else if (!valid_arity(stmt.args.size(), hit->second.first, hit->second.second)) {
+                        DiagBuilder(result_, Severity::Error, "Param count mismatch calling map method " + stmt.objectName + "." + methodName, "TC023", ctx.actionName()).emit();
+                    }
+                    return;
+                }
+
                 if (owner->type.name.rfind("entity:", 0) == 0) {
                     const std::string entityName = owner->type.name.substr(7);
                     auto mit = tc_.methods_.find(entityName);
@@ -660,18 +749,9 @@ void TypeChecker::init_builtins() {
     add("color.red",1,1,"string"); add("color.green",1,1,"string"); add("color.yellow",1,1,"string"); add("color.blue",1,1,"string");
     add("color.magenta",1,1,"string"); add("color.cyan",1,1,"string"); add("color.bold",1,1,"string"); add("color.reset",0,0,"string");
     // Collections
-    add("list_new",0,-1,"array<any>"); add("list_push",2,2,"void"); add("list_get",2,2,"unknown"); add("list_len",1,1,"int"); add("list_join",2,2,"string"); add("list_clear",1,1,"void"); add("list_remove_at",2,2,"void");
     add("set_new",0,-1,"unknown"); add("set_add",2,2,"bool"); add("set_has",2,2,"bool"); add("set_remove",2,2,"bool"); add("set_size",1,1,"int"); add("set_values",1,1,"array<any>");
     add("set_union",2,2,"unknown"); add("set_intersect",2,2,"unknown"); add("set_diff",2,2,"unknown");
     add("queue_new",0,-1,"unknown"); add("queue_push",2,2,"void"); add("queue_pop",1,1,"unknown"); add("queue_peek",1,1,"unknown"); add("queue_len",1,1,"int"); add("queue_clear",1,1,"void");
-    add("dict_new",0,-1,"map<any,any>"); add("dict_set",3,-1,"void"); add("dict_get",2,-1,"unknown"); add("dict_has",2,-1,"bool"); add("dict_keys",1,1,"array<any>"); add("dict_values",1,1,"array<any>");
-    add("dict_get_or",3,-1,"unknown"); add("dict_remove",2,-1,"bool"); add("dict_clear",1,1,"void"); add("dict_size",1,1,"int");
-    add("dict_merge",2,2,"void"); add("dict_clone",1,1,"map<any,any>"); add("dict_items",1,1,"array<any>"); add("dict_entries",1,1,"array<any>");
-    add("dict_set_path",3,3,"void"); add("dict_get_path",2,3,"unknown"); add("dict_has_path",2,2,"bool"); add("dict_remove_path",2,2,"bool");
-    add("hashmap_new",0,-1,"map<any,any>"); add("hashmap_set",3,-1,"void"); add("hashmap_put",3,-1,"void"); add("hashmap_get",2,-1,"unknown");
-    add("hashmap_has",2,-1,"bool"); add("hashmap_contains",2,-1,"bool"); add("hashmap_get_or",3,-1,"unknown"); add("hashmap_get_or_default",3,-1,"unknown");
-    add("hashmap_remove",2,-1,"bool"); add("hashmap_clear",1,1,"void"); add("hashmap_size",1,1,"int"); add("hashmap_keys",1,1,"array<any>");
-    add("hashmap_values",1,1,"array<any>"); add("hashmap_merge",2,2,"void");
     add("table_new",0,0,"unknown"); add("table_put",4,4,"void"); add("table_get",3,4,"unknown"); add("table_has",3,3,"bool");
     add("table_remove",3,3,"bool"); add("table_rows",1,1,"unknown"); add("table_columns",1,1,"unknown"); add("table_row_keys",2,2,"unknown");
     add("table_clear_row",2,2,"void"); add("table_count_row",2,2,"int");

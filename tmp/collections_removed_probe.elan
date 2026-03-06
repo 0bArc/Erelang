@@ -1,0 +1,8 @@
+@erelang
+
+public action main {
+  Map<string, string> d = { "a": "1" };
+  dict_set(d, "b", "2");
+}
+
+run main;

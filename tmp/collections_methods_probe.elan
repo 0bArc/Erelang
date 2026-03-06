@@ -1,0 +1,35 @@
+@erelang
+
+public action main {
+  Array<string> names = ["Alex", "Adam"];
+  names.push_back("Bob");
+  names.emplace_back("Cara");
+  names.insert(1, "Zed");
+  names.set(0, "A");
+  names.erase(2);
+
+  names.len(); print _;
+  names.front(); print _;
+  names.back(); print _;
+  names.contains("Cara"); print _;
+  names.find("Cara"); print _;
+  names.join(","); print _;
+
+  Map<string, string> m = {"k":"v"};
+  m.insert("a", "1");
+  m.emplace("b", "2");
+  m.try_emplace("c", "3");
+  m.insert_or_assign("a", "9");
+
+  m.has("a"); print _;
+  m.get("a"); print _;
+  m.getOr("missing", "fallback"); print _;
+  m.size(); print _;
+  m.empty(); print _;
+  m.remove("b"); print _;
+  m.len(); print _;
+  let clone = m.clone();
+  clone.size(); print _;
+}
+
+run main;

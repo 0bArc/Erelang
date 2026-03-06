@@ -11,6 +11,12 @@ public action main {
   for (name : names) {
     print "{name}";
   }
+
+  names.push_back("Emma");
+  
+  for (name : names) {
+    print "{name}}"
+  }
 }
 
 run main;

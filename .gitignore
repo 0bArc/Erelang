@@ -112,3 +112,12 @@ syntax.md
 
 # Ignore .vscode
 .vscode/
+
+
+
+tmp/*.s
+tmp/*.asm
+
+
+dev/*
+dev

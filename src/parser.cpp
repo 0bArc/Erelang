@@ -783,16 +783,33 @@ Statement Parser::parse_statement() {
     // for / for-each
     if ((peek().kind == TokenKind::Word || peek().kind == TokenKind::Keyword) && peek().text == "for") {
         // Lookahead for for-each forms:
-        // for (item : iterable), for (item in iterable), for (k, v : iterable)
+        // for (item : iterable), for (item in iterable), for (k, v : iterable),
+        // for (auto item : iterable), for (string k, string v : iterable)
         bool isForIn = false;
-        if (peek(1).kind == TokenKind::LParen && (peek(2).kind == TokenKind::Word || peek(2).kind == TokenKind::Keyword)) {
-            if (peek(3).kind == TokenKind::Colon) {
-                isForIn = true;
-            } else if ((peek(3).kind == TokenKind::Word || peek(3).kind == TokenKind::Keyword) && peek(3).text == "in") {
-                isForIn = true;
-            } else if (peek(3).kind == TokenKind::Comma && (peek(4).kind == TokenKind::Word || peek(4).kind == TokenKind::Keyword)) {
-                if (peek(5).kind == TokenKind::Colon) {
-                    isForIn = true;
+        if (peek(1).kind == TokenKind::LParen) {
+            int depth = 0;
+            size_t i = pos_ + 1;
+            for (; i < tokens_.size(); ++i) {
+                const auto kind = tokens_[i].kind;
+                if (kind == TokenKind::LParen) { ++depth; continue; }
+                if (kind == TokenKind::RParen) {
+                    --depth;
+                    if (depth <= 0) break;
+                    continue;
+                }
+                if (depth == 1) {
+                    if (kind == TokenKind::Semicolon) {
+                        isForIn = false;
+                        break;
+                    }
+                    if (kind == TokenKind::Colon) {
+                        isForIn = true;
+                        break;
+                    }
+                    if ((kind == TokenKind::Word || kind == TokenKind::Keyword) && tokens_[i].text == "in") {
+                        isForIn = true;
+                        break;
+                    }
                 }
             }
         }
@@ -1297,13 +1314,24 @@ ForStmt Parser::parse_for() {
 
 ForInStmt Parser::parse_for_in_after_lparen() {
     // Assumes '(' has been consumed
-    const Token& varTok = consume();
-    if (!(varTok.kind == TokenKind::Word || varTok.kind == TokenKind::Keyword)) throw std::runtime_error("Expected loop variable name");
+    auto consume_loop_var_name = [&]() -> std::string {
+        // Supports both: `for (item : xs)` and typed `for (auto item : xs)` forms.
+        if ((peek().kind == TokenKind::Word || peek().kind == TokenKind::Keyword) &&
+            (peek(1).kind == TokenKind::Word || peek(1).kind == TokenKind::Keyword) &&
+            (peek(2).kind == TokenKind::Colon ||
+             peek(2).kind == TokenKind::Comma ||
+             ((peek(2).kind == TokenKind::Word || peek(2).kind == TokenKind::Keyword) && peek(2).text == "in"))) {
+            consume();
+        }
+        const Token& tok = consume();
+        if (!(tok.kind == TokenKind::Word || tok.kind == TokenKind::Keyword)) throw std::runtime_error("Expected loop variable name");
+        return ident_text(tok);
+    };
+
+    const std::string varName = consume_loop_var_name();
     std::optional<std::string> valueVar;
     if (match(TokenKind::Comma)) {
-        const Token& valueTok = consume();
-        if (!(valueTok.kind == TokenKind::Word || valueTok.kind == TokenKind::Keyword)) throw std::runtime_error("Expected value variable name");
-        valueVar = ident_text(valueTok);
+        valueVar = consume_loop_var_name();
     }
     bool usedColon = false;
     if (match(TokenKind::Colon)) {
@@ -1317,7 +1345,7 @@ ForInStmt Parser::parse_for_in_after_lparen() {
     auto it = parse_expression();
     expect(TokenKind::RParen, ")");
     auto body = std::make_shared<Block>(parse_block());
-    return ForInStmt{ ident_text(varTok), valueVar, usedColon, it, body };
+    return ForInStmt{ varName, valueVar, usedColon, it, body };
 }
 
 Entity Parser::parse_entity() {

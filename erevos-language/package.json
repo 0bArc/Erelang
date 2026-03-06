@@ -3,7 +3,7 @@
   "displayName": "Erelang Language",
   "publisher": "localdev",
   "description": "Syntax highlighting and language basics for Erelang (.ere/.elan)",
-  "version": "0.0.9",
+  "version": "0.0.11",
   "engines": {
     "vscode": "^1.104.0"
   },

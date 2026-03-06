@@ -1,0 +1,28 @@
+@erelang
+
+public action main {
+  Array<string> names = ["Alex", "Adam"];
+  names.push_back("Bob");
+  names.emplace_back("Cara");
+  names.insert(1, "Zed");
+  names.set(0, "A");
+  names.erase(2);
+  names.pop_back();
+  names.clear();
+
+  Map<string, string> m = {"k":"v"};
+  m.insert("a", "1");
+  m.emplace("b", "2");
+  m.try_emplace("c", "3");
+  m.insert_or_assign("a", "9");
+  m.contains("a");
+  m.getOrDefault("missing", "fallback");
+  m.remove_path("b");
+  m.set_path("x.y", "1");
+  m.get_path("x.y");
+  m.has_path("x.y");
+  m.merge({"z":"7"});
+  m.clone();
+}
+
+run main;

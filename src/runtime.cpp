@@ -4444,10 +4444,6 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
     if (std::holds_alternative<MethodCallStmt>(s)) {
         const auto& mc = std::get<MethodCallStmt>(s);
         std::string methodName = mc.method;
-        if (methodName == "put") methodName = "set";
-        if (methodName == "contains") methodName = "has";
-        if (methodName == "containsKey") methodName = "has";
-        if (methodName == "getOrDefault") methodName = "getOr";
         if (auto moduleBuiltin = env.vars.find(mc.objectName + "." + mc.method); moduleBuiltin != env.vars.end()) {
             if (moduleBuiltin->second.rfind(kBuiltinAliasPrefix.data(), 0) == 0) {
                 env.vars["_"] = eval_builtin_call(mc.objectName + "." + mc.method, mc.args, env);
@@ -4492,7 +4488,28 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
         auto vhit = env.vars.find(mc.objectName);
         if (vhit != env.vars.end()) {
             const std::string& handle = vhit->second;
-            if (handle.rfind("list:", 0) == 0 && methodName == "forEach") {
+            std::string listMethod = methodName;
+            if (listMethod == "append" || listMethod == "push_back" || listMethod == "emplace_back" || listMethod == "emplace") listMethod = "push";
+            if (listMethod == "pop_back") listMethod = "pop";
+            if (listMethod == "remove_at" || listMethod == "remove") listMethod = "erase";
+            if (listMethod == "length") listMethod = "len";
+            if (listMethod == "at") listMethod = "get";
+            if (listMethod == "first") listMethod = "front";
+            if (listMethod == "last") listMethod = "back";
+
+            std::string mapMethod = methodName;
+            if (mapMethod == "put" || mapMethod == "insert" || mapMethod == "emplace" || mapMethod == "try_emplace" || mapMethod == "insert_or_assign") mapMethod = "set";
+            if (mapMethod == "contains" || mapMethod == "containsKey" || mapMethod == "count") mapMethod = "has";
+            if (mapMethod == "getOrDefault" || mapMethod == "get_or" || mapMethod == "get_or_default") mapMethod = "getOr";
+            if (mapMethod == "length") mapMethod = "len";
+            if (mapMethod == "at") mapMethod = "get";
+            if (mapMethod == "erase") mapMethod = "remove";
+            if (mapMethod == "set_path") mapMethod = "set";
+            if (mapMethod == "get_path") mapMethod = "get";
+            if (mapMethod == "has_path") mapMethod = "has";
+            if (mapMethod == "remove_path") mapMethod = "remove";
+
+            if (handle.rfind("list:", 0) == 0 && listMethod == "forEach") {
                 int id = to_int(handle.substr(5));
                 // forEach(actionName)
                 std::string actionName = eval_string(*mc.args[0], env);
@@ -4503,7 +4520,7 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 }
                 return;
             }
-            if (handle.rfind("list:", 0) == 0 && methodName == "push") {
+            if (handle.rfind("list:", 0) == 0 && listMethod == "push") {
 
                 int id = to_int(handle.substr(5));
                 if (!mc.args.empty()) {
@@ -4512,7 +4529,31 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 }
                 return;
             }
-            if (handle.rfind("list:", 0) == 0 && methodName == "get") {
+            if (handle.rfind("list:", 0) == 0 && listMethod == "insert") {
+                int id = to_int(handle.substr(5));
+                if (mc.args.size() >= 2) {
+                    int idx = to_int(eval_string(*mc.args[0], env));
+                    std::string value = eval_string(*mc.args[1], env);
+                    auto& vec = g_lists[id];
+                    if (idx < 0) idx = 0;
+                    if (idx > static_cast<int>(vec.size())) idx = static_cast<int>(vec.size());
+                    vec.insert(vec.begin() + idx, value);
+                }
+                return;
+            }
+            if (handle.rfind("list:", 0) == 0 && listMethod == "set") {
+                int id = to_int(handle.substr(5));
+                if (mc.args.size() >= 2) {
+                    int idx = to_int(eval_string(*mc.args[0], env));
+                    std::string value = eval_string(*mc.args[1], env);
+                    auto& vec = g_lists[id];
+                    if (idx >= 0 && idx < static_cast<int>(vec.size())) {
+                        vec[idx] = value;
+                    }
+                }
+                return;
+            }
+            if (handle.rfind("list:", 0) == 0 && listMethod == "get") {
                 int id = to_int(handle.substr(5));
                 if (!mc.args.empty()) {
                     int idx = to_int(eval_string(*mc.args[0], env));
@@ -4526,12 +4567,95 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 }
                 return;
             }
-            if (handle.rfind("list:", 0) == 0 && methodName == "len") {
+            if (handle.rfind("list:", 0) == 0 && listMethod == "pop") {
+                int id = to_int(handle.substr(5));
+                auto& vec = g_lists[id];
+                if (!vec.empty()) {
+                    env.vars["_"] = vec.back();
+                    vec.pop_back();
+                } else {
+                    env.vars["_"] = std::string();
+                }
+                return;
+            }
+            if (handle.rfind("list:", 0) == 0 && listMethod == "erase") {
+                int id = to_int(handle.substr(5));
+                if (!mc.args.empty()) {
+                    int idx = to_int(eval_string(*mc.args[0], env));
+                    auto& vec = g_lists[id];
+                    if (idx >= 0 && idx < static_cast<int>(vec.size())) {
+                        vec.erase(vec.begin() + idx);
+                        env.vars["_"] = "true";
+                    } else {
+                        env.vars["_"] = "false";
+                    }
+                }
+                return;
+            }
+            if (handle.rfind("list:", 0) == 0 && listMethod == "clear") {
+                int id = to_int(handle.substr(5));
+                g_lists[id].clear();
+                return;
+            }
+            if (handle.rfind("list:", 0) == 0 && listMethod == "len") {
                 int id = to_int(handle.substr(5));
                 env.vars["_"] = std::to_string((int)g_lists[id].size());
                 return;
             }
-            if (handle.rfind("dict:", 0) == 0 && methodName == "forEach") {
+            if (handle.rfind("list:", 0) == 0 && listMethod == "capacity") {
+                int id = to_int(handle.substr(5));
+                env.vars["_"] = std::to_string((int)g_lists[id].size());
+                return;
+            }
+            if (handle.rfind("list:", 0) == 0 && (listMethod == "reserve" || listMethod == "shrink_to_fit")) {
+                return;
+            }
+            if (handle.rfind("list:", 0) == 0 && listMethod == "empty") {
+                int id = to_int(handle.substr(5));
+                env.vars["_"] = g_lists[id].empty() ? "true" : "false";
+                return;
+            }
+            if (handle.rfind("list:", 0) == 0 && listMethod == "front") {
+                int id = to_int(handle.substr(5));
+                auto& vec = g_lists[id];
+                env.vars["_"] = vec.empty() ? std::string() : vec.front();
+                return;
+            }
+            if (handle.rfind("list:", 0) == 0 && listMethod == "back") {
+                int id = to_int(handle.substr(5));
+                auto& vec = g_lists[id];
+                env.vars["_"] = vec.empty() ? std::string() : vec.back();
+                return;
+            }
+            if (handle.rfind("list:", 0) == 0 && listMethod == "contains") {
+                int id = to_int(handle.substr(5));
+                std::string needle = mc.args.empty() ? std::string() : eval_string(*mc.args[0], env);
+                auto& vec = g_lists[id];
+                const bool found = std::find(vec.begin(), vec.end(), needle) != vec.end();
+                env.vars["_"] = found ? "true" : "false";
+                return;
+            }
+            if (handle.rfind("list:", 0) == 0 && (listMethod == "find" || listMethod == "index_of")) {
+                int id = to_int(handle.substr(5));
+                std::string needle = mc.args.empty() ? std::string() : eval_string(*mc.args[0], env);
+                auto& vec = g_lists[id];
+                auto hit = std::find(vec.begin(), vec.end(), needle);
+                env.vars["_"] = (hit == vec.end()) ? "-1" : std::to_string(static_cast<int>(hit - vec.begin()));
+                return;
+            }
+            if (handle.rfind("list:", 0) == 0 && listMethod == "join") {
+                int id = to_int(handle.substr(5));
+                std::string sep = mc.args.empty() ? std::string() : eval_string(*mc.args[0], env);
+                std::ostringstream out;
+                const auto& vec = g_lists[id];
+                for (size_t i = 0; i < vec.size(); ++i) {
+                    if (i) out << sep;
+                    out << vec[i];
+                }
+                env.vars["_"] = out.str();
+                return;
+            }
+            if (handle.rfind("dict:", 0) == 0 && mapMethod == "forEach") {
                 int id = to_int(handle.substr(5));
                 std::string actionName = eval_string(*mc.args[0], env);
                 for (const auto& kv : g_dicts[id]) {
@@ -4541,7 +4665,7 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 }
                 return;
             }
-            if (handle.rfind("dict:", 0) == 0 && methodName == "set") {
+            if (handle.rfind("dict:", 0) == 0 && mapMethod == "set") {
                 int id = to_int(handle.substr(5));
                 if (mc.args.size() >= 2) {
                     std::ostringstream key;
@@ -4555,7 +4679,7 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 }
                 return;
             }
-            if (handle.rfind("dict:", 0) == 0 && methodName == "get") {
+            if (handle.rfind("dict:", 0) == 0 && mapMethod == "get") {
                 int id = to_int(handle.substr(5));
                 if (!mc.args.empty()) {
                     std::ostringstream key;
@@ -4569,7 +4693,7 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 }
                 return;
             }
-            if (handle.rfind("dict:", 0) == 0 && methodName == "has") {
+            if (handle.rfind("dict:", 0) == 0 && mapMethod == "has") {
                 int id = to_int(handle.substr(5));
                 if (!mc.args.empty()) {
                     std::ostringstream key;
@@ -4582,7 +4706,7 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 }
                 return;
             }
-            if (handle.rfind("dict:", 0) == 0 && methodName == "getOr") {
+            if (handle.rfind("dict:", 0) == 0 && mapMethod == "getOr") {
                 int id = to_int(handle.substr(5));
                 if (mc.args.size() >= 2) {
                     std::ostringstream key;
@@ -4597,7 +4721,7 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 }
                 return;
             }
-            if (handle.rfind("dict:", 0) == 0 && methodName == "remove") {
+            if (handle.rfind("dict:", 0) == 0 && mapMethod == "remove") {
                 int id = to_int(handle.substr(5));
                 if (!mc.args.empty()) {
                     std::ostringstream key;
@@ -4610,17 +4734,22 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 }
                 return;
             }
-            if (handle.rfind("dict:", 0) == 0 && methodName == "clear") {
+            if (handle.rfind("dict:", 0) == 0 && mapMethod == "clear") {
                 int id = to_int(handle.substr(5));
                 g_dicts[id].clear();
                 return;
             }
-            if (handle.rfind("dict:", 0) == 0 && methodName == "size") {
+            if (handle.rfind("dict:", 0) == 0 && (mapMethod == "size" || mapMethod == "len")) {
                 int id = to_int(handle.substr(5));
                 env.vars["_"] = std::to_string((int)g_dicts[id].size());
                 return;
             }
-            if (handle.rfind("dict:", 0) == 0 && methodName == "keys") {
+            if (handle.rfind("dict:", 0) == 0 && mapMethod == "empty") {
+                int id = to_int(handle.substr(5));
+                env.vars["_"] = g_dicts[id].empty() ? "true" : "false";
+                return;
+            }
+            if (handle.rfind("dict:", 0) == 0 && mapMethod == "keys") {
                 int id = to_int(handle.substr(5));
                 int lid = g_nextListId++;
                 g_lists[lid] = {};
@@ -4628,7 +4757,7 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 env.vars["_"] = std::string("list:") + std::to_string(lid);
                 return;
             }
-            if (handle.rfind("dict:", 0) == 0 && methodName == "values") {
+            if (handle.rfind("dict:", 0) == 0 && mapMethod == "values") {
                 int id = to_int(handle.substr(5));
                 int lid = g_nextListId++;
                 g_lists[lid] = {};
@@ -4636,7 +4765,15 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 env.vars["_"] = std::string("list:") + std::to_string(lid);
                 return;
             }
-            if (handle.rfind("dict:", 0) == 0 && methodName == "merge") {
+            if (handle.rfind("dict:", 0) == 0 && (mapMethod == "items" || mapMethod == "entries")) {
+                int id = to_int(handle.substr(5));
+                int lid = g_nextListId++;
+                g_lists[lid] = {};
+                for (const auto& kv : g_dicts[id]) g_lists[lid].push_back(kv.first + ":" + kv.second);
+                env.vars["_"] = std::string("list:") + std::to_string(lid);
+                return;
+            }
+            if (handle.rfind("dict:", 0) == 0 && mapMethod == "merge") {
                 int id = to_int(handle.substr(5));
                 if (!mc.args.empty()) {
                     std::string otherHandle = eval_string(*mc.args[0], env);
@@ -4647,6 +4784,13 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                         }
                     }
                 }
+                return;
+            }
+            if (handle.rfind("dict:", 0) == 0 && mapMethod == "clone") {
+                int id = to_int(handle.substr(5));
+                int cloneId = g_nextDictId++;
+                g_dicts[cloneId] = g_dicts[id];
+                env.vars["_"] = std::string("dict:") + std::to_string(cloneId);
                 return;
             }
             if (handle.rfind("struct:", 0) == 0) {

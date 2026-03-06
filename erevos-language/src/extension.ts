@@ -10,9 +10,9 @@ const STRUCT_RE = /^\s*(?:public|private|export)?\s*struct\s+([A-Za-z_][A-Za-z0-
 const ENUM_RE = /^\s*(?:public|private|export)?\s*enum\s+([A-Za-z_][A-Za-z0-9_]*)/;
 const TYPE_ALIAS_RE = /^\s*(?:public|private|export)?\s*type\s+([A-Za-z_][A-Za-z0-9_]*)\s*=/;
 const HOOK_RE   = /^\s*hook\s+([A-Za-z_][A-Za-z0-9_]*)/;
-const LET_RE    = /^\s*(?:let|const|constexpr|static|int|string|str|bool|char|auto|double|float|array|dictionary|Array<[^>]+>|Map<[^>]+>|HashMap<[^>]+>)\s+([A-Za-z_][A-Za-z0-9_]*)/;
+const LET_RE    = /^\s*(?:let|const|constexpr|static|int|string|str|bool|char|auto|double|float|array|map|dictionary|hashmap|Array<[^>]+>|Map<[^>]+>|HashMap<[^>]+>)\s+([A-Za-z_][A-Za-z0-9_]*)/;
 const GLOBAL_RE = /^\s*(?:public|private|export)?\s*global\s+([A-Za-z_][A-Za-z0-9_]*)/;
-const FOREACH_RE = /^\s*for\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)(?:\s*,\s*([A-Za-z_][A-Za-z0-9_]*))?\s*(?::|in)\s*[^)]+\)/;
+const FOREACH_RE = /^\s*for\s*\(\s*(?:(?:auto|int|double|float|string|str|bool|char|Array<[^>]+>|Map<[^>]+>|HashMap<[^>]+>|[A-Z][A-Za-z0-9_<>,]*)\s+)?([A-Za-z_][A-Za-z0-9_]*)(?:\s*,\s*(?:(?:auto|int|double|float|string|str|bool|char|Array<[^>]+>|Map<[^>]+>|HashMap<[^>]+>|[A-Z][A-Za-z0-9_<>,]*)\s+)?([A-Za-z_][A-Za-z0-9_]*))?\s*(?::|in)\s*[A-Za-z_][A-Za-z0-9_]*\s*\)/;
 const INCLUDE_ALIAS_RE = /^\s*#include\s*(<[^>]+>|"[^"]+")\s*(?:as\s+([A-Za-z_][A-Za-z0-9_]*))?/;
 const IMPORT_ALIAS_RE = /^\s*import\s+([A-Za-z_][A-Za-z0-9_./-]*)\s*(?:as\s+([A-Za-z_][A-Za-z0-9_]*))?/;
 
@@ -22,8 +22,8 @@ const MODULE_METHODS_BY_SPEC: Record<string, string[]> = {
 };
 
 const CHAIN_METHODS = ['lstrip', 'rstrip', 'strip', 'lower', 'upper'];
-const ARRAY_METHODS = ['forEach', 'push', 'get', 'len'];
-const DICTIONARY_METHODS = ['set', 'put', 'get', 'has', 'contains', 'containsKey', 'getOr', 'getOrDefault', 'remove', 'clear', 'size', 'keys', 'values', 'merge'];
+const ARRAY_METHODS = ['forEach', 'push', 'push_back', 'emplace_back', 'append', 'insert', 'set', 'get', 'at', 'erase', 'remove_at', 'remove', 'pop', 'pop_back', 'front', 'back', 'first', 'last', 'len', 'size', 'length', 'capacity', 'empty', 'clear', 'contains', 'find', 'index_of', 'join', 'reserve', 'shrink_to_fit'];
+const DICTIONARY_METHODS = ['set', 'put', 'insert', 'emplace', 'try_emplace', 'insert_or_assign', 'get', 'at', 'has', 'contains', 'containsKey', 'count', 'getOr', 'getOrDefault', 'get_or', 'get_or_default', 'remove', 'erase', 'clear', 'size', 'len', 'length', 'empty', 'keys', 'values', 'items', 'entries', 'merge', 'clone', 'set_path', 'get_path', 'has_path', 'remove_path', 'forEach'];
 const LANGUAGE_KEYWORDS = ['entity','action','field','let','const','global','int','double','string','bool','char','auto','Array','Map','HashMap','constexpr','static','struct','enum','type','import','export','run','if','else','for','while','switch','break','continue','return','match','try','catch','async','await','namespace','unsafe','repeat','do','extern','static_cast','dynamic_cast','reinterpret_cast','bit_cast','sizeof','typeof','decltype','alignof','offsetof','is_base_of','#if','#elif','#else','#endif','#ifdef','#ifndef','#define'];
 
 function shouldRequireSemicolon(line: string): boolean {
@@ -106,12 +106,8 @@ const BUILT_INS = [
   'string_buffer_new','string_buffer_append','string_buffer_clear','string_buffer_len','string_buffer_to_string','string_buffer_free','string_buffer_reserve',
   'color.red','color.green','color.yellow','color.blue','color.magenta','color.cyan','color.bold','color.reset',
   // Collections
-  'list_new','list_push','list_get','list_len','list_join','list_clear','list_remove_at',
   'set_new','set_add','set_has','set_remove','set_size','set_values','set_union','set_intersect','set_diff',
   'queue_new','queue_push','queue_pop','queue_peek','queue_len','queue_clear',
-  'dict_new','dict_set','dict_get','dict_has','dict_keys','dict_values','dict_get_or','dict_remove','dict_clear','dict_size','dict_merge','dict_clone','dict_items','dict_entries',
-  'dict_set_path','dict_get_path','dict_has_path','dict_remove_path',
-  'hashmap_new','hashmap_set','hashmap_put','hashmap_get','hashmap_has','hashmap_contains','hashmap_get_or','hashmap_get_or_default','hashmap_remove','hashmap_clear','hashmap_size','hashmap_keys','hashmap_values','hashmap_merge',
   'table_new','table_put','table_get','table_has','table_remove','table_rows','table_columns','table_row_keys','table_clear_row','table_count_row',
   // Network
   'http_get','http_download','hls_download_best','url_encode','network.ip.flush','network.ip.release','network.ip.renew','network.ip.registerdns',
@@ -140,7 +136,10 @@ const BUILT_INS = [
 ];
 
 const DEPRECATED_BUILT_INS = new Set<string>([
-  'list_new', 'list_push', 'dict_new', 'dict_set'
+  'list_new', 'list_push', 'list_get', 'list_len', 'list_join', 'list_clear', 'list_remove_at',
+  'dict_new', 'dict_set', 'dict_get', 'dict_has', 'dict_keys', 'dict_values', 'dict_get_or', 'dict_remove', 'dict_clear', 'dict_size', 'dict_merge', 'dict_clone', 'dict_items', 'dict_entries',
+  'dict_set_path', 'dict_get_path', 'dict_has_path', 'dict_remove_path',
+  'hashmap_new', 'hashmap_set', 'hashmap_put', 'hashmap_get', 'hashmap_has', 'hashmap_contains', 'hashmap_get_or', 'hashmap_get_or_default', 'hashmap_remove', 'hashmap_clear', 'hashmap_size', 'hashmap_keys', 'hashmap_values', 'hashmap_merge'
 ]);
 
 interface CollectedSymbols {
@@ -373,7 +372,7 @@ function collect(document: vscode.TextDocument, uptoLine: number = document.line
     m = HOOK_RE.exec(text); if (m) out.hooks.add(m[1]);
     m = GLOBAL_RE.exec(text); if (m) out.globals.add(m[1]);
     m = LET_RE.exec(text); if (m) out.locals.add(m[1]);
-    const declMatch = /^\s*(let|const|constexpr|static|int|string|str|bool|char|auto|double|float|array|dictionary|hashmap)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)\s*$/.exec(text);
+    const declMatch = /^\s*(let|const|constexpr|static|int|string|str|bool|char|auto|double|float|array|map|dictionary|hashmap)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)\s*$/.exec(text);
     if (declMatch) {
       const typeWord = declMatch[1].toLowerCase();
       const varName = declMatch[2];
@@ -381,7 +380,7 @@ function collect(document: vscode.TextDocument, uptoLine: number = document.line
       if (typeWord === 'array' || rhs.startsWith('list_new(') || rhs.startsWith('[')) {
         out.arrays.add(varName);
       }
-      if (typeWord === 'dictionary' || typeWord === 'hashmap' || rhs.startsWith('dict_new(') || rhs.startsWith('hashmap_new(') || rhs.startsWith('{')) {
+      if (typeWord === 'map' || typeWord === 'dictionary' || typeWord === 'hashmap' || rhs.startsWith('dict_new(') || rhs.startsWith('hashmap_new(') || rhs.startsWith('{')) {
         out.dictionaries.add(varName);
       }
     }
@@ -415,10 +414,6 @@ function collect(document: vscode.TextDocument, uptoLine: number = document.line
 class ErelangCompletionProvider implements vscode.CompletionItemProvider {
   provideCompletionItems(doc: vscode.TextDocument, pos: vscode.Position): vscode.CompletionItem[] {
     const linePrefix = doc.lineAt(pos.line).text.slice(0, pos.character);
-
-    if (/\{\s*$/.test(linePrefix) || /\{\s*\}\s*$/.test(linePrefix)) {
-      return [];
-    }
 
     const col = collect(doc, pos.line);
 
@@ -613,7 +608,7 @@ export function activate(context: vscode.ExtensionContext) {
   }
 
   context.subscriptions.push(
-    vscode.languages.registerCompletionItemProvider({ language: 'erelang' }, new ErelangCompletionProvider(), '.', ':', '"')
+    vscode.languages.registerCompletionItemProvider({ language: 'erelang' }, new ErelangCompletionProvider(), '.', ':', '"', '{')
   );
   context.subscriptions.push(
     vscode.languages.registerDocumentSymbolProvider({ language: 'erelang' }, new ErelangDocumentSymbolProvider())

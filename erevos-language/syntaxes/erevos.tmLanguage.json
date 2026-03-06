@@ -3,34 +3,42 @@
   "name": "Erelang",
   "scopeName": "source.erelang",
   "patterns": [
-    { "include": "#comments" },
-    { "include": "#includes" },
-    { "include": "#strings" },
-    { "include": "#builtinCalls" },
-    { "include": "#calls" },
-    { "include": "#structAccess" },
-    { "include": "#typeRefs" },
-    { "include": "#printArgs" },
-    { "include": "#collectionVars" },
-    { "include": "#declarations" },
-    { "include": "#foreach" },
-    { "include": "#members" },
-    { "include": "#numbers" },
-    { "include": "#keywords" },
-    { "include": "#directives" },
-    { "include": "#entities" },
-    { "include": "#actions" },
-    { "include": "#identifiers" }
-  ],
-      "builtinCalls": {
-        "patterns": [
-          {
-            "name": "support.function",
-            "match": "\\b(print|PRINT|sleep|now_ms|env|username|computer_name|machine_guid|uuid|rand_int|args_count|args_get|os\\.args|os\\.args_count|os\\.args_get|exec|os\\.exec|spawn|os\\.spawn|exit|read_line|stdin_read|stderr_print|input|toint|toInt|tofloat|tostr|toString|tobool|dynamic_cast|reinterpret_cast|bit_cast|bitcast|to_json|from_json|sizeof|typeof|decltype|alignof|offsetof|is_base_of|ptr_new|ptr_get|ptr_set|ptr_free|ptr_valid|malloc|free|make_unique|make_shared|unique_reset|shared_reset|string\\.lstrip|string\\.rstrip|string\\.strip|string\\.lower|string\\.upper|string\\.starts_with|string\\.ends_with|string\\.find|string\\.substr|string\\.len|char_is_digit|char_is_space|char_is_alpha|char_is_ident_start|char_is_ident_part|set_new|set_add|set_has|set_remove|set_size|set_values|set_union|set_intersect|set_diff|queue_new|queue_push|queue_pop|queue_peek|queue_len|queue_clear|file_open|file_close|file_read|file_write|file_seek|file_tell|file_flush|file_mtime|file_size|fopen|fclose|fread|fwrite|fseek|ftell|fflush|strbuf_new|strbuf_append|strbuf_clear|strbuf_len|strbuf_to_string|strbuf_free|strbuf_reserve|string_buffer_new|string_buffer_append|string_buffer_clear|string_buffer_len|string_buffer_to_string|string_buffer_free|string_buffer_reserve|color\\.red|color\\.green|color\\.yellow|color\\.blue|color\\.magenta|color\\.cyan|color\\.bold|color\\.reset|table_new|table_put|table_get|table_has|table_remove|table_rows|table_columns|table_row_keys|table_clear_row|table_count_row|win_window_create|win_button_create|win_checkbox_create|win_radiobutton_create|win_slider_create|win_textbox_create|win_label_create|win_on|win_show|win_loop|win_get_text|win_set_text|win_get_check|win_set_check|win_get_slider|win_set_slider|win_close|win_auto_scale|win_set_scale|ui_window_create|ui_label|ui_button|ui_checkbox|ui_radio|ui_slider|ui_textbox|ui_same_line|ui_newline|ui_spacer|ui_separator|ui_load)\\b(?=\\s*\\()"
-          }
-        ]
-      },
+  { "include": "#comments" },
+  { "include": "#includes" },
+  { "include": "#strings" },
+
+  { "include": "#foreach" },
+
+  { "include": "#declarations" },
+  { "include": "#builtinCalls" },
+  { "include": "#calls" },
+
+  { "include": "#structAccess" },
+  { "include": "#typeRefs" },
+
+  { "include": "#printArgs" },
+  { "include": "#collectionVars" },
+
+  { "include": "#members" },
+  { "include": "#numbers" },
+
+  { "include": "#keywords" },
+  { "include": "#directives" },
+
+  { "include": "#entities" },
+  { "include": "#actions" },
+
+  { "include": "#identifiers" }
+],
   "repository": {
+    "builtinCalls": {
+      "patterns": [
+        {
+          "name": "support.function",
+          "match": "\\b(print|PRINT|sleep|now_ms|env|username|computer_name|machine_guid|uuid|rand_int|args_count|args_get|os\\.args|os\\.args_count|os\\.args_get|exec|os\\.exec|spawn|os\\.spawn|exit|read_line|stdin_read|stderr_print|input|toint|toInt|tofloat|tostr|toString|tobool|dynamic_cast|reinterpret_cast|bit_cast|bitcast|to_json|from_json|sizeof|typeof|decltype|alignof|offsetof|is_base_of|ptr_new|ptr_get|ptr_set|ptr_free|ptr_valid|malloc|free|make_unique|make_shared|unique_reset|shared_reset|string\\.lstrip|string\\.rstrip|string\\.strip|string\\.lower|string\\.upper|string\\.starts_with|string\\.ends_with|string\\.find|string\\.substr|string\\.len|char_is_digit|char_is_space|char_is_alpha|char_is_ident_start|char_is_ident_part|set_new|set_add|set_has|set_remove|set_size|set_values|set_union|set_intersect|set_diff|queue_new|queue_push|queue_pop|queue_peek|queue_len|queue_clear|file_open|file_close|file_read|file_write|file_seek|file_tell|file_flush|file_mtime|file_size|fopen|fclose|fread|fwrite|fseek|ftell|fflush|strbuf_new|strbuf_append|strbuf_clear|strbuf_len|strbuf_to_string|strbuf_free|strbuf_reserve|string_buffer_new|string_buffer_append|string_buffer_clear|string_buffer_len|string_buffer_to_string|string_buffer_free|string_buffer_reserve|color\\.red|color\\.green|color\\.yellow|color\\.blue|color\\.magenta|color\\.cyan|color\\.bold|color\\.reset|table_new|table_put|table_get|table_has|table_remove|table_rows|table_columns|table_row_keys|table_clear_row|table_count_row|win_window_create|win_button_create|win_checkbox_create|win_radiobutton_create|win_slider_create|win_textbox_create|win_label_create|win_on|win_show|win_loop|win_get_text|win_set_text|win_get_check|win_set_check|win_get_slider|win_set_slider|win_close|win_auto_scale|win_set_scale|ui_window_create|ui_label|ui_button|ui_checkbox|ui_radio|ui_slider|ui_textbox|ui_same_line|ui_newline|ui_spacer|ui_separator|ui_load)\\b(?=\\s*\\()"
+        }
+      ]
+    },
     "comments": {
       "patterns": [
         { "name": "comment.line.double-slash", "match": "//.*$" }
@@ -161,24 +169,48 @@
     "foreach": {
       "patterns": [
         {
-          "name": "meta.foreach",
-          "match": "\\b(for)\\s*\\(\\s*([A-Za-z_][A-Za-z0-9_]*)(?:\\s*,\\s*([A-Za-z_][A-Za-z0-9_]*))?\\s*(?::|\\bin\\b)\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*\\)",
-          "captures": {
+          "name": "meta.foreach.header",
+          "begin": "\\b(for)\\s*(\\()",
+          "beginCaptures": {
             "1": { "name": "keyword.control" },
-            "2": { "name": "variable.other.readwrite" },
-            "3": { "name": "variable.other.readwrite" },
-            "4": { "name": "variable.other.readwrite" }
-          }
-        },
-        {
-          "name": "meta.foreach",
-          "match": "\\b(for)\\s*\\(\\s*(?:auto|int|double|float|string|str|bool|char|Array<[^>]+>|Map<[^>]+>|HashMap<[^>]+>|[A-Z][A-Za-z0-9_<>,]*)\\s+([A-Za-z_][A-Za-z0-9_]*)(?:\\s*,\\s*(?:auto|int|double|float|string|str|bool|char|Array<[^>]+>|Map<[^>]+>|HashMap<[^>]+>|[A-Z][A-Za-z0-9_<>,]*)\\s+([A-Za-z_][A-Za-z0-9_]*))?\\s*(?::|\\bin\\b)\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*\\)",
-          "captures": {
-            "1": { "name": "keyword.control" },
-            "2": { "name": "variable.other.readwrite" },
-            "3": { "name": "variable.other.readwrite" },
-            "4": { "name": "variable.other.readwrite" }
-          }
+            "2": { "name": "punctuation.section.group.begin" }
+          },
+          "end": "(\\))",
+          "endCaptures": {
+            "1": { "name": "punctuation.section.group.end" }
+          },
+          "patterns": [
+            {
+              "name": "meta.foreach.loopvar.untyped",
+              "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\b(?=\\s*(?:,|:|\\bin\\b))",
+              "captures": {
+                "1": { "name": "variable.parameter" }
+              }
+            },
+            {
+              "name": "meta.foreach.loopvar.typed",
+              "match": "\\b(?:auto|int|double|float|string|str|bool|char|array|map|dictionary|hashmap|Array<[^>]+>|Map<[^>]+>|HashMap<[^>]+>|[A-Z][A-Za-z0-9_<>,]*)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b(?=\\s*(?:,|:|\\bin\\b))",
+              "captures": {
+                "1": { "name": "variable.parameter" }
+              }
+            },
+            {
+              "name": "meta.foreach.iterable",
+              "match": "(:|\\bin\\b)(\\s*)([A-Za-z_][A-Za-z0-9_]*)",
+              "captures": {
+                "1": { "name": "keyword.operator.foreach" },
+                "3": { "name": "variable.parameter" }
+              }
+            },
+            {
+              "name": "storage.type",
+              "match": "\\b(auto|int|double|float|string|str|bool|char|array|map|dictionary|hashmap|Array<[^>]+>|Map<[^>]+>|HashMap<[^>]+>|[A-Z][A-Za-z0-9_<>,]*)\\b"
+            },
+            {
+              "name": "keyword.operator.foreach",
+              "match": ":|\\bin\\b"
+            }
+          ]
         }
       ]
     },

@@ -14,9 +14,26 @@
     "onLanguage:erelang"
   ],
   "contributes": {
-    "configurationDefaults": {
-      "[erelang]": {
-        "editor.semanticHighlighting.enabled": false
+    "commands": [
+      {
+        "command": "erelang.debugCompletionContext",
+        "title": "Erelang: Debug Completion Context",
+        "category": "Erelang"
+      }
+    ],
+    "configuration": {
+      "title": "Erelang",
+      "properties": {
+        "erelang.autoSuggestIdentifiers": {
+          "type": "boolean",
+          "default": true,
+          "description": "Retrigger IntelliSense while typing or deleting identifier characters in Erelang files."
+        },
+        "erelang.debugCompletion": {
+          "type": "boolean",
+          "default": false,
+          "description": "Write completion-branch debug traces to the Erelang Language Debug output channel."
+        }
       }
     },
     "languages": [

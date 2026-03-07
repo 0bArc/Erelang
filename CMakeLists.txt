@@ -32,6 +32,7 @@ option(SPLIT_RUNTIME_DLLS "Build runtime as many small component DLLs instead of
 option(BUILD_SHARED_RUNTIME "Build erelang as a shared DLL (erelang.dll). OFF = no runtime DLLs produced" OFF)
 option(BUILD_DEBUGGER_EXE "Build debug.exe helper via --make-debug after erelang links" OFF)
 option(ERELANG_BUNDLE_MINGW_RUNTIME "Copy MinGW runtime DLLs next to erelang.exe for portable sharing" ON)
+option(ERELANG_AUTO_UPDATE_EXTENSION "Auto package/install VS Code extension after erelang build" OFF)
 
 # Default to Release if not specified
 if (NOT CMAKE_BUILD_TYPE)
@@ -281,9 +282,10 @@ if (WIN32)
 endif()
 if (WIN32 AND NOT MSVC AND ERELANG_BUNDLE_MINGW_RUNTIME)
   add_custom_command(TARGET erelang_runner POST_BUILD
-    COMMAND pwsh -NoProfile -ExecutionPolicy Bypass
-      -File ${CMAKE_SOURCE_DIR}/tools/bundle-mingw-runtime.ps1
-      -TargetDir "$<TARGET_FILE_DIR:erelang_runner>"
+    COMMAND ${CMAKE_COMMAND}
+      -DTARGET_DIR=$<TARGET_FILE_DIR:erelang_runner>
+      -DCOMPILER_PATH=${CMAKE_CXX_COMPILER}
+      -P ${CMAKE_SOURCE_DIR}/tools/cmake/bundle-mingw-runtime.cmake
     COMMENT "Bundling MinGW runtime DLLs for portable erelang.exe"
   )
 endif()
@@ -345,9 +347,12 @@ if (WIN32 AND BUILD_SHARED_RUNTIME AND NOT SPLIT_RUNTIME_DLLS)
   )
 endif()
 
-if (EXISTS "${CMAKE_SOURCE_DIR}/erevos-language")
+if (EXISTS "${CMAKE_SOURCE_DIR}/erevos-language" AND ERELANG_AUTO_UPDATE_EXTENSION)
   add_custom_command(TARGET erelang_runner POST_BUILD
-    COMMAND pwsh -NoProfile -ExecutionPolicy Bypass -File ${CMAKE_SOURCE_DIR}/tools/build-and-update-extension.ps1
+    COMMAND ${CMAKE_COMMAND}
+      -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+      -DBEST_EFFORT=ON
+      -P ${CMAKE_SOURCE_DIR}/tools/cmake/update-extension.cmake
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Packaging and installing VS Code extension (best-effort)"
   )
@@ -407,7 +412,10 @@ if (WIN32)
 endif()
 
 add_custom_target(update_extension
-  COMMAND pwsh -ExecutionPolicy Bypass -File ${CMAKE_SOURCE_DIR}/tools/build-and-update-extension.ps1
+  COMMAND ${CMAKE_COMMAND}
+    -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+    -DBEST_EFFORT=ON
+    -P ${CMAKE_SOURCE_DIR}/tools/cmake/update-extension.cmake
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Build compiler and package/install VS Code extension"
 )

@@ -762,15 +762,8 @@ function shouldRetrigger(change: vscode.TextDocumentContentChangeEvent, prefix: 
   const typed   = change.text.length === 1 && /[A-Za-z0-9_]/.test(change.text);
   const openBrace = change.text.includes('{');
   const deleted = change.text.length === 0 && change.rangeLength > 0;
-  const insertedNewline = change.text.includes('\n') || change.text.includes('\r');
-  if (!typed && !openBrace && !deleted && !insertedNewline) return false;
+  if (!typed && !openBrace && !deleted) return false;
   if (/^\s*\/\//.test(prefix)) return false;   // inside comment
-
-  if (insertedNewline) {
-    // Keep suggestions responsive after pressing Enter (or accepting completion
-    // via Enter in some editor states) so autocomplete doesn't "die".
-    return true;
-  }
 
   const printCtx = parsePrintStringContext(fullLine, cursor.character);
   if (printCtx) {

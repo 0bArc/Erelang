@@ -7,7 +7,7 @@ This walkthrough guides you from cloning the repository to building native binar
 * Windows 10 or later (the toolchain and GUI helpers are Windows-first today).
 * CMake with either Ninja or MinGW generators (the quick-start paths assume `-G "MinGW Makefiles"`).
 * A working C++ toolchain (MinGW-w64 or MSVC). The GUI build launcher (`src/build_launcher.cpp`) defaults to MinGW paths — tweak commands if you favour MSVC.
-* PowerShell (`pwsh.exe`) for the commands below.
+* No PowerShell requirement for core configure/build targets.
 * VS Code if you plan to use the bundled extension under `vscode/erelang-vscode`.
 
 Optional extras:

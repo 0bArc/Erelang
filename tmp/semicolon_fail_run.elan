@@ -1,7 +1,0 @@
-@erelang
-
-public action main {
-  print "x";
-}
-
-run main

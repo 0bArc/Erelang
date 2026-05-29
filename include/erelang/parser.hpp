@@ -153,6 +153,7 @@ struct Program {
 class Parser {
 public:
     explicit Parser(std::vector<Token> tokens);
+    Parser(std::vector<Token> tokens, std::string sourceName);
     Program parse();
 
 private:
@@ -203,6 +204,7 @@ private:
     bool strict_{false};
     std::vector<std::string> namespaceStack_;
     bool parsingEntityMethod_{false};
+    std::string sourceName_;
 };
 
 } // namespace erelang

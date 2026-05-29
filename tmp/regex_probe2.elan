@@ -1,5 +1,0 @@
-@erelang
-public action main {
-  print (regex_match("^print \".*\"$", "print \"Hello\"") == "true")
-}
-run main

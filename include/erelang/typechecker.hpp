@@ -114,6 +114,7 @@ private:
     void pass_check_program(const Program& program, TCResult& out);
     void finalize_unused(const Program& program, TCResult& out);
     void init_builtins();
+    void register_imported_module_builtins(const Program& program);
 private:
     struct BuiltinInfo { int minParams; int maxParams; std::string returnType; };
     // symbol tables / caches

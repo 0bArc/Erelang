@@ -154,7 +154,7 @@ OB_API int ob_run_file(const char* main_file, int argc, const char* argv[], int 
         auto load_prog = [&](auto&& self, const fs::path& file) -> void {
             fs::path ap = fs::absolute(file); std::string key = ap.string(); if (visited.count(key)) return; visited.insert(key);
             LexerOptions lxopts; lxopts.enableDurations = true; lxopts.enableUnits = true; lxopts.enablePolyIdentifiers = true; lxopts.emitDocComments = true; lxopts.emitComments = false;
-            Lexer lx(slurp_text(ap), lxopts); auto tokens = lx.lex(); Parser ps(std::move(tokens)); Program prog = ps.parse();
+            Lexer lx(slurp_text(ap), lxopts); auto tokens = lx.lex(); Parser ps(std::move(tokens), key); Program prog = ps.parse();
             for (auto& a : prog.actions) a.sourcePath = key; for (auto& h : prog.hooks) h.sourcePath = key; for (auto& e : prog.entities) e.sourcePath = key; for (auto& g : prog.globals) g.sourcePath = key;
             for (const auto& imp : prog.imports) {
                 fs::path ip = imp.path; if (!ip.has_extension()) { fs::path c1=ip; c1.replace_extension(".0bs"); fs::path c2=ip; c2.replace_extension(".obsecret"); if (fs::exists(c1)) ip=c1; else if (fs::exists(c2)) ip=c2; }
@@ -185,7 +185,7 @@ OB_API int ob_collect_files(const char* main_file,
             std::string contents = slurp_text(ap);
             if (on_file) on_file(key.c_str(), contents.c_str(), user);
             LexerOptions lxopts; lxopts.enableDurations = true; lxopts.enableUnits = true; lxopts.enablePolyIdentifiers = true; lxopts.emitDocComments = true; lxopts.emitComments = false;
-            Lexer lx(contents, lxopts); auto tokens = lx.lex(); Parser ps(std::move(tokens)); Program prog = ps.parse();
+            Lexer lx(contents, lxopts); auto tokens = lx.lex(); Parser ps(std::move(tokens), key); Program prog = ps.parse();
             for (const auto& imp : prog.imports) {
                 fs::path ip = imp.path; if (!ip.has_extension()) { fs::path c1=ip; c1.replace_extension(".0bs"); fs::path c2=ip; c2.replace_extension(".obsecret"); if (fs::exists(c1)) ip=c1; else if (fs::exists(c2)) ip=c2; }
                 bool loaded = false;
@@ -267,7 +267,7 @@ OB_API int ob_run_embedded(const char* main_file,
             lxopts.emitComments = false;
             Lexer lx(load_text(key), lxopts);
             auto tokens = lx.lex();
-            Parser ps(std::move(tokens));
+            Parser ps(std::move(tokens), key);
             Program prog = ps.parse();
             for (auto& a : prog.actions) a.sourcePath = key;
             for (auto& h : prog.hooks) h.sourcePath = key;

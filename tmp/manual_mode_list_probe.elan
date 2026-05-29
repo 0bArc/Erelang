@@ -1,6 +1,0 @@
-@erelang
-public action main {
-  let x = list_new();
-  print x;
-}
-run main;

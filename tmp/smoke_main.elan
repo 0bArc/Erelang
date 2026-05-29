@@ -1,5 +1,0 @@
-public action main {
-    print "ok";
-}
-
-run main;

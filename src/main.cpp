@@ -16,7 +16,6 @@
 #include "erelang/ir.hpp"
 #include "erelang/codegen_x64.hpp"
 #include "erelang/plugins.hpp"
-#include "erelang/creation_kit.hpp"
 #include "erelang/erodsl/spec.hpp"
 
 #ifdef _WIN32
@@ -64,18 +63,6 @@ int main(int argc, char** argv) {
 
     if (argc >= 2) {
         const std::string_view command{argv[1]};
-        if (command == "--creation-kit" || command == "creation-kit" || command == "--kit" || command == "kit") {
-            CreationKitOptions opts;
-            opts.runtimeRoot = exeDir;
-            opts.userPluginRoot = ensure_user_plugin_root(&std::cerr);
-            if (opts.userPluginRoot.empty()) {
-                opts.userPluginRoot = exeDir / "plugins";
-            }
-            opts.input = &std::cin;
-            opts.output = &std::cout;
-            opts.log = &std::cerr;
-            return run_creation_kit(opts);
-        }
     }
 
     if (argc < 2) {
@@ -155,12 +142,12 @@ int main(int argc, char** argv) {
         };
         std::unordered_set<std::string> visited;
         std::vector<Program> ordered;
-        auto lex_program = [&](std::string source, const erodsl::DslSpec& language) {
+        auto lex_program = [&](std::string source, const erodsl::DslSpec& language, const std::string& sourcePath) {
             LexerOptions opts = erodsl::build_lexer_options(language);
             Lexer lx(std::move(source), opts);
             auto tokens = lx.lex();
             erodsl::apply_keyword_aliases(language, tokens);
-            return Parser(std::move(tokens)).parse();
+            return Parser(std::move(tokens), sourcePath).parse();
         };
         std::function<void(const std::string&)> load_prog = [&](const std::string& file){
             fs::path p = fs::absolute(file);
@@ -203,7 +190,7 @@ int main(int argc, char** argv) {
                 }
             }
             const auto& language = resolve_language(p);
-            Program prog = lex_program(std::move(source), language);
+            Program prog = lex_program(std::move(source), language, key);
             // load imports first
             for (const auto& imp : prog.imports) {
                 if (imp.pluginGlob) continue;

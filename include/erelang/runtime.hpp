@@ -79,9 +79,6 @@ public:
     // Execute a single action by name (no full run pipeline). Returns 0 on success, non-zero on failure.
     int run_single_action(const Program& program, std::string_view actionName) const;
 
-    // GUI event hook (platform-specific). No-op on non-GUI builds.
-    void handle_gui_click(int id, void* nativeWinPtr) const;
-
     // Set CLI arguments (captured once at process start).
     static void set_cli_args(const std::vector<std::string>& args);
 

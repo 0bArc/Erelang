@@ -1,10 +1,55 @@
 #include "erelang/parser.hpp"
 #include <stdexcept>
 #include <cctype>
+#include <sstream>
 
 namespace erelang {
 
 Parser::Parser(std::vector<Token> tokens) : tokens_(std::move(tokens)) {}
+Parser::Parser(std::vector<Token> tokens, std::string sourceName)
+    : tokens_(std::move(tokens)), sourceName_(std::move(sourceName)) {}
+
+static std::string token_preview(const Token& tok) {
+    if (tok.kind == TokenKind::End) return "<eof>";
+    auto token_kind_name = [](TokenKind kind) -> const char* {
+        switch (kind) {
+            case TokenKind::Newline: return "<newline>";
+            case TokenKind::Semicolon: return ";";
+            case TokenKind::RBrace: return "}";
+            case TokenKind::LBrace: return "{";
+            case TokenKind::RParen: return ")";
+            case TokenKind::LParen: return "(";
+            case TokenKind::RBracket: return "]";
+            case TokenKind::LBracket: return "[";
+            case TokenKind::Comma: return ",";
+            case TokenKind::Colon: return ":";
+            case TokenKind::Assign: return "=";
+            default: return "<token>";
+        }
+    };
+    std::string out;
+    out.reserve(tok.text.size());
+    for (char ch : tok.text) {
+        if (ch == '\n') out += "\\n";
+        else if (ch == '\r') out += "\\r";
+        else if (ch == '\t') out += "\\t";
+        else out.push_back(ch);
+        if (out.size() >= 48) { out += "..."; break; }
+    }
+    if (out.empty()) return token_kind_name(tok.kind);
+    return out;
+}
+
+static std::string format_parse_error(const std::string& sourceName,
+                                      const Token& tok,
+                                      const std::string& message) {
+    std::ostringstream oss;
+    oss << (sourceName.empty() ? "<input>" : sourceName)
+        << ":" << tok.line << ":" << tok.column
+        << ": " << message
+        << " (near '" << token_preview(tok) << "')";
+    return oss.str();
+}
 
 std::string Parser::qualify_name(const std::string& name) const {
     if (name.empty()) return name;
@@ -1136,6 +1181,35 @@ Statement Parser::parse_statement() {
 
 Program Parser::parse_program() {
     Program prog;
+    std::vector<std::string> errors;
+    auto add_error = [&](const std::string& message) {
+        errors.push_back(format_parse_error(sourceName_, peek(), message));
+    };
+    auto is_top_level_anchor = [&](const Token& t) {
+        if (!(t.kind == TokenKind::Word || t.kind == TokenKind::Keyword)) return false;
+        return t.text == "action" || t.text == "entity" || t.text == "hook" ||
+               t.text == "global" || t.text == "import" || t.text == "struct" ||
+               t.text == "enum" || t.text == "type" || t.text == "extern" ||
+               t.text == "namespace" || t.text == "run";
+    };
+    auto synchronize_top_level = [&]() {
+        const size_t startPos = pos_;
+        while (peek().kind != TokenKind::End) {
+            if (peek().kind == TokenKind::Semicolon || peek().kind == TokenKind::Newline) {
+                consume();
+                break;
+            }
+            if (peek().kind == TokenKind::RBrace || is_top_level_anchor(peek())) {
+                break;
+            }
+            consume();
+        }
+        if (pos_ == startPos && peek().kind != TokenKind::End) {
+            consume();
+        }
+        skip_separators();
+    };
+
     skip_separators();
     // Optional @erelang header (case-insensitive). Only consume when it matches.
     if (peek().kind == TokenKind::At && peek(1).kind == TokenKind::Word) {
@@ -1149,191 +1223,234 @@ Program Parser::parse_program() {
     }
     // file-level directives like @strict, @debug, @entry(name) and unknowns retained
     while (peek().kind == TokenKind::At) {
-        consume();
-        const Token& d = consume();
-        if (!(d.kind == TokenKind::Word || d.kind == TokenKind::Keyword)) throw std::runtime_error("Directive name");
-        Attribute attr; attr.name = d.text;
-        std::string dname = std::string(d.text);
-        for (auto& ch : dname) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-        if (match(TokenKind::LParen)) {
-            const Token& v = consume();
-            if (v.kind != TokenKind::String && v.kind != TokenKind::Word && v.kind != TokenKind::Number) throw std::runtime_error("Directive value");
-            attr.value = v.text;
-            expect(TokenKind::RParen, ")");
+        try {
+            consume();
+            const Token& d = consume();
+            if (!(d.kind == TokenKind::Word || d.kind == TokenKind::Keyword)) throw std::runtime_error("Directive name");
+            Attribute attr; attr.name = d.text;
+            std::string dname = std::string(d.text);
+            for (auto& ch : dname) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+            if (match(TokenKind::LParen)) {
+                const Token& v = consume();
+                if (v.kind != TokenKind::String && v.kind != TokenKind::Word && v.kind != TokenKind::Number) throw std::runtime_error("Directive value");
+                attr.value = v.text;
+                expect(TokenKind::RParen, ")");
+            }
+            if (dname == "strict") { prog.strict = true; strict_ = true; }
+            else if (dname == "debug") prog.debug = true;
+            else if (dname == "entry" && attr.value) prog.runTarget = *attr.value;
+            prog.directives.push_back(std::move(attr));
+            skip_separators();
+        } catch (const std::exception& ex) {
+            add_error(ex.what());
+            synchronize_top_level();
         }
-        if (dname == "strict") { prog.strict = true; strict_ = true; }
-        else if (dname == "debug") prog.debug = true;
-        else if (dname == "entry" && attr.value) prog.runTarget = *attr.value;
-        prog.directives.push_back(std::move(attr));
-        skip_separators();
     }
     while (peek().kind != TokenKind::End) {
-        if (peek().kind == TokenKind::RBrace) {
-            if (!namespaceStack_.empty()) {
-                consume();
-                namespaceStack_.pop_back();
-                skip_separators();
-                continue;
-            }
-            throw std::runtime_error("Unexpected '}' at top level");
-        }
-        // classify next top-level declaration while allowing attributes/modifiers
-        auto classify_next = [&](void) -> std::string {
-            size_t i = 0;
-            // skip separators
-            while (peek(i).kind == TokenKind::Newline || peek(i).kind == TokenKind::Semicolon) ++i;
-            // attributes
-            while (peek(i).kind == TokenKind::At || peek(i).kind == TokenKind::LBracket) {
-                if (peek(i).kind == TokenKind::At) {
-                    ++i; // '@'
-                    if (!(peek(i).kind == TokenKind::Word || peek(i).kind == TokenKind::Keyword)) return std::string();
-                    ++i; // name
-                    if (peek(i).kind == TokenKind::LParen) {
-                        ++i; // '('
-                        while (peek(i).kind != TokenKind::RParen && peek(i).kind != TokenKind::End) ++i;
-                        if (peek(i).kind == TokenKind::RParen) ++i;
-                    }
-                } else {
-                    ++i; // '['
-                    if (!(peek(i).kind == TokenKind::Word || peek(i).kind == TokenKind::Keyword)) return std::string();
-                    ++i; // name
-                    if (peek(i).kind == TokenKind::LParen) {
-                        ++i;
-                        while (peek(i).kind != TokenKind::RParen && peek(i).kind != TokenKind::End) ++i;
-                        if (peek(i).kind == TokenKind::RParen) ++i;
-                    }
-                    if (peek(i).kind == TokenKind::RBracket) ++i;
+        try {
+            if (peek().kind == TokenKind::RBrace) {
+                if (!namespaceStack_.empty()) {
+                    consume();
+                    namespaceStack_.pop_back();
+                    skip_separators();
+                    continue;
                 }
+                throw std::runtime_error("Unexpected '}' at top level");
+            }
+            // classify next top-level declaration while allowing attributes/modifiers
+            auto classify_next = [&](void) -> std::string {
+                size_t i = 0;
+                // skip separators
                 while (peek(i).kind == TokenKind::Newline || peek(i).kind == TokenKind::Semicolon) ++i;
-            }
-            // modifiers
-            while ((peek(i).kind == TokenKind::Word || peek(i).kind == TokenKind::Keyword) && (peek(i).text == "export" || peek(i).text == "public" || peek(i).text == "private" || peek(i).text == "async")) {
-                ++i;
-                while (peek(i).kind == TokenKind::Newline || peek(i).kind == TokenKind::Semicolon) ++i;
-            }
-            if (peek(i).kind == TokenKind::Word || peek(i).kind == TokenKind::Keyword) {
-                std::string w = std::string(peek(i).text);
-                if (w == "action") return std::string("action");
-                if (w == "entity") return std::string("entity");
-                if (w == "hook") return std::string("hook");
-                if (w == "global") return std::string("global");
-                if (w == "import") return std::string("import");
-                if (w == "struct") return std::string("struct");
-                if (w == "enum") return std::string("enum");
-                if (w == "type") return std::string("type");
-                if (w == "extern") return std::string("extern");
-                if (w == "namespace") return std::string("namespace");
-                if (w == "run") return std::string("run");
-            }
-            return std::string();
-        };
-
-        std::string kind = classify_next();
-        if (kind == "action") {
-            prog.actions.push_back(parse_action());
-        } else if (kind == "entity") {
-            prog.entities.push_back(parse_entity());
-        } else if (kind == "hook") {
-            prog.hooks.push_back(parse_hook());
-        } else if (kind == "global") {
-            prog.globals.push_back(parse_global());
-            expect(TokenKind::Semicolon, ";");
-        } else if (kind == "extern") {
-            prog.externs.push_back(parse_extern_decl());
-            expect(TokenKind::Semicolon, ";");
-        } else if (kind == "import") {
-            consume();
-            ImportDecl decl;
-            auto normalize_path = [](std::string path) {
-                for (auto& ch : path) if (ch == '\\') ch = '/';
-                return path;
+                // attributes
+                while (peek(i).kind == TokenKind::At || peek(i).kind == TokenKind::LBracket) {
+                    if (peek(i).kind == TokenKind::At) {
+                        ++i; // '@'
+                        if (!(peek(i).kind == TokenKind::Word || peek(i).kind == TokenKind::Keyword)) return std::string();
+                        ++i; // name
+                        if (peek(i).kind == TokenKind::LParen) {
+                            ++i; // '('
+                            while (peek(i).kind != TokenKind::RParen && peek(i).kind != TokenKind::End) ++i;
+                            if (peek(i).kind == TokenKind::RParen) ++i;
+                        }
+                    } else {
+                        ++i; // '['
+                        if (!(peek(i).kind == TokenKind::Word || peek(i).kind == TokenKind::Keyword)) return std::string();
+                        ++i; // name
+                        if (peek(i).kind == TokenKind::LParen) {
+                            ++i;
+                            while (peek(i).kind != TokenKind::RParen && peek(i).kind != TokenKind::End) ++i;
+                            if (peek(i).kind == TokenKind::RParen) ++i;
+                        }
+                        if (peek(i).kind == TokenKind::RBracket) ++i;
+                    }
+                    while (peek(i).kind == TokenKind::Newline || peek(i).kind == TokenKind::Semicolon) ++i;
+                }
+                // modifiers
+                while ((peek(i).kind == TokenKind::Word || peek(i).kind == TokenKind::Keyword) && (peek(i).text == "export" || peek(i).text == "public" || peek(i).text == "private" || peek(i).text == "async")) {
+                    ++i;
+                    while (peek(i).kind == TokenKind::Newline || peek(i).kind == TokenKind::Semicolon) ++i;
+                }
+                if (peek(i).kind == TokenKind::Word || peek(i).kind == TokenKind::Keyword) {
+                    std::string w = std::string(peek(i).text);
+                    if (w == "action") return std::string("action");
+                    if (w == "entity") return std::string("entity");
+                    if (w == "hook") return std::string("hook");
+                    if (w == "global") return std::string("global");
+                    if (w == "import") return std::string("import");
+                    if (w == "struct") return std::string("struct");
+                    if (w == "enum") return std::string("enum");
+                    if (w == "type") return std::string("type");
+                    if (w == "extern") return std::string("extern");
+                    if (w == "namespace") return std::string("namespace");
+                    if (w == "run") return std::string("run");
+                }
+                return std::string();
             };
-            if (match(TokenKind::Less)) {
-                std::string path;
-                while (peek().kind != TokenKind::Greater && peek().kind != TokenKind::End) {
-                    const Token& tk = consume();
-                    if (tk.kind == TokenKind::Newline || tk.kind == TokenKind::Semicolon) break;
-                    path += tk.text;
-                }
-                if (!match(TokenKind::Greater)) throw std::runtime_error("Unterminated import <...> path");
-                if (path.empty()) throw std::runtime_error("Empty import <...> path");
-                decl.path = normalize_path(path);
-            } else {
-                const Token& first = consume();
-                if (first.kind != TokenKind::Word && first.kind != TokenKind::String && first.kind != TokenKind::Keyword && first.kind != TokenKind::Slash)
-                    throw std::runtime_error("Module path");
-                std::string path = first.text;
-                if (first.kind != TokenKind::String) {
-                    while (true) {
-                        const Token& next = peek();
-                        if (next.kind == TokenKind::End || next.kind == TokenKind::Newline || next.kind == TokenKind::Semicolon) break;
-                        if (next.kind == TokenKind::Word && next.text == "as") break;
-                        if (next.kind == TokenKind::Comma) break;
-                        path += consume().text;
-                    }
-                }
-                if (path.empty()) throw std::runtime_error("Empty import path");
-                decl.path = normalize_path(path);
-            }
-            if (match_word("as")) {
-                const Token& aliasTok = consume();
-                if (!(aliasTok.kind == TokenKind::Word || aliasTok.kind == TokenKind::Keyword)) throw std::runtime_error("Expected alias after 'as'");
-                decl.alias = ident_text(aliasTok);
-            }
-            if (decl.path == "/plugins/*/project.elp") {
-                decl.pluginGlob = true;
-                if (!decl.alias) decl.alias = std::string{"plugin"};
-                prog.pluginAliases.push_back(*decl.alias);
-            }
-            prog.imports.push_back(std::move(decl));
-            expect(TokenKind::Semicolon, ";");
-        } else if (kind == "struct") {
-            prog.structs.push_back(parse_struct());
-        } else if (kind == "enum") {
-            prog.enums.push_back(parse_enum());
-        } else if (kind == "type") {
-            prog.typeAliases.push_back(parse_type_alias());
-        } else if (kind == "namespace") {
-            consume();
-            const Token& firstNs = consume();
-            if (!(firstNs.kind == TokenKind::Word || firstNs.kind == TokenKind::Keyword)) throw std::runtime_error("Expected namespace name");
-            std::string nsName = ident_text(firstNs);
-            while (peek().kind == TokenKind::Scope || peek().kind == TokenKind::Dot) {
+
+            std::string kind = classify_next();
+            if (kind == "action") {
+                prog.actions.push_back(parse_action());
+            } else if (kind == "entity") {
+                prog.entities.push_back(parse_entity());
+            } else if (kind == "hook") {
+                prog.hooks.push_back(parse_hook());
+            } else if (kind == "global") {
+                prog.globals.push_back(parse_global());
+                expect(TokenKind::Semicolon, ";");
+            } else if (kind == "extern") {
+                prog.externs.push_back(parse_extern_decl());
+                expect(TokenKind::Semicolon, ";");
+            } else if (kind == "import") {
                 consume();
-                const Token& seg = consume();
-                if (!(seg.kind == TokenKind::Word || seg.kind == TokenKind::Keyword)) throw std::runtime_error("Expected namespace segment after scope separator");
-                nsName += "::" + ident_text(seg);
+                ImportDecl decl;
+                auto normalize_path = [](std::string path) {
+                    for (auto& ch : path) if (ch == '\\') ch = '/';
+                    return path;
+                };
+                if (match(TokenKind::Less)) {
+                    std::string path;
+                    while (peek().kind != TokenKind::Greater && peek().kind != TokenKind::End) {
+                        const Token& tk = consume();
+                        if (tk.kind == TokenKind::Newline || tk.kind == TokenKind::Semicolon) break;
+                        path += tk.text;
+                    }
+                    if (!match(TokenKind::Greater)) throw std::runtime_error("Unterminated import <...> path");
+                    if (path.empty()) throw std::runtime_error("Empty import <...> path");
+                    decl.path = normalize_path(path);
+                } else {
+                    const Token& first = consume();
+                    if (first.kind != TokenKind::Word && first.kind != TokenKind::String && first.kind != TokenKind::Keyword && first.kind != TokenKind::Slash)
+                        throw std::runtime_error("Module path");
+                    std::string path = first.text;
+                    if (first.kind != TokenKind::String) {
+                        while (true) {
+                            const Token& next = peek();
+                            if (next.kind == TokenKind::End || next.kind == TokenKind::Newline || next.kind == TokenKind::Semicolon) break;
+                            if (next.kind == TokenKind::Word && next.text == "as") break;
+                            if (next.kind == TokenKind::Comma) break;
+                            path += consume().text;
+                        }
+                    }
+                    if (path.empty()) throw std::runtime_error("Empty import path");
+                    decl.path = normalize_path(path);
+                }
+                if (match_word("as")) {
+                    const Token& aliasTok = consume();
+                    if (!(aliasTok.kind == TokenKind::Word || aliasTok.kind == TokenKind::Keyword)) throw std::runtime_error("Expected alias after 'as'");
+                    decl.alias = ident_text(aliasTok);
+                }
+                if (decl.path == "/plugins/*/project.elp") {
+                    decl.pluginGlob = true;
+                    if (!decl.alias) decl.alias = std::string{"plugin"};
+                    prog.pluginAliases.push_back(*decl.alias);
+                }
+                prog.imports.push_back(std::move(decl));
+                expect(TokenKind::Semicolon, ";");
+            } else if (kind == "struct") {
+                prog.structs.push_back(parse_struct());
+            } else if (kind == "enum") {
+                prog.enums.push_back(parse_enum());
+            } else if (kind == "type") {
+                prog.typeAliases.push_back(parse_type_alias());
+            } else if (kind == "namespace") {
+                consume();
+                const Token& firstNs = consume();
+                if (!(firstNs.kind == TokenKind::Word || firstNs.kind == TokenKind::Keyword)) throw std::runtime_error("Expected namespace name");
+                std::string nsName = ident_text(firstNs);
+                while (peek().kind == TokenKind::Scope || peek().kind == TokenKind::Dot) {
+                    consume();
+                    const Token& seg = consume();
+                    if (!(seg.kind == TokenKind::Word || seg.kind == TokenKind::Keyword)) throw std::runtime_error("Expected namespace segment after scope separator");
+                    nsName += "::" + ident_text(seg);
+                }
+                expect(TokenKind::LBrace, "{");
+                namespaceStack_.push_back(qualify_name(nsName));
+            } else if (kind == "run") {
+                consume();
+                const Token& t = consume();
+                if (!(t.kind == TokenKind::Word || t.kind == TokenKind::Keyword)) throw std::runtime_error("Expected action name after run");
+                std::string runName = ident_text(t);
+                while (match(TokenKind::Scope)) {
+                    const Token& seg = consume();
+                    if (!(seg.kind == TokenKind::Word || seg.kind == TokenKind::Keyword)) throw std::runtime_error("Expected scoped segment after '::'");
+                    runName += "::" + ident_text(seg);
+                }
+                prog.runTarget = qualify_name(runName);
+                expect(TokenKind::Semicolon, ";");
+            } else {
+                // allow stray separators and ignore unknown top-level '@' blocks handled above
+                skip_separators();
+                if (peek().kind == TokenKind::End) break;
+                if (peek().kind == TokenKind::At) continue;
+                throw std::runtime_error("Unexpected top-level token");
             }
-            expect(TokenKind::LBrace, "{");
-            namespaceStack_.push_back(qualify_name(nsName));
-        } else if (kind == "run") {
-            consume();
-            const Token& t = consume();
-            if (!(t.kind == TokenKind::Word || t.kind == TokenKind::Keyword)) throw std::runtime_error("Expected action name after run");
-            std::string runName = ident_text(t);
-            while (match(TokenKind::Scope)) {
-                const Token& seg = consume();
-                if (!(seg.kind == TokenKind::Word || seg.kind == TokenKind::Keyword)) throw std::runtime_error("Expected scoped segment after '::'");
-                runName += "::" + ident_text(seg);
-            }
-            prog.runTarget = qualify_name(runName);
-            expect(TokenKind::Semicolon, ";");
-        } else {
-            // allow stray separators and ignore unknown top-level '@' blocks handled above
             skip_separators();
-            if (peek().kind == TokenKind::End) break;
-            if (peek().kind == TokenKind::At) continue;
-            throw std::runtime_error("Unexpected top-level token");
+        } catch (const std::exception& ex) {
+            add_error(ex.what());
+            synchronize_top_level();
         }
-        skip_separators();
     }
     if (!namespaceStack_.empty()) {
-        throw std::runtime_error("Unterminated namespace block");
+        add_error("Unterminated namespace block");
+    }
+    if (!errors.empty()) {
+        std::ostringstream oss;
+        oss << "Syntax errors (" << errors.size() << "):\n";
+        for (const auto& err : errors) {
+            oss << "  - " << err << "\n";
+        }
+        throw std::runtime_error(oss.str());
     }
     return prog;
 }
 
-Program Parser::parse() { return parse_program(); }
+Program Parser::parse() {
+    std::vector<std::string> lexerErrors;
+    for (const auto& token : tokens_) {
+        if (token.kind == TokenKind::Bad) {
+            lexerErrors.push_back(format_parse_error(sourceName_, token, "Lex error: " + token.text));
+        }
+    }
+    if (!lexerErrors.empty()) {
+        std::ostringstream oss;
+        oss << "Syntax errors (" << lexerErrors.size() << "):\n";
+        for (const auto& err : lexerErrors) {
+            oss << "  - " << err << "\n";
+        }
+        throw std::runtime_error(oss.str());
+    }
+
+    try {
+        return parse_program();
+    } catch (const std::exception& ex) {
+        const std::string msg = ex.what() ? std::string(ex.what()) : std::string{};
+        if (msg.rfind("Syntax errors (", 0) == 0) {
+            throw;
+        }
+        throw std::runtime_error(format_parse_error(sourceName_, peek(), msg.empty() ? "Parse error" : msg));
+    }
+}
 
 BreakStmt Parser::parse_break() {
     if (!match_word("break")) {

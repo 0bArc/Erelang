@@ -357,7 +357,7 @@ static void load_program_recursive(const std::string& file,
     erelang::LexerOptions lxopts; lxopts.enableDurations = true; lxopts.enableUnits = true; lxopts.enablePolyIdentifiers = true; lxopts.emitDocComments = true; lxopts.emitComments = false;
     erelang::Lexer lx(std::move(source), lxopts);
     auto tokens = lx.lex();
-    erelang::Parser ps(std::move(tokens));
+    erelang::Parser ps(std::move(tokens), key);
     erelang::Program prog = ps.parse();
     for (auto& a : prog.actions) a.sourcePath = key;
     for (auto& h : prog.hooks) h.sourcePath = key;
@@ -530,7 +530,7 @@ static std::string generate_bootstrap_source(const fs::path& mainFile,
             erelang::LexerOptions lxopts; lxopts.enableDurations = true; lxopts.enableUnits = true; lxopts.enablePolyIdentifiers = true; lxopts.emitDocComments = true; lxopts.emitComments = false;
             Lexer lx(std::move(source), lxopts);
             auto tokens = lx.lex();
-            Parser ps(std::move(tokens));
+            Parser ps(std::move(tokens), key);
             Program prog = ps.parse();
             for (auto& a : prog.actions) a.sourcePath = key;
             for (auto& h : prog.hooks) h.sourcePath = key;
@@ -1019,20 +1019,15 @@ struct ExecutionContext {
 
 [[nodiscard]] int handle_list_builtins() {
     constexpr std::array builtins{
-        "now_ms","now_iso","env","username","computer_name","machine_guid","uuid","rand_int","hwid","args_count","args_get",
+        "now_ms","now_iso","env","username","computer_name","uuid","rand_int","args_count","args_get",
         "os.args","os.args_count","os.args_get","exec","os.exec","spawn","os.spawn","exit","stdin_read",
         "read_text","write_text","append_text","file_exists","mkdirs","copy_file","move_file","delete_file","list_files","cwd","chdir",
         "path_join","path_dirname","path_basename","path_ext","file_mtime",
         "color.red","color.green","color.yellow","color.blue","color.magenta","color.cyan","color.bold","color.reset",
-    "http_get","http_download","hls_download_best","url_encode",
-    "network.ip.flush","network.ip.release","network.ip.renew","network.ip.registerdns",
-    "win_window_create","win_button_create","win_checkbox_create","win_radiobutton_create","win_slider_create","win_textbox_create","win_label_create","win_on","win_show","win_loop","win_get_text","win_set_text","win_get_check","win_set_check","win_get_slider","win_set_slider","win_close","win_auto_scale","win_set_scale","win_message_box",
-    "ui_window_create","ui_label","ui_button","ui_checkbox","ui_radio","ui_slider","ui_textbox","ui_same_line","ui_newline","ui_spacer","ui_separator","ui_load",
         "data_new","data_set","data_get","data_has","data_keys","data_save","data_load",
-        "hash_fnv1a","random_bytes","regex_match","regex_find","regex_replace","perm_grant","perm_revoke","perm_has","perm_list",
-        "bin_new","bin_from_hex","bin_to_hex","bin_len","bin_get","bin_set","bin_fill","bin_slice",
-        "thread_run","thread_join","thread_done","collatz_len","collatz_sweep","collatz_best_steps","collatz_avg_steps",
-        "dev_meta","audit","advance_time"
+        "perm_grant","perm_revoke","perm_has","perm_list",
+        "collatz_len","collatz_sweep","collatz_best_steps","collatz_avg_steps",
+        "advance_time"
     };
 
     for (const auto* builtin : builtins) {
@@ -1143,7 +1138,7 @@ struct ExecutionContext {
         std::cout << "\n";
     }
 
-    std::cout << "(Bootstrap UI now uses standard console output; scripts should rely on win_* built-ins for GUIs.)\n";
+    std::cout << "(Bootstrap uses console output only.)\n";
     return 0;
 }
 
@@ -1151,7 +1146,7 @@ struct ExecutionContext {
     print_banner();
     std::cout << "Reasons it leans DSL-like / special-purpose\n\n";
     std::cout << "Scope is narrow\n\n";
-    std::cout << "It bakes in things like GUI, filesystem, UUIDs, debugging, and entities.\n\n";
+    std::cout << "It bakes in things like filesystem, UUIDs, debugging, and entities.\n\n";
     std::cout << "There’s no mention of broad ecosystems (e.g., networking libraries, math/science packages, concurrency models beyond parallel {}).\n\n";
     std::cout << "Small type system\n\n";
     std::cout << "Only str, int, bool.\n\n";
@@ -1319,7 +1314,7 @@ struct ExecutionContext {
         return rc;
 #endif
     } catch (const std::exception& ex) {
-        std::cerr << "Run error: " << ex.what() << '\n';
+        std::cerr << ex.what() << '\n';
         return 1;
     }
 }
@@ -1624,7 +1619,7 @@ int main(int argc, char** argv) {
                 std::string text = preprocess_source(read_all_text(key));
                 erelang::Lexer lx(text, lxopts);
                 auto toks = lx.lex();
-                erelang::Parser ps(std::move(toks));
+                erelang::Parser ps(std::move(toks), key);
                 erelang::Program prog = ps.parse();
                 orderedFiles.emplace_back(key, std::move(text));
                 for (const auto& imp : prog.imports) {

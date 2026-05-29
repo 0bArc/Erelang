@@ -1,4 +1,5 @@
 #include "erelang/typechecker.hpp"
+#include "erelang/runtime_imports.hpp"
 #include <algorithm>
 #include <cctype>
 #include <unordered_map>
@@ -77,66 +78,16 @@ bool collection_type_compatible(const std::string& expected, const std::string& 
 }
 
 std::optional<std::string> resolve_builtin_module_alias_call(const Program* program, const std::string& callName) {
-    if (!program) return std::nullopt;
-
+    if (!program) {
+        return std::nullopt;
+    }
     const auto dotPos = callName.find('.');
     if (dotPos == std::string::npos || dotPos == 0 || dotPos + 1 >= callName.size()) {
         return std::nullopt;
     }
-
     const std::string alias = callName.substr(0, dotPos);
-    std::string method = callName.substr(dotPos + 1);
-    std::transform(method.begin(), method.end(), method.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
-
-    auto is_fs_module = [](std::string path) {
-        for (auto& ch : path) if (ch == '\\') ch = '/';
-        std::transform(path.begin(), path.end(), path.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
-        return path == "builtin/fs" || path == "builtin/erefs";
-    };
-
-    auto is_path_module = [](std::string path) {
-        for (auto& ch : path) if (ch == '\\') ch = '/';
-        std::transform(path.begin(), path.end(), path.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
-        return path == "builtin/path" || path == "builtin/erepath";
-    };
-
-    auto map_method = [&](bool isFs, bool isPath) -> std::optional<std::string> {
-        if (isFs) {
-            if (method == "read") return std::string{"read_text"};
-            if (method == "write") return std::string{"write_text"};
-            if (method == "append") return std::string{"append_text"};
-            if (method == "exists") return std::string{"file_exists"};
-            if (method == "mkdir") return std::string{"mkdirs"};
-            if (method == "copy") return std::string{"copy_file"};
-            if (method == "move") return std::string{"move_file"};
-            if (method == "remove") return std::string{"delete_file"};
-            if (method == "list") return std::string{"list_files"};
-            if (method == "cwd") return std::string{"cwd"};
-            if (method == "chdir") return std::string{"chdir"};
-            if (method == "join") return std::string{"path_join"};
-            if (method == "parent" || method == "dirname") return std::string{"path_dirname"};
-            if (method == "name" || method == "basename") return std::string{"path_basename"};
-            if (method == "ext") return std::string{"path_ext"};
-        }
-        if (isPath) {
-            if (method == "join") return std::string{"path_join"};
-            if (method == "parent" || method == "dirname") return std::string{"path_dirname"};
-            if (method == "name" || method == "basename") return std::string{"path_basename"};
-            if (method == "ext") return std::string{"path_ext"};
-            if (method == "exists") return std::string{"file_exists"};
-        }
-        return std::nullopt;
-    };
-
-    for (const auto& imp : program->imports) {
-        if (!imp.alias || *imp.alias != alias || imp.path.empty()) continue;
-        const bool isFs = is_fs_module(imp.path);
-        const bool isPath = is_path_module(imp.path);
-        if (!isFs && !isPath) continue;
-        if (auto mapped = map_method(isFs, isPath)) return mapped;
-    }
-
-    return std::nullopt;
+    const std::string method = callName.substr(dotPos + 1);
+    return resolve_builtin_module_method(*program, alias, method);
 }
 
 } // namespace
@@ -705,159 +656,157 @@ void TypeChecker::finalize_unused(const Program& program, TCResult& out) {
 }
 
 TCResult TypeChecker::check(const Program& program) {
-    TCResult r; pass_collect(program); pass_check_program(program, r); finalize_unused(program, r); return r;
+    init_builtins();
+    register_imported_module_builtins(program);
+    TCResult r;
+    pass_collect(program);
+    pass_check_program(program, r);
+    finalize_unused(program, r);
+    return r;
+}
+
+void TypeChecker::register_imported_module_builtins(const Program& program) {
+    auto add = [&](std::string n, int minP, int maxP, std::string rt) {
+        builtins_[std::move(n)] = BuiltinInfo{minP, maxP, std::move(rt)};
+    };
+    if (program_imports_module(&program, "builtin/network") || program_imports_module(&program, "builtin/net")) {
+        add("http_get", 1, 1, "string");
+        add("http_download", 2, 2, "bool");
+        add("hls_download_best", 2, 2, "bool");
+        add("url_encode", 1, 1, "string");
+        add("network.ip.flush", 0, 0, "string");
+        add("network.ip.release", 0, 1, "string");
+        add("network.ip.renew", 0, 1, "string");
+        add("network.ip.registerdns", 0, 0, "string");
+        add("network.debug.enable", 0, 1, "string");
+        add("network.debug.disable", 0, 0, "string");
+        add("network.debug.status", 0, 0, "string");
+        add("network.debug.last", 0, 0, "string");
+        add("network.debug.clear", 0, 0, "string");
+        add("network.debug.log_tail", 0, 1, "string");
+    }
+    if (program_imports_module(&program, "builtin/regex")) {
+        add("regex_match", 2, 2, "bool");
+        add("regex_find", 2, 2, "string");
+        add("regex_replace", 3, 3, "string");
+    }
+    if (program_imports_module(&program, "builtin/crypto")) {
+        add("hash_fnv1a", 1, 1, "string");
+        add("random_bytes", 1, 1, "string");
+    }
+    if (program_imports_module(&program, "builtin/binary")) {
+        add("bin_new", 0, 0, "string");
+        add("bin_push_u8", 2, 2, "void");
+        add("bin_len", 1, 1, "int");
+        add("bin_hex", 1, 1, "string");
+        add("bin_from_hex", 1, 1, "string");
+        add("bin_get_u8", 2, 2, "int");
+    }
+    if (program_imports_module(&program, "builtin/threads")) {
+        add("thread_run", 1, 2, "string");
+        add("thread_join", 1, 1, "bool");
+        add("thread_join_timeout", 2, 2, "bool");
+        add("thread_done", 1, 1, "bool");
+        add("thread_list", 0, 0, "string");
+        add("thread_wait_all", 0, 0, "void");
+        add("thread_count", 0, 0, "int");
+        add("thread_yield", 0, 0, "void");
+        add("thread_gc", 0, 0, "void");
+        add("thread_gc_all", 0, 0, "void");
+        add("thread_purge", 0, 0, "void");
+        add("thread_remove", 1, 2, "string");
+        add("thread_state", 1, 1, "string");
+    }
+    if (program_imports_module(&program, "builtin/monitor")) {
+        add("monitor_add", 1, 2, "string");
+        add("monitor_remove", 1, 1, "void");
+        add("monitor_list", 0, 0, "string");
+        add("monitor_info", 1, 1, "string");
+        add("monitor_last_change", 1, 1, "string");
+        add("monitor_set_interval", 2, 2, "void");
+    }
+    if (program_imports_module(&program, "builtin/math")) {
+        add("add", 2, 2, "int"); add("sub", 2, 2, "int"); add("mul", 2, 2, "int"); add("div", 2, 2, "int"); add("mod", 2, 2, "int");
+        add("min", 2, 2, "int"); add("max", 2, 2, "int"); add("abs", 1, 1, "int");
+        add("sin", 1, 1, "int"); add("cos", 1, 1, "int"); add("tan", 1, 1, "int");
+        add("sqrt", 1, 1, "int"); add("pow", 2, 2, "int");
+        add("collatz_len", 1, 1, "int"); add("collatz_sweep", 1, 1, "int");
+        add("collatz_best_n", 0, 0, "int"); add("collatz_best_steps", 0, 0, "int");
+        add("collatz_total_steps", 0, 0, "int"); add("collatz_avg_steps", 0, 0, "int");
+    }
+    if (program_imports_module(&program, "builtin/data")) {
+        add("data_new", 0, 0, "string");
+        add("data_set", 3, 3, "void");
+        add("data_get", 2, 2, "string");
+        add("data_has", 2, 2, "bool");
+        add("data_keys", 1, 1, "string");
+        add("data_save", 2, 2, "void");
+        add("data_load", 1, 1, "string");
+    }
+    if (program_imports_module(&program, "builtin/perm")) {
+        add("perm_grant", 1, 1, "void"); add("perm_revoke", 1, 1, "void");
+        add("perm_has", 1, 1, "bool"); add("perm_list", 0, 0, "string");
+    }
+    if (program_imports_module(&program, "builtin/system")) {
+        add("system.cmd", 1, 1, "int");
+        add("system.execute", 1, 1, "int");
+        add("system.output", 0, 0, "string");
+        add("system.last_exit", 0, 0, "int");
+        add("system.ip.flush", 0, 0, "string");
+    }
+    if (program_imports_module(&program, "builtin/fs") || program_imports_module(&program, "builtin/erefs")) {
+        add("read_text", 1, 1, "string"); add("write_text", 2, 2, "void"); add("append_text", 2, 2, "void");
+        add("file_exists", 1, 1, "bool"); add("mkdirs", 1, 1, "void"); add("copy_file", 2, 2, "bool");
+        add("move_file", 2, 2, "bool"); add("delete_file", 1, 1, "bool"); add("list_files", 1, 1, "unknown");
+        add("cwd", 0, 0, "string"); add("chdir", 1, 1, "bool");
+        add("path_join", 1, -1, "string"); add("path_dirname", 1, 1, "string");
+        add("path_basename", 1, 1, "string"); add("path_ext", 1, 1, "string");
+    }
 }
 
 void TypeChecker::init_builtins() {
     if (!builtins_.empty()) return;
     auto add=[&](std::string n,int minP,int maxP,std::string rt){ builtins_[std::move(n)] = BuiltinInfo{minP,maxP,rt}; };
-    // Core/time/env
-    add("now_ms",0,0,"int"); add("now_iso",0,0,"string");
-    add("env",1,1,"string"); add("username",0,0,"string"); add("machine_guid",0,0,"string"); add("computer_name",0,0,"string"); add("volume_serial",0,0,"string"); add("hwid",0,0,"string"); add("rand_int",0,2,"int"); add("uuid",0,0,"string");
-    add("args_count",0,0,"int"); add("args_get",1,1,"string");
-    add("os.args",0,0,"array<any>"); add("os.args_count",0,0,"int"); add("os.args_get",1,1,"string");
-    add("exec",1,1,"int"); add("run_file",1,1,"void"); add("run_bat",1,1,"void"); add("read_line",0,0,"string"); add("input",0,1,"string"); add("prompt",1,1,"string");
-    add("os.exec",1,1,"int"); add("spawn",1,1,"int"); add("os.spawn",1,1,"int"); add("exit",1,1,"void"); add("stdin_read",0,0,"string");
+    add("now_ms",0,0,"int");
+    add("env",1,1,"string");
+    add("rand_int",0,2,"int");
+    add("uuid",0,0,"string");
+    add("args_count",0,0,"int");
+    add("args_get",1,1,"string");
+    add("read_line",0,0,"string");
+    add("input",0,1,"string");
     add("stderr_print",1,1,"void");
-    add("option_none",0,0,"unknown"); add("option_some",1,1,"unknown"); add("option_is_some",1,1,"bool"); add("option_unwrap_or",2,2,"unknown");
-    add("option.none",0,0,"unknown"); add("option.some",1,1,"unknown"); add("option.is_some",1,1,"bool"); add("option.unwrap_or",2,2,"unknown");
-    add("result_ok",1,1,"unknown"); add("result_err",1,1,"unknown"); add("result_is_ok",1,1,"bool"); add("result_unwrap_or",2,2,"unknown");
-    add("result.ok",1,1,"unknown"); add("result.err",1,1,"unknown"); add("result.is_ok",1,1,"bool"); add("result.unwrap_or",2,2,"unknown");
-    add("toint",1,1,"int"); add("toInt",1,1,"int"); add("tostr",1,1,"string"); add("toString",1,1,"string"); add("tofloat",1,1,"double"); add("tobool",1,1,"bool");
-    add("dynamic_cast",2,2,"unknown");
-    add("reinterpret_cast",2,2,"pointer");
-    add("bit_cast",2,2,"unknown");
-    add("bitcast",2,2,"unknown");
-    add("__builtin_sizeof",1,1,"int");
-    add("__builtin_alignof",1,1,"int");
-    add("__builtin_typeof",1,1,"string");
-    add("__builtin_decltype",1,1,"string");
-    add("__builtin_offsetof",2,2,"int");
-    add("__builtin_is_base_of",2,2,"bool");
-    add("ptr_new",1,1,"pointer");
-    add("ptr_get",1,1,"string");
-    add("ptr_set",2,2,"void");
-    add("ptr_free",1,1,"void");
-    add("ptr_valid",1,1,"bool");
-    add("malloc",1,1,"pointer");
-    add("realloc",2,2,"pointer");
-    add("memcpy",2,3,"void");
-    add("memset",2,3,"void");
-    add("free",1,1,"void");
-    add("make_unique",1,1,"pointer");
-    add("make_shared",1,1,"pointer");
-    add("unique_reset",1,1,"void");
-    add("shared_reset",1,1,"void");
-    add("to_json",1,1,"string"); add("from_json",1,1,"map<any,any>");
-    add("string.lstrip",1,1,"string"); add("string.rstrip",1,1,"string"); add("string.strip",1,1,"string"); add("string.lower",1,1,"string"); add("string.upper",1,1,"string");
-    add("string.starts_with",2,2,"bool"); add("string.ends_with",2,2,"bool"); add("string.find",2,2,"int"); add("string.substr",2,3,"string"); add("string.len",1,1,"int");
-    // Filesystem
-    add("read_text",1,1,"string"); add("write_text",2,2,"void"); add("append_text",2,2,"void"); add("file_exists",1,1,"bool"); add("mkdirs",1,1,"void"); add("copy_file",2,2,"bool"); add("move_file",2,2,"bool"); add("delete_file",1,1,"bool");
-    add("file_size",1,1,"int");
-    add("list_files",1,1,"unknown"); add("cwd",0,0,"string"); add("chdir",1,1,"bool");
-    add("path_join",1,-1,"string"); add("path_dirname",1,1,"string"); add("path_basename",1,1,"string"); add("path_ext",1,1,"string");
-    add("file_mtime",1,1,"int");
-    add("file_open",2,2,"string"); add("file_close",1,1,"bool"); add("file_read",1,2,"string");
-    add("file_write",2,2,"int"); add("file_seek",2,3,"bool"); add("file_tell",1,1,"int"); add("file_flush",1,1,"bool");
-    add("fopen",2,2,"string"); add("fclose",1,1,"bool"); add("fread",1,2,"string");
-    add("fwrite",2,2,"int"); add("fseek",2,3,"bool"); add("ftell",1,1,"int"); add("fflush",1,1,"bool");
-    add("strbuf_new",0,1,"string"); add("strbuf_append",2,2,"void"); add("strbuf_clear",1,1,"void");
-    add("strbuf_len",1,1,"int"); add("strbuf_to_string",1,1,"string"); add("strbuf_free",1,1,"void"); add("strbuf_reserve",2,2,"void");
-    add("string_buffer_new",0,1,"string"); add("string_buffer_append",2,2,"void"); add("string_buffer_clear",1,1,"void");
-    add("string_buffer_len",1,1,"int"); add("string_buffer_to_string",1,1,"string"); add("string_buffer_free",1,1,"void"); add("string_buffer_reserve",2,2,"void");
-    add("color.red",1,1,"string"); add("color.green",1,1,"string"); add("color.yellow",1,1,"string"); add("color.blue",1,1,"string");
-    add("color.magenta",1,1,"string"); add("color.cyan",1,1,"string"); add("color.bold",1,1,"string"); add("color.reset",0,0,"string");
-    // Collections
-    add("set_new",0,-1,"unknown"); add("set_add",2,2,"bool"); add("set_has",2,2,"bool"); add("set_remove",2,2,"bool"); add("set_size",1,1,"int"); add("set_values",1,1,"array<any>");
-    add("set_union",2,2,"unknown"); add("set_intersect",2,2,"unknown"); add("set_diff",2,2,"unknown");
-    add("queue_new",0,-1,"unknown"); add("queue_push",2,2,"void"); add("queue_pop",1,1,"unknown"); add("queue_peek",1,1,"unknown"); add("queue_len",1,1,"int"); add("queue_clear",1,1,"void");
-    add("table_new",0,0,"unknown"); add("table_put",4,4,"void"); add("table_get",3,4,"unknown"); add("table_has",3,3,"bool");
-    add("table_remove",3,3,"bool"); add("table_rows",1,1,"unknown"); add("table_columns",1,1,"unknown"); add("table_row_keys",2,2,"unknown");
-    add("table_clear_row",2,2,"void"); add("table_count_row",2,2,"int");
-    // Network
-    add("http_get",1,1,"string"); add("http_download",2,2,"bool"); add("hls_download_best",2,2,"bool"); add("url_encode",1,1,"string");
-    add("network.ip.flush",0,0,"string"); add("network.ip.release",0,1,"string"); add("network.ip.renew",0,1,"string"); add("network.ip.registerdns",0,0,"string");
-    add("network.debug.enable",0,1,"string"); add("network.debug.disable",0,0,"string");
-    add("network.debug.status",0,0,"string"); add("network.debug.last",0,0,"string");
-    add("network.debug.clear",0,0,"string"); add("network.debug.log_tail",0,1,"string");
-    add("char_is_digit",1,1,"bool"); add("char_is_space",1,1,"bool"); add("char_is_alpha",1,1,"bool"); add("char_is_ident_start",1,1,"bool"); add("char_is_ident_part",1,1,"bool");
-    // Language info
-    add("language_name",0,0,"string"); add("language_version",0,0,"string"); add("language_about",0,0,"string"); add("language_limitations",0,0,"string");
-    // GUI / windowing (Windows only semantics, but we still typecheck symbol existence)
-    add("win_window_create",3,3,"string"); // title,w,h -> "win:<id>"
-    add("win_button_create",7,7,"void");   // handle,id,text,x,y,w,h
-    add("win_checkbox_create",7,7,"void");
-    add("win_radiobutton_create",7,8,"void"); // optional groupStart
-    add("win_slider_create",9,9,"void");
-    add("win_label_create",6,6,"void");
-    add("win_textbox_create",6,6,"void");
-    add("win_set_title",2,2,"void");
-    add("win_move",3,3,"void");
-    add("win_resize",3,3,"void");
-    add("win_set_text",3,3,"void");
-    add("win_get_text",2,2,"string");
-    add("win_get_check",2,2,"bool");
-    add("win_set_check",3,3,"void");
-    add("win_get_slider",2,2,"int");
-    add("win_set_slider",3,3,"void");
-    add("win_on",3,3,"void");
-    add("win_show",1,1,"void");
-    add("win_close",1,1,"void");
-    add("win_set_scale",2,2,"void");
-    add("win_auto_scale",1,1,"void");
-    // win_message_box(handle,title,message[,iconKind])
-    add("win_message_box",3,4,"void");
-    add("win_loop",1,1,"void");
-        add("ui_window_create",3,8,"string");
-        add("ui_label",2,4,"void");
-        add("ui_button",3,6,"void");
-        add("ui_checkbox",3,7,"void");
-        add("ui_radio",3,8,"void");
-        add("ui_slider",5,8,"void");
-        add("ui_textbox",2,6,"void");
-        add("ui_same_line",1,1,"void");
-        add("ui_newline",1,1,"void");
-        add("ui_spacer",1,3,"void");
-        add("ui_separator",1,3,"void");
-        add("ui_load",1,4,"string");
-
-    // Data store builtins
-    add("data_new",0,0,"string");          // returns handle data:<id>
-    add("data_set",3,3,"void");            // handle,key,value
-    add("data_get",2,2,"string");          // handle,key -> value or empty
-    add("data_has",2,2,"bool");            // handle,key -> bool
-    add("data_keys",1,1,"string");         // comma separated keys (temporary design)
-    add("data_save",2,2,"void");           // handle,path
-    add("data_load",1,1,"string");         // path -> new handle
-
-    // Math / numeric helpers
-    add("add",2,2,"int"); add("sub",2,2,"int"); add("mul",2,2,"int"); add("div",2,2,"int"); add("mod",2,2,"int");
-    add("min",2,2,"int"); add("max",2,2,"int"); add("abs",1,1,"int");
-    add("sin",1,1,"int"); add("cos",1,1,"int"); add("tan",1,1,"int"); // currently return numeric string; treat as int
-    add("sqrt",1,1,"int"); add("pow",2,2,"int");
-    add("collatz_len",1,1,"int"); add("collatz_sweep",1,1,"int"); add("collatz_best_n",0,0,"int"); add("collatz_best_steps",0,0,"int"); add("collatz_total_steps",0,0,"int"); add("collatz_avg_steps",0,0,"int");
-
-    // Crypto
-    add("hash_fnv1a",1,1,"string"); add("random_bytes",1,1,"string");
-
-    // Regex
-    add("regex_match",2,2,"bool"); add("regex_find",2,2,"string"); add("regex_replace",3,3,"string");
-
-    // Binary buffers
-    add("bin_new",0,0,"string"); add("bin_push_u8",2,2,"void"); add("bin_len",1,1,"int"); add("bin_hex",1,1,"string"); add("bin_from_hex",1,1,"string"); add("bin_get_u8",2,2,"int");
-
-    // Permissions
-    add("perm_grant",1,1,"void"); add("perm_revoke",1,1,"void"); add("perm_has",1,1,"bool"); add("perm_list",0,0,"string");
-
-    // Threads
-    add("thread_run",1,2,"string"); add("thread_join",1,1,"bool"); add("thread_join_timeout",2,2,"bool"); add("thread_done",1,1,"bool");
-    add("thread_list",0,0,"string"); add("thread_wait_all",0,0,"void"); add("thread_count",0,0,"int"); add("thread_yield",0,0,"void");
-    add("thread_gc",0,0,"void"); add("thread_gc_all",0,0,"void"); add("thread_purge",0,0,"void"); add("thread_remove",1,2,"string"); add("thread_state",1,1,"string");
-
-    // Monitor
-    add("monitor_add",1,2,"string"); add("monitor_remove",1,1,"void"); add("monitor_list",0,0,"string"); add("monitor_info",1,1,"string");
-    add("monitor_last_change",1,1,"string"); add("monitor_set_interval",2,2,"void");
-        add("plugin_core",2,2,"string"); add("plugin_core_files",1,1,"string"); add("plugin_core_keys",2,2,"string");
+    add("exec",1,1,"int");
+    add("spawn",1,1,"int");
+    add("exit",1,1,"void");
+    add("toint",1,1,"int");
+    add("tostr",1,1,"string");
+    add("tofloat",1,1,"double");
+    add("tobool",1,1,"bool");
+    add("to_json",1,1,"string");
+    add("from_json",1,1,"map<any,any>");
+    add("string.len",1,1,"int");
+    add("string.strip",1,1,"string");
+    add("string.lower",1,1,"string");
+    add("string.upper",1,1,"string");
+    add("string.find",2,2,"int");
+    add("string.substr",2,3,"string");
+    add("list_new",0,-1,"unknown");
+    add("list_push",2,2,"void");
+    add("list_get",2,2,"string");
+    add("list_len",1,1,"int");
+    add("list_join",2,2,"string");
+    add("dict_new",0,0,"unknown");
+    add("dict_set",3,3,"void");
+    add("dict_get",2,2,"string");
+    add("dict_has",2,2,"bool");
+    add("dict_keys",1,1,"unknown");
+    add("dict_size",1,1,"int");
+    add("language_name",0,0,"string");
+    add("language_version",0,0,"string");
+    add("plugin_core",2,2,"string");
+    add("plugin_core_files",1,1,"string");
+    add("plugin_core_keys",2,2,"string");
 }
 
 } // namespace erelang

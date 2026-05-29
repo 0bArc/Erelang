@@ -33,6 +33,15 @@ option(BUILD_SHARED_RUNTIME "Build erelang as a shared DLL (erelang.dll). OFF = 
 option(BUILD_DEBUGGER_EXE "Build debug.exe helper via --make-debug after erelang links" OFF)
 option(ERELANG_BUNDLE_MINGW_RUNTIME "Copy MinGW runtime DLLs next to erelang.exe for portable sharing" ON)
 option(ERELANG_AUTO_UPDATE_EXTENSION "Auto package/install VS Code extension after erelang build" OFF)
+option(ERELANG_EXPERIMENTAL "Build creation kit, thread and monitor builtins" OFF)
+
+set(_ERELANG_EXPERIMENTAL_SOURCES experimental/disabled_builtin_stubs.cpp)
+if (ERELANG_EXPERIMENTAL)
+  set(_ERELANG_EXPERIMENTAL_SOURCES
+    experimental/builtins/threads.cpp
+    experimental/builtins/monitor.cpp
+  )
+endif()
 
 # Default to Release if not specified
 if (NOT CMAKE_BUILD_TYPE)
@@ -61,6 +70,11 @@ add_library(erelang STATIC
     src/lexer.cpp
     src/parser.cpp
     src/runtime.cpp
+    src/runtime_helpers.cpp
+    src/runtime_eval.cpp
+    src/runtime_actions.cpp
+    src/runtime_imports.cpp
+    src/runtime_builtins.cpp
   src/erodsl/spec.cpp
   src/builtins/math.cpp
   src/builtins/network.cpp
@@ -70,26 +84,21 @@ add_library(erelang STATIC
   src/builtins/regex.cpp
   src/builtins/perm.cpp
   src/builtins/binary.cpp
-  src/builtins/threads.cpp
-  src/builtins/monitor.cpp
   src/features/serialization.cpp
-  src/ast.cpp
   src/typechecker.cpp
-  src/error.cpp
   src/optimizer.cpp
-  src/gc.cpp
-  src/ffi.cpp
-  src/stdlib.cpp
   src/modules.cpp
-  src/symboltable.cpp
   src/plugins.cpp
-  src/creation_kit.cpp
-  src/language_profile.cpp
+  ${_ERELANG_EXPERIMENTAL_SOURCES}
   src/ir.cpp
   src/codegen_x64.cpp
 )
 
 target_include_directories(erelang PUBLIC include)
+if (ERELANG_EXPERIMENTAL)
+  target_include_directories(erelang PRIVATE "${CMAKE_SOURCE_DIR}/experimental")
+  target_compile_definitions(erelang PUBLIC ERELANG_EXPERIMENTAL=1)
+endif()
 ob_set_output(erelang STATIC)
 if (WIN32)
   add_custom_command(TARGET erelang POST_BUILD
@@ -108,7 +117,6 @@ if (BUILD_SHARED_RUNTIME AND SPLIT_RUNTIME_DLLS)
     src/lexer.cpp
     src/parser.cpp
     src/ast.cpp
-    src/language_profile.cpp
   )
   set_target_properties(ob_frontend PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
   target_include_directories(ob_frontend PUBLIC include)
@@ -177,7 +185,6 @@ if (BUILD_SHARED_RUNTIME AND SPLIT_RUNTIME_DLLS)
   add_library(erelang_shared SHARED
     src/runtime.cpp
     src/cabi_exports.cpp
-    src/language_profile.cpp
     src/lexer.cpp
     src/parser.cpp
     src/ast.cpp
@@ -212,7 +219,7 @@ if (BUILD_SHARED_RUNTIME AND SPLIT_RUNTIME_DLLS)
   if (WIN32)
     # Link common Windows libs where broadly needed
     foreach(tgt IN ITEMS ob_frontend ob_semantic ob_optimizer ob_gc ob_ffi ob_stdlib ob_modules ob_builtins_math ob_builtins_network ob_builtins_system erelang_shared)
-      target_link_libraries(${tgt} PUBLIC advapi32 user32 gdi32 comctl32 rpcrt4 winhttp)
+      target_link_libraries(${tgt} PUBLIC advapi32 user32 rpcrt4 winhttp)
       target_compile_definitions(${tgt} PUBLIC UNICODE _UNICODE)
     endforeach()
   endif()
@@ -228,8 +235,6 @@ elseif (BUILD_SHARED_RUNTIME)
   add_library(erelang_shared SHARED
     src/lexer.cpp
     src/parser.cpp
-    src/ast.cpp
-    src/language_profile.cpp
     src/erodsl/spec.cpp
     src/builtins/math.cpp
     src/builtins/network.cpp
@@ -239,31 +244,33 @@ elseif (BUILD_SHARED_RUNTIME)
     src/builtins/regex.cpp
     src/builtins/perm.cpp
     src/builtins/binary.cpp
-    src/builtins/threads.cpp
-    src/builtins/monitor.cpp
     src/features/serialization.cpp
     src/typechecker.cpp
-    src/symboltable.cpp
-    src/error.cpp
     src/optimizer.cpp
-    src/gc.cpp
-    src/ffi.cpp
-    src/stdlib.cpp
     src/modules.cpp
     src/plugins.cpp
-    src/creation_kit.cpp
+    ${_ERELANG_EXPERIMENTAL_SOURCES}
     src/ir.cpp
     src/codegen_x64.cpp
     src/runtime.cpp
+    src/runtime_helpers.cpp
+    src/runtime_eval.cpp
+    src/runtime_actions.cpp
+    src/runtime_imports.cpp
+    src/runtime_builtins.cpp
     src/cabi_exports.cpp
   )
   set_target_properties(erelang_shared PROPERTIES OUTPUT_NAME "erelang")
   target_compile_definitions(erelang_shared PRIVATE BUILDING_ERELANG_DLL OB_C_ABI_IMPL)
   target_include_directories(erelang_shared PUBLIC include)
+  if (ERELANG_EXPERIMENTAL)
+    target_include_directories(erelang_shared PRIVATE "${CMAKE_SOURCE_DIR}/experimental")
+    target_compile_definitions(erelang_shared PRIVATE ERELANG_EXPERIMENTAL=1)
+  endif()
   set_property(TARGET erelang_shared PROPERTY INTERPROCEDURAL_OPTIMIZATION OFF)
   ob_set_output(erelang_shared SHARED)
   if (WIN32)
-    target_link_libraries(erelang_shared PUBLIC advapi32 user32 gdi32 comctl32 rpcrt4 winhttp)
+    target_link_libraries(erelang_shared PUBLIC advapi32 user32 rpcrt4 winhttp)
     target_compile_definitions(erelang_shared PUBLIC UNICODE _UNICODE)
   endif()
   if (NOT MSVC)
@@ -277,6 +284,9 @@ endif()
 add_executable(obc src/main.cpp)
 
 target_link_libraries(obc PRIVATE erelang)
+if (ERELANG_EXPERIMENTAL)
+  target_compile_definitions(obc PRIVATE ERELANG_EXPERIMENTAL=1)
+endif()
 ob_set_output(obc EXECUTABLE)
 
 # simple runner helper that prints a usage hint
@@ -303,7 +313,7 @@ if (WIN32 AND NOT MSVC AND ERELANG_BUNDLE_MINGW_RUNTIME)
 endif()
 if (WIN32)
   target_compile_definitions(erelang_runner PRIVATE UNICODE _UNICODE)
-  target_link_libraries(erelang_runner PRIVATE erelang advapi32 user32 gdi32 comctl32 rpcrt4 winhttp shell32)
+  target_link_libraries(erelang_runner PRIVATE erelang advapi32 user32 rpcrt4 winhttp shell32)
 else()
   target_link_libraries(erelang_runner PRIVATE erelang)
 endif()
@@ -379,9 +389,9 @@ endif()
 # Windows-specific UI/linking settings
 if (WIN32)
 
-  target_link_libraries(erelang PUBLIC advapi32 user32 gdi32 comctl32 rpcrt4 winhttp)
+  target_link_libraries(erelang PUBLIC advapi32 user32 rpcrt4 winhttp)
   target_compile_definitions(erelang PUBLIC UNICODE _UNICODE)
-  target_link_libraries(erelang_runner PUBLIC advapi32 user32 gdi32 comctl32 rpcrt4 winhttp)
+  target_link_libraries(erelang_runner PUBLIC advapi32 user32 rpcrt4 winhttp)
   target_compile_definitions(erelang_runner PUBLIC UNICODE _UNICODE)
 
   # Compute path to the built static library (used when embedding payload)
@@ -433,14 +443,4 @@ add_custom_target(update_extension
 )
 
 add_dependencies(update_extension obc)
-
-# Simple convenience launcher 'build' that proxies to erelang (runner) so user can run build.exe <script>
-add_executable(build WIN32 src/build_launcher.cpp)
-if (WIN32)
-  target_link_libraries(build PRIVATE user32 gdi32 comctl32 shell32 dwmapi msimg32)
-endif()
-if (WIN32)
-  set_target_properties(build PROPERTIES OUTPUT_NAME "build")
-endif()
-ob_set_output(build EXECUTABLE)
 

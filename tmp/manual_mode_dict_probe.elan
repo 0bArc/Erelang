@@ -1,6 +1,0 @@
-@erelang
-public action main {
-  let d = dict_new();
-  dict_set(d, "a", "1");
-}
-run main;

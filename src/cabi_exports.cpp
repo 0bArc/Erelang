@@ -4,6 +4,11 @@
 #include <sstream>
 #include <optional>
 #include <unordered_set>
+#include <unordered_map>
+#include <vector>
+#include <functional>
+#include <cstdlib>
+#include <cstring>
 
 #include "erelang/lexer.hpp"
 #include "erelang/parser.hpp"
@@ -54,6 +59,64 @@ static std::optional<fs::path> materialize_module_file(const std::string& import
     return std::nullopt;
 }
 
+static void set_error_string(char** out_error, const std::string& message) {
+    if (!out_error) return;
+    char* buf = static_cast<char*>(::malloc(message.size() + 1));
+    if (!buf) return;
+    std::memcpy(buf, message.c_str(), message.size() + 1);
+    *out_error = buf;
+}
+
+static int run_programs(std::vector<Program>& ordered, int argc, const char* argv[], int flags, char** out_error) {
+    if (ordered.empty()) {
+        set_error_string(out_error, "No program loaded");
+        return 1;
+    }
+    const bool debug = (flags & 0x1) != 0;
+    (void)debug;
+    Program merged;
+    for (size_t i = 0; i + 1 < ordered.size(); ++i) {
+        const Program& m = ordered[i];
+        merged.actions.insert(merged.actions.end(), m.actions.begin(), m.actions.end());
+        merged.hooks.insert(merged.hooks.end(), m.hooks.begin(), m.hooks.end());
+        merged.entities.insert(merged.entities.end(), m.entities.begin(), m.entities.end());
+    }
+    Program mainProg = ordered.back();
+    if (!merged.actions.empty()) mainProg.actions.insert(mainProg.actions.begin(), merged.actions.begin(), merged.actions.end());
+    if (!merged.hooks.empty()) mainProg.hooks.insert(mainProg.hooks.begin(), merged.hooks.begin(), merged.hooks.end());
+    if (!merged.entities.empty()) mainProg.entities.insert(mainProg.entities.begin(), merged.entities.begin(), merged.entities.end());
+    if (!mainProg.runTarget) {
+        for (const auto& a : mainProg.actions) {
+            if (a.name == "main") {
+                mainProg.runTarget = std::string("main");
+                break;
+            }
+        }
+    }
+    SymbolTable symtab;
+    for (const auto& a : mainProg.actions) symtab.add(a.name, "action");
+    for (const auto& e : mainProg.entities) symtab.add(e.name, "entity");
+    TypeChecker tc;
+    auto tcRes = tc.check(mainProg);
+    if (!tcRes.ok) {
+        std::ostringstream es;
+        for (auto& d : tcRes.diagnostics) {
+            es << d.code << ": " << d.message;
+            if (!d.context.empty()) es << " (" << d.context << ")";
+            es << "\n";
+        }
+        set_error_string(out_error, es.str());
+        return 1;
+    }
+    (void)optimize_program(mainProg);
+    std::vector<std::string> args;
+    args.reserve(argc);
+    for (int i = 0; i < argc; ++i) args.emplace_back(argv[i] ? argv[i] : "");
+    Runtime::set_cli_args(args);
+    Runtime rt;
+    return rt.run(mainProg);
+}
+
 extern "C" {
 
 OB_API int ob_run_file(const char* main_file, int argc, const char* argv[], int flags, char** out_error) {
@@ -94,31 +157,19 @@ OB_API int ob_run_file(const char* main_file, int argc, const char* argv[], int 
             Lexer lx(slurp_text(ap), lxopts); auto tokens = lx.lex(); Parser ps(std::move(tokens)); Program prog = ps.parse();
             for (auto& a : prog.actions) a.sourcePath = key; for (auto& h : prog.hooks) h.sourcePath = key; for (auto& e : prog.entities) e.sourcePath = key; for (auto& g : prog.globals) g.sourcePath = key;
             for (const auto& imp : prog.imports) {
-                fs::path ip = imp; if (!ip.has_extension()) { fs::path c1=ip; c1.replace_extension(".0bs"); fs::path c2=ip; c2.replace_extension(".obsecret"); if (fs::exists(c1)) ip=c1; else if (fs::exists(c2)) ip=c2; }
+                fs::path ip = imp.path; if (!ip.has_extension()) { fs::path c1=ip; c1.replace_extension(".0bs"); fs::path c2=ip; c2.replace_extension(".obsecret"); if (fs::exists(c1)) ip=c1; else if (fs::exists(c2)) ip=c2; }
                 bool loaded = false;
                 if (ip.is_relative()) { fs::path tryLocal = ap.parent_path() / ip; if (fs::exists(tryLocal)) { self(self, tryLocal); loaded = true; } }
                 else if (fs::exists(ip)) { self(self, ip); loaded = true; }
-                if (!loaded) { if (auto mp = materialize_module_file(imp)) self(self, *mp); }
+                if (!loaded) { if (auto mp = materialize_module_file(imp.path)) self(self, *mp); }
             }
             ordered.push_back(std::move(prog));
         };
         if (debugDriver) load_prog(load_prog, *debugDriver);
         load_prog(load_prog, fs::path(main_file));
-        Program merged; for (size_t i=0; i+1<ordered.size(); ++i) { const Program& m = ordered[i]; merged.actions.insert(merged.actions.end(), m.actions.begin(), m.actions.end()); merged.hooks.insert(merged.hooks.end(), m.hooks.begin(), m.hooks.end()); merged.entities.insert(merged.entities.end(), m.entities.begin(), m.entities.end()); }
-        Program mainProg = ordered.back();
-        if (!merged.actions.empty()) mainProg.actions.insert(mainProg.actions.begin(), merged.actions.begin(), merged.actions.end());
-        if (!merged.hooks.empty()) mainProg.hooks.insert(mainProg.hooks.begin(), merged.hooks.begin(), merged.hooks.end());
-        if (!merged.entities.empty()) mainProg.entities.insert(mainProg.entities.begin(), merged.entities.begin(), merged.entities.end());
-        if (!mainProg.runTarget) { for (const auto& a : mainProg.actions) if (a.name == "main") { mainProg.runTarget = std::string("main"); break; } }
-        SymbolTable symtab; for (const auto& a : mainProg.actions) symtab.add(a.name, "action"); for (const auto& e : mainProg.entities) symtab.add(e.name, "entity");
-        TypeChecker tc; auto tcRes = tc.check(mainProg);
-        if (!tcRes.ok) { if (out_error) { std::ostringstream es; for (auto& d : tcRes.diagnostics) { es << d.code << ": " << d.message; if (!d.context.empty()) es << " (" << d.context << ")"; es << "\n"; } std::string s = es.str(); char* buf = (char*)::malloc(s.size()+1); if (buf) { memcpy(buf, s.c_str(), s.size()+1); *out_error = buf; } } return 1; }
-        (void)optimize_program(mainProg);
-        std::vector<std::string> args; args.reserve(argc); for (int i=0;i<argc;++i) args.emplace_back(argv[i]?argv[i]:"");
-        Runtime::set_cli_args(args);
-        Runtime rt; return rt.run(mainProg);
+        return run_programs(ordered, argc, argv, flags, out_error);
     } catch (const std::exception& ex) {
-        if (out_error) { std::string s = ex.what(); char* buf = (char*)::malloc(s.size()+1); if (buf) { memcpy(buf, s.c_str(), s.size()+1); *out_error = buf; } }
+        set_error_string(out_error, ex.what());
         return 1;
     }
 }
@@ -136,17 +187,103 @@ OB_API int ob_collect_files(const char* main_file,
             LexerOptions lxopts; lxopts.enableDurations = true; lxopts.enableUnits = true; lxopts.enablePolyIdentifiers = true; lxopts.emitDocComments = true; lxopts.emitComments = false;
             Lexer lx(contents, lxopts); auto tokens = lx.lex(); Parser ps(std::move(tokens)); Program prog = ps.parse();
             for (const auto& imp : prog.imports) {
-                fs::path ip = imp; if (!ip.has_extension()) { fs::path c1=ip; c1.replace_extension(".0bs"); fs::path c2=ip; c2.replace_extension(".obsecret"); if (fs::exists(c1)) ip=c1; else if (fs::exists(c2)) ip=c2; }
+                fs::path ip = imp.path; if (!ip.has_extension()) { fs::path c1=ip; c1.replace_extension(".0bs"); fs::path c2=ip; c2.replace_extension(".obsecret"); if (fs::exists(c1)) ip=c1; else if (fs::exists(c2)) ip=c2; }
                 bool loaded = false;
                 if (ip.is_relative()) { fs::path tryLocal = ap.parent_path() / ip; if (fs::exists(tryLocal)) { self(self, tryLocal); loaded = true; } }
                 else if (fs::exists(ip)) { self(self, ip); loaded = true; }
-                if (!loaded) { if (auto mp = materialize_module_file(imp)) self(self, *mp); }
+                if (!loaded) { if (auto mp = materialize_module_file(imp.path)) self(self, *mp); }
             }
         };
         load(load, fs::path(main_file));
         return 0;
     } catch (const std::exception& ex) {
-        if (out_error) { std::string s = ex.what(); char* buf = (char*)::malloc(s.size()+1); if (buf) { memcpy(buf, s.c_str(), s.size()+1); *out_error = buf; } }
+        set_error_string(out_error, ex.what());
+        return 1;
+    }
+}
+
+OB_API int ob_run_embedded(const char* main_file,
+                           const char* const* paths,
+                           const char* const* contents,
+                           int file_count,
+                           int argc,
+                           const char* argv[],
+                           int flags,
+                           char** out_error) {
+    try {
+        std::unordered_map<std::string, std::string> embedded;
+        for (int i = 0; i < file_count; ++i) {
+            if (paths && contents && paths[i] && contents[i]) {
+                embedded.emplace(fs::absolute(fs::path(paths[i])).string(), contents[i]);
+            }
+        }
+        auto load_text = [&](const std::string& key) -> std::string {
+            auto it = embedded.find(fs::absolute(fs::path(key)).string());
+            if (it != embedded.end()) return it->second;
+            return slurp_text(fs::path(key));
+        };
+        auto resolve_import = [&](const std::string& basePath, const std::string& importName) -> std::optional<std::string> {
+            fs::path base = fs::absolute(basePath);
+            fs::path ip = importName;
+            std::vector<fs::path> candidates;
+            if (!ip.has_extension()) {
+                fs::path c1 = ip; c1.replace_extension(".0bs");
+                fs::path c2 = ip; c2.replace_extension(".obsecret");
+                fs::path c3 = ip; c3.replace_extension(".elan");
+                candidates = {c1, c2, c3};
+            } else {
+                candidates = {ip};
+            }
+            auto ends_with = [](const std::string& s, const std::string& suffix) {
+                return s.size() >= suffix.size() && s.rfind(suffix) == s.size() - suffix.size();
+            };
+            for (const auto& candidate : candidates) {
+                fs::path resolved = candidate.is_relative() ? base.parent_path() / candidate : candidate;
+                const std::string key = fs::absolute(resolved).string();
+                if (embedded.count(key) || fs::exists(resolved)) return key;
+            }
+            for (const auto& candidate : candidates) {
+                const std::string tail = "/" + candidate.generic_string();
+                for (const auto& kv : embedded) {
+                    std::string normalized = fs::path(kv.first).generic_string();
+                    if (ends_with(normalized, tail)) return kv.first;
+                }
+            }
+            if (auto moduleFile = materialize_module_file(importName)) return moduleFile->string();
+            return std::nullopt;
+        };
+
+        std::unordered_set<std::string> visited;
+        std::vector<Program> ordered;
+        std::function<void(const std::string&)> load_prog = [&](const std::string& file) {
+            const std::string key = fs::absolute(fs::path(file)).string();
+            if (visited.count(key)) return;
+            visited.insert(key);
+            LexerOptions lxopts;
+            lxopts.enableDurations = true;
+            lxopts.enableUnits = true;
+            lxopts.enablePolyIdentifiers = true;
+            lxopts.emitDocComments = true;
+            lxopts.emitComments = false;
+            Lexer lx(load_text(key), lxopts);
+            auto tokens = lx.lex();
+            Parser ps(std::move(tokens));
+            Program prog = ps.parse();
+            for (auto& a : prog.actions) a.sourcePath = key;
+            for (auto& h : prog.hooks) h.sourcePath = key;
+            for (auto& e : prog.entities) e.sourcePath = key;
+            for (auto& g : prog.globals) g.sourcePath = key;
+            for (const auto& imp : prog.imports) {
+                if (imp.pluginGlob) continue;
+                if (auto next = resolve_import(key, imp.path)) load_prog(*next);
+            }
+            ordered.push_back(std::move(prog));
+        };
+
+        load_prog(main_file ? main_file : "");
+        return run_programs(ordered, argc, argv, flags, out_error);
+    } catch (const std::exception& ex) {
+        set_error_string(out_error, ex.what());
         return 1;
     }
 }

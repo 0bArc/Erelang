@@ -22,14 +22,16 @@ const TYPE_ALIAS_RE   = /^\s*(?:public|private|export)?\s*type\s+([A-Za-z_]\w*)\
 const HOOK_RE         = /^\s*hook\s+([A-Za-z_]\w*)/;
 const LET_RE          = /^\s*(?:let|const|constexpr|static|int|string|str|bool|char|auto|double|float|array|map|dictionary|hashmap|Array<[^>]+>|Map<[^>]+>|HashMap<[^>]+>)\s+([A-Za-z_]\w*)/;
 const GLOBAL_RE       = /^\s*(?:public|private|export)?\s*global\s+([A-Za-z_]\w*)/;
-const INCLUDE_ALIAS_RE = /^\s*#include\s*(<[^>]+>|"[^"]+")\s*(?:as\s+([A-Za-z_]\w*))?/;
+const INCLUDE_ALIAS_RE = /^\s*#\s*include\s*(<[^>]+>|"[^"]+"|[^\s;]+)\s*(?:as\s+([A-Za-z_]\w*))?\s*;?\s*$/;
 const IMPORT_ALIAS_RE  = /^\s*import\s+([A-Za-z_][\w./-]*)\s*(?:as\s+([A-Za-z_]\w*))?/;
 
 // ─── Method / Keyword Lists ─────────────────────────────────────────────────
 
 const MODULE_METHODS: Record<string, string[]> = {
-  'builtin/erefs':  ['cwd','chdir','mkdir','read','write','append','copy','move','exists','list','remove'],
-  'builtin/erepath': ['join','dirname','basename','ext'],
+  'builtin/erefs':   ['cwd','chdir','mkdir','read','write','append','copy','move','exists','list','remove','join','parent','dirname','name','basename','ext'],
+  'builtin/fs':      ['cwd','chdir','mkdir','read','write','append','copy','move','exists','list','remove','join','parent','dirname','name','basename','ext'],
+  'builtin/erepath': ['join','parent','dirname','name','basename','ext','exists'],
+  'builtin/path':    ['join','parent','dirname','name','basename','ext','exists'],
 };
 
 const CHAIN_METHODS     = ['lstrip','rstrip','strip','lower','upper'];
@@ -57,7 +59,7 @@ const LANGUAGE_KEYWORDS = [
   'unsafe','repeat','do','extern',
   'static_cast','dynamic_cast','reinterpret_cast','bit_cast',
   'sizeof','typeof','decltype','alignof','offsetof','is_base_of',
-  '#if','#elif','#else','#endif','#ifdef','#ifndef','#define',
+  '#include','#if','#elif','#else','#endif','#ifdef','#ifndef','#define',
 ];
 
 const BUILT_INS: readonly string[] = [
@@ -69,6 +71,7 @@ const BUILT_INS: readonly string[] = [
   'sizeof','typeof','decltype','alignof','offsetof','is_base_of',
   'string.starts_with','string.ends_with','string.find','string.substr','string.len',
   'ptr_new','ptr_get','ptr_set','ptr_free','ptr_valid','malloc','free',
+  'realloc','memcpy','memset',
   'make_unique','make_shared','unique_reset','shared_reset',
   'string.lstrip','string.rstrip','string.strip','string.lower','string.upper',
   'read_text','write_text','append_text','file_exists','mkdirs','copy_file',
@@ -429,33 +432,96 @@ function collectImports(doc: vscode.TextDocument): ImportedSymbols {
 
 // ─── Include Path Completions ───────────────────────────────────────────────
 
-function includePathCompletions(doc: vscode.TextDocument, prefix: string): vscode.CompletionItem[] | null {
-  const m = /^\s*#include\s*<([^>]*)$/.exec(prefix) ?? /^\s*#include\s*"([^"]*)$/.exec(prefix);
-  if (!m) return null;
-  const partial  = m[1].replace(/\\/g, '/');
+function includePathCompletions(doc: vscode.TextDocument, pos: vscode.Position, prefix: string): vscode.CompletionItem[] | null {
+  const angleMatch = /^\s*#\s*include\s*<([^>]*)$/.exec(prefix);
+  const quoteMatch = /^\s*#\s*include\s*"([^"]*)$/.exec(prefix);
+  const bareMatch = /^\s*#\s*include\s+([A-Za-z0-9_./\\-]*)$/.exec(prefix);
+  const match = angleMatch ?? quoteMatch ?? bareMatch;
+  if (!match) return null;
+
+  const mode: 'angle' | 'quote' | 'bare' = angleMatch ? 'angle' : quoteMatch ? 'quote' : 'bare';
+  const partial  = match[1].replace(/\\/g, '/');
   const slashIdx = partial.lastIndexOf('/');
   const dirPart  = slashIdx >= 0 ? partial.slice(0, slashIdx + 1) : '';
   const namePart = slashIdx >= 0 ? partial.slice(slashIdx + 1) : partial;
-  const target   = path.resolve(path.dirname(doc.uri.fsPath), dirPart || '.');
-  let entries: fs.Dirent[] = [];
-  try { entries = fs.readdirSync(target, { withFileTypes: true }); } catch { return []; }
+  const replaceLength = mode === 'bare' ? partial.length : namePart.length;
+  const replaceRange = new vscode.Range(pos.line, pos.character - replaceLength, pos.line, pos.character);
+  const candidateDirs = new Set<string>();
+  candidateDirs.add(path.resolve(path.dirname(doc.uri.fsPath), dirPart || '.'));
+  for (const folder of vscode.workspace.workspaceFolders ?? []) {
+    candidateDirs.add(path.resolve(folder.uri.fsPath, dirPart || '.'));
+  }
 
   const out: vscode.CompletionItem[] = [];
-  for (const e of entries) {
-    if (!e.name.toLowerCase().startsWith(namePart.toLowerCase())) continue;
-    if (e.isDirectory()) {
-      const ci = new vscode.CompletionItem(e.name + '/', vscode.CompletionItemKind.Folder);
-      ci.insertText = dirPart + e.name + '/';
-      ci.detail = 'folder';
-      out.push(ci);
-    } else if (e.isFile() && /\.(elan|ere|0bs)$/i.test(e.name)) {
-      const ci = new vscode.CompletionItem(e.name, vscode.CompletionItemKind.File);
-      ci.insertText = dirPart + e.name;
-      ci.detail = 'script file';
-      out.push(ci);
+  const builtinModules = ['builtin/fs', 'builtin/path', 'builtin/erefs', 'builtin/erepath'];
+  for (const mod of builtinModules) {
+    if (!mod.toLowerCase().startsWith(partial.toLowerCase())) continue;
+    const insert = mode === 'bare'
+      ? `<${mod}>;`
+      : (dirPart && mod.toLowerCase().startsWith(dirPart.toLowerCase()) ? mod.slice(dirPart.length) : mod);
+    const label = mode === 'bare' ? `<${mod}>;` : mod;
+    const ci = new vscode.CompletionItem(label, vscode.CompletionItemKind.Module);
+    ci.insertText = insert;
+    ci.range = replaceRange;
+    ci.detail = mode === 'bare' ? 'include builtin module' : 'builtin module';
+    out.push(ci);
+  }
+
+  const seenInsertText = new Set<string>();
+  for (const dir of candidateDirs) {
+    let entries: fs.Dirent[] = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+
+    for (const e of entries) {
+      if (!e.name.toLowerCase().startsWith(namePart.toLowerCase())) continue;
+      if (e.isDirectory()) {
+        const insert = dirPart + e.name + '/';
+        if (seenInsertText.has(insert)) continue;
+        seenInsertText.add(insert);
+
+        const ci = new vscode.CompletionItem(mode === 'bare' ? `<${insert}` : e.name + '/', vscode.CompletionItemKind.Folder);
+        ci.insertText = mode === 'bare' ? `<${insert}` : e.name + '/';
+        ci.range = replaceRange;
+        ci.detail = 'folder';
+        out.push(ci);
+      } else if (e.isFile() && /\.(elan|ere|0bs)$/i.test(e.name)) {
+        const insert = dirPart + e.name;
+        if (seenInsertText.has(insert)) continue;
+        seenInsertText.add(insert);
+
+        const ci = new vscode.CompletionItem(mode === 'bare' ? `<${insert}>;` : e.name, vscode.CompletionItemKind.File);
+        ci.insertText = mode === 'bare' ? `<${insert}>;` : e.name;
+        ci.range = replaceRange;
+        ci.detail = mode === 'bare' ? 'include script file' : 'script file';
+        out.push(ci);
+      }
     }
   }
   return out;
+}
+
+function includeDirectiveCompletions(pos: vscode.Position, prefix: string): vscode.CompletionItem[] | null {
+  const trimmed = prefix.trimStart();
+  if (!trimmed.startsWith('#')) return null;
+  const directiveMatch = /^(\s*)#\s*[A-Za-z]*$/.exec(prefix);
+  if (!directiveMatch) return null;
+
+  const afterHash = trimmed.slice(1);
+  const includeStem = afterHash.match(/^\s*([A-Za-z]*)/);
+  const typed = (includeStem?.[1] ?? '').toLowerCase();
+  if (typed.length > 0 && !'include'.startsWith(typed)) return null;
+
+  const rest = afterHash.slice(includeStem?.[0].length ?? 0);
+  if (typed === 'include' && rest.length > 0) return null;
+  if (rest.length > 0 && !/^\s*$/.test(rest)) return null;
+
+  const keyword = new vscode.CompletionItem('#include', vscode.CompletionItemKind.Keyword);
+  keyword.insertText = '#include ';
+  keyword.range = new vscode.Range(pos.line, directiveMatch[1].length, pos.line, pos.character);
+  keyword.detail = 'start include directive';
+  keyword.sortText = 'a_include';
+
+  return [keyword];
 }
 
 // ─── Debug Logging ──────────────────────────────────────────────────────────
@@ -535,6 +601,13 @@ class ErelangCompletionProvider implements vscode.CompletionItemProvider {
     const fullLine = doc.lineAt(pos.line).text;
     const col      = collect(doc, pos.line);
 
+    // ── #include directive keyword completion ─────────────────────────
+    const includeDirective = includeDirectiveCompletions(pos, prefix);
+    if (includeDirective) {
+      dbgCompletion('include-directive', pos, prefix, `${includeDirective.length} items`);
+      return includeDirective;
+    }
+
     // ── Print / interpolation context ──────────────────────────────────
     const pctx = parsePrintStringContext(fullLine, pos.character);
     if (pctx) {
@@ -569,10 +642,10 @@ class ErelangCompletionProvider implements vscode.CompletionItemProvider {
     }
 
     // ── #include path completions ──────────────────────────────────────
-    const incl = includePathCompletions(doc, prefix);
+    const incl = includePathCompletions(doc, pos, prefix);
     if (incl) { dbgCompletion('include-path', pos, prefix, `${incl.length} items`); return incl; }
 
-    // ── Member access (obj.method) ─────────────────────────────────────
+    // ── Member access (module alias only in manual mode) ───────────────
     const dot = /([A-Za-z_]\w*)\.([A-Za-z_]\w*)?$/.exec(prefix);
     if (dot) {
       const obj     = dot[1];
@@ -580,41 +653,17 @@ class ErelangCompletionProvider implements vscode.CompletionItemProvider {
       dbgCompletion('member-access', pos, prefix, `obj=${obj}`);
       const imported = collectImports(doc);
       const methods  = new Set<string>(imported.aliasToActions.get(obj) ?? []);
-      for (const f of col.structFields.get(obj) ?? []) methods.add(f);
-      for (const e of col.enumMembers.get(obj) ?? [])  methods.add(e);
-      if (col.arrays.has(obj))       for (const m of ARRAY_METHODS) methods.add(m);
-      if (col.dictionaries.has(obj)) for (const m of DICTIONARY_METHODS) methods.add(m);
+      if (methods.size === 0) return [];
       return [...methods]
         .filter(m => partial.length === 0 || m.startsWith(partial))
         .map(m => {
           const ci  = new vscode.CompletionItem(m, vscode.CompletionItemKind.Method);
-          ci.detail = imported.aliasToActions.has(obj) ? `${obj} module` : `${obj} method`;
+          ci.detail = `${obj} module`;
           return ci;
         });
     }
 
-    // ── Colon chain (string methods) ───────────────────────────────────
-    const chain = /([A-Za-z_]\w*)\s*:\s*([A-Za-z_]\w*)?$/.exec(prefix);
-    if (chain) {
-      const left = chain[1];
-      if (isForeachColonCtx(prefix) || isDictLiteralCtx(prefix)) {
-        dbgCompletion('colon-blocked', pos, prefix, `left=${left}`);
-        // Fall through to global suggestions instead of returning empty
-      } else if (col.arrays.has(left) || col.dictionaries.has(left)) {
-        dbgCompletion('colon-collection', pos, prefix, `left=${left}`);
-        // Fall through to global suggestions
-      } else {
-        dbgCompletion('string-chain', pos, prefix, `left=${left}`);
-        const partial = chain[2] ?? '';
-        return CHAIN_METHODS
-          .filter(m => partial.length === 0 || m.startsWith(partial))
-          .map(m => {
-            const ci  = new vscode.CompletionItem(m, vscode.CompletionItemKind.Method);
-            ci.detail = 'string method';
-            return ci;
-          });
-      }
-    }
+    // Colon-chain method completion intentionally disabled in manual mode.
 
     // ── Global / fallback suggestions ──────────────────────────────────
     const items: vscode.CompletionItem[] = [];
@@ -765,6 +814,11 @@ function shouldRetrigger(change: vscode.TextDocumentContentChangeEvent, prefix: 
   if (!typed && !openBrace && !deleted) return false;
   if (/^\s*\/\//.test(prefix)) return false;   // inside comment
 
+  if (/^\s*#\s*[A-Za-z]*\s*(?:[<"].*)?$/i.test(prefix) || /^\s*#\s*include\s+[A-Za-z0-9_./\\-]*$/i.test(prefix)) {
+    if (deleted) return true;
+    return change.text.length === 1 && /[#A-Za-z0-9_./\\"<>\- ]/.test(change.text);
+  }
+
   const printCtx = parsePrintStringContext(fullLine, cursor.character);
   if (printCtx) {
     // After '{' is physically inserted, open suggestions asynchronously.
@@ -866,7 +920,7 @@ export function activate(ctx: vscode.ExtensionContext) {
     vscode.languages.registerCompletionItemProvider(
       { language: 'erelang' },
       new ErelangCompletionProvider(),
-      '.', ':', '"', '_',
+      '#', '.', ':', '"', '_', '<', '/', '\\', 'i', 'n', 'c', 'l', 'u', 'd', 'e',
     ),
   );
   ctx.subscriptions.push(

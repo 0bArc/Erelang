@@ -76,6 +76,69 @@ bool collection_type_compatible(const std::string& expected, const std::string& 
     return false;
 }
 
+std::optional<std::string> resolve_builtin_module_alias_call(const Program* program, const std::string& callName) {
+    if (!program) return std::nullopt;
+
+    const auto dotPos = callName.find('.');
+    if (dotPos == std::string::npos || dotPos == 0 || dotPos + 1 >= callName.size()) {
+        return std::nullopt;
+    }
+
+    const std::string alias = callName.substr(0, dotPos);
+    std::string method = callName.substr(dotPos + 1);
+    std::transform(method.begin(), method.end(), method.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+
+    auto is_fs_module = [](std::string path) {
+        for (auto& ch : path) if (ch == '\\') ch = '/';
+        std::transform(path.begin(), path.end(), path.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+        return path == "builtin/fs" || path == "builtin/erefs";
+    };
+
+    auto is_path_module = [](std::string path) {
+        for (auto& ch : path) if (ch == '\\') ch = '/';
+        std::transform(path.begin(), path.end(), path.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+        return path == "builtin/path" || path == "builtin/erepath";
+    };
+
+    auto map_method = [&](bool isFs, bool isPath) -> std::optional<std::string> {
+        if (isFs) {
+            if (method == "read") return std::string{"read_text"};
+            if (method == "write") return std::string{"write_text"};
+            if (method == "append") return std::string{"append_text"};
+            if (method == "exists") return std::string{"file_exists"};
+            if (method == "mkdir") return std::string{"mkdirs"};
+            if (method == "copy") return std::string{"copy_file"};
+            if (method == "move") return std::string{"move_file"};
+            if (method == "remove") return std::string{"delete_file"};
+            if (method == "list") return std::string{"list_files"};
+            if (method == "cwd") return std::string{"cwd"};
+            if (method == "chdir") return std::string{"chdir"};
+            if (method == "join") return std::string{"path_join"};
+            if (method == "parent" || method == "dirname") return std::string{"path_dirname"};
+            if (method == "name" || method == "basename") return std::string{"path_basename"};
+            if (method == "ext") return std::string{"path_ext"};
+        }
+        if (isPath) {
+            if (method == "join") return std::string{"path_join"};
+            if (method == "parent" || method == "dirname") return std::string{"path_dirname"};
+            if (method == "name" || method == "basename") return std::string{"path_basename"};
+            if (method == "ext") return std::string{"path_ext"};
+            if (method == "exists") return std::string{"file_exists"};
+        }
+        return std::nullopt;
+    };
+
+    for (const auto& imp : program->imports) {
+        if (!imp.alias || *imp.alias != alias || imp.path.empty()) continue;
+        const bool isFs = is_fs_module(imp.path);
+        const bool isPath = is_path_module(imp.path);
+        if (!isFs && !isPath) continue;
+        if (auto mapped = map_method(isFs, isPath)) return mapped;
+    }
+
+    return std::nullopt;
+}
+
 } // namespace
 
 // ================= ExprChecker =================
@@ -152,37 +215,44 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
                 }
             }
         } else if constexpr (std::is_same_v<T, FunctionCallExpr>) {
-            if (node.name == "list_new") {
-                if (node.args.empty()) {
-                    inferred = {"array<any>"};
-                } else {
-                    std::string mergedElementType;
-                    for (const auto& arg : node.args) {
-                        mergedElementType = merge_inferred_type(mergedElementType, check(arg, ctx).name);
-                    }
-                    if (mergedElementType.empty() || mergedElementType == "unknown") mergedElementType = "any";
-                    inferred = {"array<" + mergedElementType + ">"};
+            if (node.collectionLiteral && node.name == "list_new") {
+                std::string elementType = "unknown";
+                for (const auto& arg : node.args) {
+                    elementType = merge_inferred_type(elementType, check(arg, ctx).name);
                 }
+                if (elementType.empty() || elementType == "unknown") elementType = "any";
+                inferred = {"array<" + elementType + ">"};
                 return;
             }
-
-            if (node.name == "dict_new" || node.name == "hashmap_new") {
-                if (node.args.empty()) {
-                    inferred = {"map<any,any>"};
-                } else {
-                    std::string mergedKeyType;
-                    std::string mergedValueType;
-                    for (size_t index = 0; index + 1 < node.args.size(); index += 2) {
-                        mergedKeyType = merge_inferred_type(mergedKeyType, check(node.args[index], ctx).name);
-                        mergedValueType = merge_inferred_type(mergedValueType, check(node.args[index + 1], ctx).name);
+            if (node.collectionLiteral && node.name == "dict_new") {
+                std::string valueType = "unknown";
+                for (std::size_t i = 0; i < node.args.size(); ++i) {
+                    const auto argType = check(node.args[i], ctx).name;
+                    if (i % 2 == 1) {
+                        valueType = merge_inferred_type(valueType, argType);
                     }
-                    if ((node.args.size() % 2) != 0) {
-                        check(node.args.back(), ctx);
-                    }
-                    if (mergedKeyType.empty() || mergedKeyType == "unknown") mergedKeyType = "any";
-                    if (mergedValueType.empty() || mergedValueType == "unknown") mergedValueType = "any";
-                    inferred = {"map<" + mergedKeyType + "," + mergedValueType + ">"};
                 }
+                if (valueType.empty() || valueType == "unknown") valueType = "any";
+                inferred = {"map<string," + valueType + ">"};
+                return;
+            }
+            static const std::unordered_set<std::string> removedCollectionBuiltins = {
+                "list_new", "list_push", "list_get", "list_len", "list_join", "list_clear", "list_remove_at",
+                "dict_new", "dict_set", "dict_get", "dict_has", "dict_keys", "dict_values", "dict_get_or",
+                "dict_remove", "dict_clear", "dict_size", "dict_merge", "dict_clone", "dict_items", "dict_entries",
+                "dict_set_path", "dict_get_path", "dict_has_path", "dict_remove_path",
+                "hashmap_new", "hashmap_set", "hashmap_put", "hashmap_get", "hashmap_has", "hashmap_contains",
+                "hashmap_get_or", "hashmap_get_or_default", "hashmap_remove", "hashmap_clear", "hashmap_size",
+                "hashmap_keys", "hashmap_values", "hashmap_merge"
+            };
+            if (removedCollectionBuiltins.count(node.name) > 0) {
+                for (const auto& arg : node.args) {
+                    check(arg, ctx);
+                }
+                DiagBuilder(result_, Severity::Error,
+                    "Collection helper removed in manual mode: " + node.name,
+                    "TC141", ctx.actionName()).emit();
+                inferred = {"unknown"};
                 return;
             }
 
@@ -207,7 +277,11 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
             if (aIt != tc_.actions_.end()) {
                 inferred = { aIt->second->returnType.empty()?"void":aIt->second->returnType };
             } else {
-                auto bIt = tc_.builtins_.find(node.name);
+                std::string builtinLookup = node.name;
+                if (auto mapped = resolve_builtin_module_alias_call(ctx.program, node.name)) {
+                    builtinLookup = *mapped;
+                }
+                auto bIt = tc_.builtins_.find(builtinLookup);
                 inferred = bIt==tc_.builtins_.end()?TypeInfo{"unknown"}:TypeInfo{bIt->second.returnType};
             }
         }
@@ -266,7 +340,7 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                 const bool removedCollectionBuiltin = removedCollectionBuiltins.count(stmt.name) > 0;
                 if (removedCollectionBuiltin) {
                     DiagBuilder(result_, Severity::Error,
-                        "Collection helper removed: " + stmt.name + " (use method syntax on arrays/maps)",
+                        "Collection helper removed in manual mode: " + stmt.name,
                         "TC141", ctx.actionName()).emit();
                 }
                 bool externResolved = false;
@@ -286,7 +360,11 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                     externResolved = !foundExtern.empty();
                 }
                 if (!externResolved && !removedCollectionBuiltin) {
-                    auto bIt = tc_.builtins_.find(stmt.name);
+                    std::string builtinLookup = stmt.name;
+                    if (auto mapped = resolve_builtin_module_alias_call(ctx.program, stmt.name)) {
+                        builtinLookup = *mapped;
+                    }
+                    auto bIt = tc_.builtins_.find(builtinLookup);
                     if (bIt == tc_.builtins_.end()) {
                         DiagBuilder(result_, Severity::Error, "Unknown action: " + stmt.name, "TC001", ctx.actionName()).emit();
                     } else {
@@ -298,127 +376,42 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
             for (auto& a : stmt.args) expr_.check(a, ctx);
         } else if constexpr (std::is_same_v<T, MethodCallStmt>) {
             for (auto& a : stmt.args) expr_.check(a, ctx);
-            std::string methodName = stmt.method;
 
-            auto valid_arity = [](size_t count, int minParams, int maxParams) {
-                if (static_cast<int>(count) < minParams) return false;
-                if (maxParams >= 0 && static_cast<int>(count) > maxParams) return false;
-                return true;
-            };
+            const std::string callName = stmt.objectName + "." + stmt.method;
+            if (auto mapped = resolve_builtin_module_alias_call(ctx.program, callName)) {
+                auto it = tc_.builtins_.find(*mapped);
+                if (it == tc_.builtins_.end()) {
+                    DiagBuilder(result_, Severity::Error, "Unknown builtin action: " + callName, "TC001", ctx.actionName()).emit();
+                } else {
+                    const auto& bi = it->second;
+                    if ((int)stmt.args.size() < bi.minParams || (bi.maxParams >= 0 && (int)stmt.args.size() > bi.maxParams)) {
+                        DiagBuilder(result_, Severity::Error, "Param count mismatch calling builtin " + callName, "TC021", ctx.actionName()).emit();
+                    }
+                }
+                return;
+            }
 
-            if (auto* owner = scopes.lookup(stmt.objectName)) {
-                if (owner->type.name == "array<any>" || owner->type.name.rfind("array<", 0) == 0) {
-                    if (methodName == "append" || methodName == "push_back" || methodName == "emplace_back" || methodName == "emplace") methodName = "push";
-                    if (methodName == "pop_back") methodName = "pop";
-                    if (methodName == "remove_at" || methodName == "remove") methodName = "erase";
-                    if (methodName == "length") methodName = "len";
-                    if (methodName == "at") methodName = "get";
-                    if (methodName == "first") methodName = "front";
-                    if (methodName == "last") methodName = "back";
+            if (ctx.program) {
+                for (const auto& importDecl : ctx.program->imports) {
+                    if (!importDecl.alias || *importDecl.alias != stmt.objectName) continue;
+                    std::string normalizedPath = importDecl.path;
+                    for (auto& ch : normalizedPath) if (ch == '\\') ch = '/';
+                    std::transform(normalizedPath.begin(), normalizedPath.end(), normalizedPath.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+                    if (normalizedPath.rfind("builtin/", 0) == 0 || normalizedPath.rfind("builtin:", 0) == 0) break;
 
-                    static const std::unordered_map<std::string, std::pair<int, int>> arrayMethods = {
-                        {"forEach", {1, 1}},
-                        {"push", {1, 1}},
-                        {"insert", {2, 2}},
-                        {"set", {2, 2}},
-                        {"get", {1, 1}},
-                        {"len", {0, 0}},
-                        {"size", {0, 0}},
-                        {"clear", {0, 0}},
-                        {"erase", {1, 1}},
-                        {"pop", {0, 0}},
-                        {"front", {0, 0}},
-                        {"back", {0, 0}},
-                        {"empty", {0, 0}},
-                        {"contains", {1, 1}},
-                        {"find", {1, 1}},
-                        {"index_of", {1, 1}},
-                        {"join", {1, 1}},
-                        {"reserve", {1, 1}},
-                        {"capacity", {0, 0}},
-                        {"shrink_to_fit", {0, 0}}
-                    };
-                    auto hit = arrayMethods.find(methodName);
-                    if (hit == arrayMethods.end()) {
-                        DiagBuilder(result_, Severity::Error, "Unknown array method: " + stmt.objectName + "." + methodName, "TC022", ctx.actionName()).emit();
-                    } else if (!valid_arity(stmt.args.size(), hit->second.first, hit->second.second)) {
-                        DiagBuilder(result_, Severity::Error, "Param count mismatch calling array method " + stmt.objectName + "." + methodName, "TC023", ctx.actionName()).emit();
+                    auto actionIt = tc_.actions_.find(stmt.method);
+                    if (actionIt == tc_.actions_.end()) {
+                        DiagBuilder(result_, Severity::Error, "Unknown imported action: " + callName, "TC001", ctx.actionName()).emit();
+                    } else if (actionIt->second->params.size() != stmt.args.size()) {
+                        DiagBuilder(result_, Severity::Error, "Param count mismatch calling action " + callName, "TC020", ctx.actionName()).emit();
                     }
                     return;
-                }
-
-                if (owner->type.name == "map<any,any>" || owner->type.name.rfind("map<", 0) == 0) {
-                    if (methodName == "put" || methodName == "insert" || methodName == "emplace" || methodName == "try_emplace" || methodName == "insert_or_assign") methodName = "set";
-                    if (methodName == "contains" || methodName == "containsKey" || methodName == "count") methodName = "has";
-                    if (methodName == "getOrDefault" || methodName == "get_or" || methodName == "get_or_default") methodName = "getOr";
-                    if (methodName == "length") methodName = "len";
-                    if (methodName == "at") methodName = "get";
-                    if (methodName == "erase") methodName = "remove";
-
-                    static const std::unordered_map<std::string, std::pair<int, int>> mapMethods = {
-                        {"forEach", {1, 1}},
-                        {"set", {2, -1}},
-                        {"get", {1, -1}},
-                        {"has", {1, -1}},
-                        {"getOr", {2, -1}},
-                        {"remove", {1, -1}},
-                        {"clear", {0, 0}},
-                        {"size", {0, 0}},
-                        {"len", {0, 0}},
-                        {"empty", {0, 0}},
-                        {"keys", {0, 0}},
-                        {"values", {0, 0}},
-                        {"items", {0, 0}},
-                        {"entries", {0, 0}},
-                        {"merge", {1, 1}},
-                        {"clone", {0, 0}},
-                        {"set_path", {2, -1}},
-                        {"get_path", {1, -1}},
-                        {"has_path", {1, -1}},
-                        {"remove_path", {1, -1}}
-                    };
-                    auto hit = mapMethods.find(methodName);
-                    if (hit == mapMethods.end()) {
-                        DiagBuilder(result_, Severity::Error, "Unknown map method: " + stmt.objectName + "." + methodName, "TC022", ctx.actionName()).emit();
-                    } else if (!valid_arity(stmt.args.size(), hit->second.first, hit->second.second)) {
-                        DiagBuilder(result_, Severity::Error, "Param count mismatch calling map method " + stmt.objectName + "." + methodName, "TC023", ctx.actionName()).emit();
-                    }
-                    return;
-                }
-
-                if (owner->type.name.rfind("entity:", 0) == 0) {
-                    const std::string entityName = owner->type.name.substr(7);
-                    auto mit = tc_.methods_.find(entityName);
-                    if (mit != tc_.methods_.end()) {
-                        auto hit = mit->second.find(methodName);
-                        if (hit == mit->second.end()) {
-                            DiagBuilder(result_, Severity::Error, "Unknown method: " + stmt.objectName + "." + methodName, "TC022", ctx.actionName()).emit();
-                        } else {
-                            tc_.methodUsage_[entityName][methodName].referenced = true;
-                            if (hit->second->params.size() != stmt.args.size()) {
-                                DiagBuilder(result_, Severity::Error, "Param count mismatch calling method " + stmt.objectName + "." + methodName, "TC023", ctx.actionName()).emit();
-                            }
-                        }
-                    }
-                } else if (owner->type.name.rfind("struct:", 0) == 0 && ctx.program) {
-                    const std::string structName = owner->type.name.substr(7);
-                    const StructDecl* sd = nullptr;
-                    for (const auto& s : ctx.program->structs) {
-                        if (s.name == structName) { sd = &s; break; }
-                    }
-                    if (sd) {
-                        const Action* method = nullptr;
-                        for (const auto& m : sd->methods) {
-                            if (m.name == methodName) { method = &m; break; }
-                        }
-                        if (!method) {
-                            DiagBuilder(result_, Severity::Error, "Unknown struct method: " + structName + "." + methodName, "TC024", ctx.actionName()).emit();
-                        } else if (method->params.size() != stmt.args.size()) {
-                            DiagBuilder(result_, Severity::Error, "Param count mismatch calling struct method " + structName + "." + methodName, "TC025", ctx.actionName()).emit();
-                        }
-                    }
                 }
             }
+
+            DiagBuilder(result_, Severity::Error,
+                "Method syntax disabled in manual mode: " + callName,
+                "TC141", ctx.actionName()).emit();
         } else if constexpr (std::is_same_v<T, LetStmt>) {
             if (scopes.lookup(stmt.name)) DiagBuilder(result_, Severity::Error, "Variable redeclaration: " + stmt.name, "TC030", ctx.actionName()).emit();
             VarInfo vi; vi.type = expr_.check(stmt.value, ctx); vi.isConst = stmt.isConst; vi.assigned=true;
@@ -469,30 +462,42 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                 } else if (!decl.empty() && (decl.back() == '*' || decl.back() == '&')) {
                     expected = "pointer";
                 } else if (ctx.program) {
-                    bool matchedStruct = false;
+                    bool matchedType = false;
                     for (const auto& sd : ctx.program->structs) {
                         std::string structName = sd.name;
                         std::transform(structName.begin(), structName.end(), structName.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
                         structName.erase(std::remove_if(structName.begin(), structName.end(), [](unsigned char c){ return std::isspace(c) != 0; }), structName.end());
                         if (structName == declNormalized) {
                             expected = "struct:" + sd.name;
-                            matchedStruct = true;
+                            matchedType = true;
                             break;
                         }
                     }
-                    if (!matchedStruct) {
+                    if (!matchedType) {
+                        for (const auto& en : ctx.program->entities) {
+                            std::string entityName = en.name;
+                            std::transform(entityName.begin(), entityName.end(), entityName.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+                            entityName.erase(std::remove_if(entityName.begin(), entityName.end(), [](unsigned char c){ return std::isspace(c) != 0; }), entityName.end());
+                            if (entityName == declNormalized) {
+                                expected = "entity:" + en.name;
+                                matchedType = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!matchedType) {
                         for (const auto& en : ctx.program->enums) {
                             std::string enumName = en.name;
                             std::transform(enumName.begin(), enumName.end(), enumName.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
                             enumName.erase(std::remove_if(enumName.begin(), enumName.end(), [](unsigned char c){ return std::isspace(c) != 0; }), enumName.end());
                             if (enumName == declNormalized) {
                                 expected = "enum:" + en.name;
-                                matchedStruct = true;
+                                matchedType = true;
                                 break;
                             }
                         }
                     }
-                    if (!matchedStruct) {
+                    if (!matchedType) {
                         known = false;
                         DiagBuilder(result_, Severity::Error, "Unknown declared type: " + stmt.declaredType, "TC041", ctx.actionName()).emit();
                     }
@@ -509,7 +514,9 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                     if (exp.rfind("struct:", 0) == 0 && (actual.rfind("map", 0) == 0 || actual == "map<any,any>")) return true;
                     return false;
                 };
-                if (known && !is_compatible(expected, vi.type.name)) {
+                const bool defaultNullInit =
+                    stmt.value && std::holds_alternative<ExprNull>(stmt.value->node) && vi.type.name == "pointer";
+                if (known && !is_compatible(expected, vi.type.name) && !defaultNullInit) {
                     DiagBuilder(result_, Severity::Error,
                         "Type mismatch in declaration: " + stmt.name,
                         "TC042", ctx.actionName()).emit();
@@ -534,7 +541,16 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                 else {
                     if (v->isConst) DiagBuilder(result_, Severity::Error, "Cannot assign to const variable: " + stmt.varOrField, "TC051", ctx.actionName()).emit();
                     auto valT = expr_.check(stmt.value, ctx);
-                    if (v->type.name == "unknown") v->type = valT; else if (valT.name != "unknown" && v->type.name != valT.name) DiagBuilder(result_, Severity::Error, "Assignment type mismatch on " + stmt.varOrField, "TC052", ctx.actionName()).emit();
+                    auto assign_compatible = [&](const std::string& target, const std::string& source) {
+                        if (target == "unknown" || source == "unknown") return true;
+                        if (target == source) return true;
+                        if (collection_type_compatible(target, source)) return true;
+                        if (target.rfind("struct:", 0) == 0 && source.rfind("dict:", 0) == 0) return true;
+                        if (target.rfind("struct:", 0) == 0 && (source.rfind("map", 0) == 0 || source == "map<any,any>")) return true;
+                        return false;
+                    };
+                    if (v->type.name == "unknown") v->type = valT;
+                    else if (!assign_compatible(v->type.name, valT.name)) DiagBuilder(result_, Severity::Error, "Assignment type mismatch on " + stmt.varOrField, "TC052", ctx.actionName()).emit();
                     v->assigned = true;
                 }
             } else {
@@ -724,6 +740,9 @@ void TypeChecker::init_builtins() {
     add("ptr_free",1,1,"void");
     add("ptr_valid",1,1,"bool");
     add("malloc",1,1,"pointer");
+    add("realloc",2,2,"pointer");
+    add("memcpy",2,3,"void");
+    add("memset",2,3,"void");
     add("free",1,1,"void");
     add("make_unique",1,1,"pointer");
     add("make_shared",1,1,"pointer");

@@ -90,7 +90,7 @@ static void print_help() {
                  "  erelang --help\n"
                  "  erelang --about\n"
                  "  erelang --bootstrap  (force show bootstrap manifest UI even if args given)\n"
-                 "  erelang <path\\to\\file.(elan|ere)> [--debug]\n"
+                 "  erelang <path\\to\\file.(elan|ere)> [--debug] [--auto]\n"
                  "  erelang --compile <path\\to\\file.(elan|ere)> [--output <path\\to\\out.exe>] [--static|--dynamic]\n"
                  "  erelang --emit-ir <path\\to\\file.(elan|ere)> [--out <path\\to\\out.eir>]\n"
                  "  erelang --emit-asm <path\\to\\file.(elan|ere)> [--out <path\\to\\out.s>]\n"
@@ -102,7 +102,8 @@ static void print_help() {
                  "  --compile builds a standalone Windows .exe for the given erelang file.\n"
                  "  Imports are resolved at compile-time and embedded into the executable.\n"
                  "  Each compiled app writes manifest.erelang next to the exe with build + content metadata.\n"
-                 "  By default, the compiled app links statically. Use --dynamic to link against erelang.dll (if available) for a tiny stub.\n"
+                 "  By default, the compiled app links dynamically when erelang.dll is available for a tiny fast-building stub.\n"
+                 "  Use --static for a larger single-file executable.\n"
                  "  --make-debug builds a debugger exe from examples/lib/debugger.elan.\n"
                  "  --debug when running loads the debug driver and prefers debug_main.\n";
 }
@@ -629,6 +630,51 @@ static std::string generate_bootstrap_source(const fs::path& mainFile,
     return cpp.str();
 }
 
+static std::string generate_dynamic_bootstrap_source(const fs::path& mainFile,
+                                                     const std::vector<std::pair<fs::path,std::string>>& files) {
+    std::ostringstream cpp;
+    cpp << R"CPP(#include <cstdio>
+#include <vector>
+#include "erelang/cabi.h"
+
+int main(int argc, char** argv) {
+    static const char* kPaths[] = {
+)CPP";
+    for (const auto& [path, content] : files) {
+        (void)content;
+        cpp << "        \"" << fs::absolute(path).generic_string() << "\",\n";
+    }
+    cpp << R"CPP(    };
+    static const char* kContents[] = {
+)CPP";
+    for (const auto& [path, content] : files) {
+        (void)path;
+        cpp << "        R\"OBX(\n" << content << "\n)OBX\",\n";
+    }
+    cpp << R"CPP(    };
+    std::vector<const char*> scriptArgs;
+    for (int i = 1; i < argc; ++i) scriptArgs.push_back(argv[i]);
+    char* error = nullptr;
+    const int rc = ob_run_embedded(
+)CPP";
+    cpp << "        \"" << fs::absolute(mainFile).generic_string() << "\",\n";
+    cpp << R"CPP(        kPaths,
+        kContents,
+        static_cast<int>(sizeof(kPaths) / sizeof(kPaths[0])),
+        static_cast<int>(scriptArgs.size()),
+        scriptArgs.empty() ? nullptr : scriptArgs.data(),
+        0,
+        &error);
+    if (error) {
+        std::fputs(error, stderr);
+        ob_free_string(error);
+    }
+    return rc;
+}
+)CPP";
+    return cpp.str();
+}
+
 struct ScopedCurrentPath {
     explicit ScopedCurrentPath(const fs::path& newPath)
         : previous(fs::current_path()) {
@@ -831,7 +877,7 @@ struct Command {
             }
         }
         if (!cmd.compile.preferStatic && !cmd.compile.preferDynamic) {
-            cmd.compile.preferStatic = true;
+            cmd.compile.preferDynamic = true;
         }
         return cmd;
     }
@@ -852,6 +898,8 @@ struct Command {
         for (std::size_t i = 1; i < args.size(); ++i) {
             if (args[i] == "--debug") {
                 cmd.run.debug = true;
+            } else if (args[i] == "--auto") {
+                // Compatibility no-op: collection literals are handled directly.
             } else {
                 cmd.run.scriptArgs.emplace_back(std::string{args[i]});
             }
@@ -971,8 +1019,6 @@ struct ExecutionContext {
         "os.args","os.args_count","os.args_get","exec","os.exec","spawn","os.spawn","exit","stdin_read",
         "read_text","write_text","append_text","file_exists","mkdirs","copy_file","move_file","delete_file","list_files","cwd","chdir",
         "path_join","path_dirname","path_basename","path_ext","file_mtime",
-        "list_new","list_push","list_get","list_len","list_join","list_clear","list_remove_at",
-        "dict_new","dict_set","dict_get","dict_has","dict_keys","dict_values",
         "color.red","color.green","color.yellow","color.blue","color.magenta","color.cyan","color.bold","color.reset",
     "http_get","http_download","hls_download_best","url_encode",
     "network.ip.flush","network.ip.release","network.ip.renew","network.ip.registerdns",
@@ -1551,8 +1597,8 @@ int main(int argc, char** argv) {
             else if (args[i] == "--static") { preferStatic = true; }
             else if (args[i] == "--dynamic") { preferDynamic = true; }
         }
-        // Default to static unless user explicitly requests dynamic
-        if (!preferStatic && !preferDynamic) preferStatic = true;
+        // Prefer the tiny dynamic launcher by default; --static keeps the older single-file mode.
+        if (!preferStatic && !preferDynamic) preferDynamic = true;
         if (output.empty()) {
             output = input;
             output.replace_extension(".exe");
@@ -1716,10 +1762,8 @@ int main(int argc, char** argv) {
     fs::path libPath = locate_file(libRoots, { "liberelang.a", "erelang.lib" });
         bool canUseDynamic = fs::exists(dllPath) && (fs::exists(importLibA) || fs::exists(importLibMSVC));
         bool useDynamic = (preferDynamic) && canUseDynamic;
-        // Temporary: MinGW dynamic linking not yet supported (unresolved C++ symbols). Fallback to static.
-        if (useDynamic && fs::exists(importLibA)) {
-            std::cout << "[erelang] --dynamic requested, but MinGW import library detected; falling back to static until DLL exports are stabilized.\n";
-            useDynamic = false;
+        if (preferDynamic && !useDynamic && !preferStatic) {
+            std::cout << "[erelang] Dynamic runtime not found; falling back to static output.\n";
             preferStatic = true;
         }
         if (!useDynamic && !fs::exists(libPath)) {
@@ -1803,7 +1847,8 @@ int main(int argc, char** argv) {
     std::cout << "[erelang] Temp project: " << tempProj << "\n";
         // Generate main.cpp
         std::ofstream outCpp(tempProj / "main.cpp", std::ios::binary);
-        outCpp << generate_bootstrap_source(input, orderedFiles);
+        outCpp << (useDynamic ? generate_dynamic_bootstrap_source(input, orderedFiles)
+                              : generate_bootstrap_source(input, orderedFiles));
         outCpp.close();
         // Generate CMakeLists.txt
     std::ofstream outCmake(tempProj / "CMakeLists.txt", std::ios::binary);
@@ -1851,15 +1896,35 @@ int main(int argc, char** argv) {
     std::string ext = libPath.extension().string();
     for (auto& c : ext) c = static_cast<char>(::tolower(static_cast<unsigned char>(c)));
     if (ext == ".lib") generator = "NMake Makefiles";
-    std::string cfg = std::string("cmake -S ") + '"' + tempProj.string() + '"' + " -B " + '"' + tempBuild.string() + '"' + " -G \"" + generator + "\" -DCMAKE_BUILD_TYPE=MinSizeRel";
-    std::cout << "[erelang] CMake configure: " << cfg << "\n";
-        if (run_command(cfg, tempProj) != 0) { std::cerr << "CMake configure failed\n"; return 1; }
-        std::string bld = std::string("cmake --build ") + '"' + tempBuild.string() + '"' + " --config Release";
-    std::cout << "[erelang] CMake build: " << bld << "\n";
-        if (run_command(bld, tempProj) != 0) { std::cerr << "Build failed\n"; return 1; }
-
-
     fs::path produced = tempBuild / "app.exe";
+    const fs::path ninjaOrMakeStamp = tempBuild / "CMakeCache.txt";
+    bool needConfigure = !fs::exists(ninjaOrMakeStamp);
+    bool needBuild = !fs::exists(produced);
+    if (!needBuild && !needConfigure) {
+        std::error_code ecTime;
+        const auto producedTime = fs::last_write_time(produced, ecTime);
+        if (!ecTime) {
+            const auto mainTime = fs::last_write_time(tempProj / "main.cpp", ecTime);
+            if (!ecTime && mainTime > producedTime) needBuild = true;
+            const auto cmakeTime = fs::last_write_time(tempProj / "CMakeLists.txt", ecTime);
+            if (!ecTime && cmakeTime > producedTime) needBuild = true;
+        }
+    }
+    if (needConfigure) {
+        std::string cfg = std::string("cmake -S ") + '"' + tempProj.string() + '"' + " -B " + '"' + tempBuild.string() + '"' + " -G \"" + generator + "\" -DCMAKE_BUILD_TYPE=MinSizeRel";
+        std::cout << "[erelang] CMake configure: " << cfg << "\n";
+        if (run_command(cfg, tempProj) != 0) { std::cerr << "CMake configure failed\n"; return 1; }
+    } else {
+        std::cout << "[erelang] CMake configure: up-to-date (skipped)\n";
+    }
+    if (needBuild) {
+        std::string bld = std::string("cmake --build ") + '"' + tempBuild.string() + '"' + " --config Release";
+        std::cout << "[erelang] CMake build: " << bld << "\n";
+        if (run_command(bld, tempProj) != 0) { std::cerr << "Build failed\n"; return 1; }
+    } else {
+        std::cout << "[erelang] CMake build: up-to-date (skipped)\n";
+    }
+
         if (!fs::exists(produced)) {
             std::cerr << "Expected output not found: " << produced << "\n"; return 1;
         }

@@ -31,7 +31,11 @@ struct TernaryExpr { ExprPtr cond; ExprPtr thenExpr; ExprPtr elseExpr; };
 struct UnaryExpr { UnOp op; ExprPtr expr; };
 struct NewExpr { std::string typeName; std::vector<ExprPtr> args; };
 struct MemberExpr { std::string objectName; std::string field; };
-struct FunctionCallExpr { std::string name; std::vector<ExprPtr> args; };
+struct FunctionCallExpr {
+    std::string name;
+    std::vector<ExprPtr> args;
+    bool collectionLiteral{false};
+};
 
 struct Expr {
     std::variant<ExprString, ExprNull, ExprNumber, ExprBool, ExprIdent, BinaryExpr, TernaryExpr, UnaryExpr, NewExpr, MemberExpr, FunctionCallExpr> node;
@@ -55,6 +59,7 @@ struct IfStmt { ExprPtr cond; std::shared_ptr<Block> thenBlk; std::shared_ptr<Bl
 struct SwitchCase { std::string value; std::shared_ptr<Block> body; };
 struct SwitchStmt { ExprPtr selector; std::vector<SwitchCase> cases; std::shared_ptr<Block> defaultBlk; };
 struct WhileStmt { ExprPtr cond; std::shared_ptr<Block> body; };
+struct BreakStmt {};
 struct DoWhileStmt { std::shared_ptr<Block> body; ExprPtr cond; };
 struct RepeatStmt { ExprPtr count; std::shared_ptr<Block> body; };
 struct ForStmt {
@@ -68,7 +73,7 @@ struct TryCatchStmt { std::shared_ptr<Block> tryBlk; std::string catchVar; std::
 struct UnsafeStmt { std::shared_ptr<Block> body; };
 struct PointerSetStmt { ExprPtr pointer; ExprPtr value; };
 
-using Statement = std::variant<PrintStmt, SleepStmt, ActionCallStmt, std::shared_ptr<ParallelStmt>, WaitAllStmt, PauseStmt, InputStmt, FireStmt, LetStmt, ReturnStmt, SetStmt, MethodCallStmt, IfStmt, SwitchStmt, WhileStmt, DoWhileStmt, RepeatStmt, ForStmt, ForInStmt, TryCatchStmt, UnsafeStmt, PointerSetStmt>;
+using Statement = std::variant<PrintStmt, SleepStmt, ActionCallStmt, std::shared_ptr<ParallelStmt>, WaitAllStmt, PauseStmt, InputStmt, FireStmt, LetStmt, ReturnStmt, SetStmt, MethodCallStmt, IfStmt, SwitchStmt, WhileStmt, DoWhileStmt, RepeatStmt, ForStmt, ForInStmt, TryCatchStmt, UnsafeStmt, PointerSetStmt, BreakStmt>;
 
 struct Block { std::vector<Statement> stmts; };
 
@@ -165,9 +170,10 @@ private:
     Entity parse_entity();
     GlobalDecl parse_global();
     ExternDecl parse_extern_decl();
-    Block parse_block();
+    Block parse_block(bool allowImplicit = false);
     Statement parse_statement();
     WhileStmt parse_while();
+    BreakStmt parse_break();
     DoWhileStmt parse_do_while();
     ForStmt parse_for();
     ForInStmt parse_for_in_after_lparen();

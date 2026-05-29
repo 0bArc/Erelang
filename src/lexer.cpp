@@ -77,6 +77,12 @@ std::vector<Token> Lexer::lex() {
                     path = std::string(src_.data() + k, m - k);
                     k = m;
                 }
+                if (path.empty()) {
+                    // Allow placeholder include forms (e.g., #include <>) while editing.
+                    while (k < src_.size() && src_[k] != '\n') { ++k; }
+                    i = k;
+                    continue;
+                }
                 // Always emit as import. Resolution will search local, cpp/, then std/ and handle missing gracefully.
                 push(TokenKind::Word, "import");
                 push(TokenKind::String, path);
@@ -100,6 +106,9 @@ std::vector<Token> Lexer::lex() {
                         }
                     }
                 }
+
+                // #include is line-terminated; synthesize import terminator so parser doesn't require a typed ';'.
+                push(TokenKind::Semicolon, ";");
 
                 // consume until end of line
                 while (k < src_.size() && src_[k] != '\n') { ++k; }

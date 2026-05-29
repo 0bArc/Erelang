@@ -1,15 +1,15 @@
 @erelang
 
 public action main {
-  let array = [1,2,3,4,5,6,7,8,9,10]
-  print "array-iter"
+  let array = [1,2,3,4,5,6,7,8,9,10];
+  print "array-iter";
   for (a : array) {
-    print a
+    print a;
   }
 
-  print "array-values"
+  print "array-values";
   for (v : array) {
-    print v
+    print v;
   }
 
   let dictionary = {
@@ -17,16 +17,16 @@ public action main {
     "age": 18
   }
 
-  print "dict-key-value"
+  print "dict-key-value";
   for (k, v : dictionary) {
-    print k + "=" + toString(v)
+    print k + "=" + toString(v);
   }
 
-  print "dict-keys-only"
+  print "dict-keys-only";
   for (k : dictionary) {
-    print k
+    print k;
   }
 }
 
-run main
+run main;
 

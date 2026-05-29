@@ -1,0 +1,6 @@
+@erelang
+public action main {
+  let d = hashmap_new();
+  print d;
+}
+run main;

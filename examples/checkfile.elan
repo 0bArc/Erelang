@@ -1,0 +1,16 @@
+#include <builtin/fs> as fs
+#include <builtin/path> as path
+
+public action checkfile {
+    let target = path.join("src", "ffi.cpp");
+    if (!fs.exists(target)) {
+        print "File not found: {target}";
+        return;
+    }
+
+    let content = fs.read(target);
+    print "Read {string.len(content)} bytes from {target}";
+    print "{content}";
+}
+
+run checkfile;

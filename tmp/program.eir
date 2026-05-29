@@ -1,15 +1,108 @@
-; erelang IR v0
+; erelang IR v1
 entry main
 
+func abs(val)
+  cmp_lt %t0, $val, #0
+  jz %t0, L_if_else_0
+  sub %t1, #0, $val
+  ret %t1
+  jmp L_if_end_1
+  label L_if_else_0
+  label L_if_end_1
+  ret $val
+end
+
+func clamp(val, min_val, max_val)
+  cmp_lt %t0, $val, $min_val
+  jz %t0, L_if_else_0
+  ret $min_val
+  jmp L_if_end_1
+  label L_if_else_0
+  label L_if_end_1
+  cmp_gt %t1, $val, $max_val
+  jz %t1, L_if_else_2
+  ret $max_val
+  jmp L_if_end_3
+  label L_if_else_2
+  label L_if_end_3
+  ret $val
+end
+
+func div(x, y)
+  cmp_eq %t0, $y, "0"
+  cmp_eq %t1, $y, #0
+  or %t2, %t0, %t1
+  jz %t2, L_if_else_0
+  print_s "[Math Error] Division by zero"
+  ret "0"
+  jmp L_if_end_1
+  label L_if_else_0
+  label L_if_end_1
+  div %t3, $x, $y
+  ret %t3
+end
+
+func is_even(n)
+  mod %t0, $n, #2
+  cmp_eq %t1, %t0, #0
+  ret %t1
+end
+
 func main()
-  let age, 10
-  let GRADING, "A"
-  let math_score, 100.0
-  let name, "Alex"
-  let names, list_new("Alex", "Adam", "Bob")
-  print "Alex"
-  print "Adam"
-  print "Bob"
-  ret
+  call_name dict_new, "N", #1
+  call %t0
+  call_name dict_new, "T", %t0
+  call %t1
+  mov $dataMap, %t1
+  mov $section, "T"
+  call_name dict_new, "N", #1
+  call %t2
+  mov $subMap, %t2
+  nop for-in-dynamic
+  ret #0
+end
+
+func max(x, y)
+  cmp_gt %t0, $x, $y
+  jz %t0, L_if_else_0
+  ret $x
+  jmp L_if_end_1
+  label L_if_else_0
+  label L_if_end_1
+  ret $y
+end
+
+func min(x, y)
+  cmp_lt %t0, $x, $y
+  jz %t0, L_if_else_0
+  ret $x
+  jmp L_if_end_1
+  label L_if_else_0
+  label L_if_end_1
+  ret $y
+end
+
+func mod(x, y)
+  mod %t0, $x, $y
+  ret %t0
+end
+
+func mul(x, y)
+  mul %t0, $x, $y
+  ret %t0
+end
+
+func pow(base, exp)
+  ret #0
+end
+
+func sub(x, y)
+  sub %t0, $x, $y
+  ret %t0
+end
+
+func sum(x, y)
+  add %t0, $x, $y
+  ret %t0
 end
 

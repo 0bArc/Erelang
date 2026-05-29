@@ -217,8 +217,15 @@
     "includes": {
       "patterns": [
         {
+          "name": "meta.preprocessor.include.partial",
+          "match": "^\\s*(#\\s*(?:i|in|inc|incl|inclu|includ))\\b.*$",
+          "captures": {
+            "1": { "name": "keyword.control.import" }
+          }
+        },
+        {
           "name": "meta.preprocessor.include",
-          "match": "^\\s*(#include)\\s*(<[^>]+>|\"[^\"]+\")\\s*(?:\\b(as)\\b\\s+([A-Za-z_][A-Za-z0-9_]*))?\\s*$",
+          "match": "^\\s*(#\\s*include)\\s*(<[^>]*>?|\"[^\"]*\"?|[A-Za-z0-9_./-]+)?\\s*(?:\\b(as)\\b\\s+([A-Za-z_][A-Za-z0-9_]*))?\\s*;?\\s*$",
           "captures": {
             "1": { "name": "keyword.control.import" },
             "2": { "name": "string.unquoted" },

@@ -92,6 +92,7 @@ private:
     struct ExecContext {
         std::vector<std::thread> threads;   // child threads spawned by actions
         bool returned = false;              // early return flag
+        bool breakSignal = false; // break signal
         std::string returnValue;            // captured return value
     };
 
@@ -125,7 +126,7 @@ private:
     std::string eval_string(const Expr& e, const Env& env) const;
     std::optional<ExprPtr> parse_interpolation_expr(std::string_view exprText) const;
     std::optional<std::string> eval_interpolation_expr(std::string_view exprText, const Env& env) const;
-    std::string eval_builtin_call(std::string_view name, const std::vector<ExprPtr>& args, const Env& env) const;
+    std::string eval_builtin_call(std::string_view name, const std::vector<ExprPtr>& args, const Env& env, bool allowCollectionHelpers = false) const;
 
     static std::vector<std::string> s_cliArgs;
 };

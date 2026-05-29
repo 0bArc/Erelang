@@ -1,31 +1,31 @@
 @erelang
 
 public entity Gui {
-  public field handle: str
-  public field pad_x: int
-  public field pad_y: int
-  public field line_h: int
-  public field spacing_x: int
-  public field spacing_y: int
-  public field default_w: int
+  public field handle: str;
+  public field pad_x: int;
+  public field pad_y: int;
+  public field line_h: int;
+  public field spacing_x: int;
+  public field spacing_y: int;
+  public field default_w: int;
 
   public action init(title: str, w: int, h: int) {
     if (self.handle != "") { return }
     if (self.line_h == 0) { stackConfig(16, 16, 28, 8, 140) }
-    self.handle = win_window_create(title, w, h)
+    self.handle = win_window_create(title, w, h);
     if (self.handle == "") { return }
-    win_layout_config(self.handle, self.pad_x, self.pad_y, self.line_h, self.spacing_x, self.spacing_y, self.default_w)
+    win_layout_config(self.handle, self.pad_x, self.pad_y, self.line_h, self.spacing_x, self.spacing_y, self.default_w);
   }
 
   public action stackConfig(padX: int, padY: int, lineH: int, spacing: int, defaultW: int) {
-    self.pad_x = padX
-    self.pad_y = padY
-    self.line_h = lineH
-    self.spacing_x = spacing
-    self.spacing_y = spacing
-    self.default_w = defaultW
+    self.pad_x = padX;
+    self.pad_y = padY;
+    self.line_h = lineH;
+    self.spacing_x = spacing;
+    self.spacing_y = spacing;
+    self.default_w = defaultW;
     if (self.handle != "") {
-      win_layout_config(self.handle, padX, padY, lineH, spacing, spacing, defaultW)
+      win_layout_config(self.handle, padX, padY, lineH, spacing, spacing, defaultW);
     }
   }
 

@@ -8,6 +8,8 @@ Features:
 - Snippets for actions and entities
 - Missing-semicolon diagnostics across statements
 - Context-aware completions for keywords (`run`, loops), symbols, and collection methods (`Array<T>`, `Map<K, V>`)
+- `#include` autosuggest now offers plain `#include` first, then real module/file paths immediately after `#include `, with correct replacement inside `<...>` paths
+- `#include` highlighting support for partial and spaced forms (for example `#inc`, `# include`)
 - Reduced legacy collection completion noise (deprecated `list_*` / `dict_*` entries hidden)
 - Identifier autosuggest retriggers while typing or deleting names, but does not reopen suggestions on plain Enter/newline edits
 

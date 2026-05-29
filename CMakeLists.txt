@@ -29,7 +29,7 @@ endfunction()
 # Control whether erelang embeds the full compiler payload (static lib + headers). Off by default to keep erelang small.
 option(ERELANG_EMBED_PAYLOAD "Embed erelang static lib and headers into erelang for out-of-tree portability" OFF)
 option(SPLIT_RUNTIME_DLLS "Build runtime as many small component DLLs instead of one monolithic erelang.dll" OFF)
-option(BUILD_SHARED_RUNTIME "Build erelang as a shared DLL (erelang.dll). OFF = no runtime DLLs produced" OFF)
+option(BUILD_SHARED_RUNTIME "Build erelang as a shared DLL (erelang.dll). OFF = no runtime DLLs produced" ON)
 option(BUILD_DEBUGGER_EXE "Build debug.exe helper via --make-debug after erelang links" OFF)
 option(ERELANG_BUNDLE_MINGW_RUNTIME "Copy MinGW runtime DLLs next to erelang.exe for portable sharing" ON)
 option(ERELANG_AUTO_UPDATE_EXTENSION "Auto package/install VS Code extension after erelang build" OFF)
@@ -231,17 +231,29 @@ elseif (BUILD_SHARED_RUNTIME)
     src/ast.cpp
     src/language_profile.cpp
     src/erodsl/spec.cpp
-    src/erodsl/spec.cpp
+    src/builtins/math.cpp
+    src/builtins/network.cpp
+    src/builtins/system.cpp
+    src/builtins/crypto.cpp
+    src/builtins/data.cpp
+    src/builtins/regex.cpp
+    src/builtins/perm.cpp
+    src/builtins/binary.cpp
+    src/builtins/threads.cpp
+    src/builtins/monitor.cpp
+    src/features/serialization.cpp
     src/typechecker.cpp
     src/symboltable.cpp
     src/error.cpp
     src/optimizer.cpp
     src/gc.cpp
     src/ffi.cpp
-    src/builtins/math.cpp
-    src/builtins/network.cpp
     src/stdlib.cpp
     src/modules.cpp
+    src/plugins.cpp
+    src/creation_kit.cpp
+    src/ir.cpp
+    src/codegen_x64.cpp
     src/runtime.cpp
     src/cabi_exports.cpp
   )

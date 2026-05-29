@@ -119,6 +119,7 @@ L_switch_default_8:
 L_switch_end_5:
     mov rax, 0
     jmp erelang_fn_main_end
+
 erelang_fn_main_end:
     add rsp, 112
     pop rbp

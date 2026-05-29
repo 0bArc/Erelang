@@ -31,6 +31,17 @@ OB_API int ob_collect_files(const char* main_file,
                             void* user,
                             char** out_error);
 
+// Runs an embedded script bundle through the full pipeline.
+// paths[i] and contents[i] describe the compile-time collected source files.
+OB_API int ob_run_embedded(const char* main_file,
+                           const char* const* paths,
+                           const char* const* contents,
+                           int file_count,
+                           int argc,
+                           const char* argv[],
+                           int flags,
+                           char** out_error);
+
 // Free a C string allocated by the DLL (e.g., returned via out_error).
 OB_API void ob_free_string(char* s);
 

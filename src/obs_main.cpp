@@ -91,7 +91,7 @@ static void print_help() {
                  "  erelang --about\n"
                  "  erelang --bootstrap  (force show bootstrap manifest UI even if args given)\n"
                  "  erelang <path\\to\\file.(elan|ere)> [--debug] [--auto]\n"
-                 "  erelang --compile <path\\to\\file.(elan|ere)> [--output <path\\to\\out.exe>] [--static|--dynamic]\n"
+                 "  erelang --compile <path\\to\\file.(elan|ere)> [--output <path\\to\\out.exe>] [--static|--dynamic] [--bundle-runtime]\n"
                  "  erelang --emit-ir <path\\to\\file.(elan|ere)> [--out <path\\to\\out.eir>]\n"
                  "  erelang --emit-asm <path\\to\\file.(elan|ere)> [--out <path\\to\\out.s>]\n"
                  "  erelang --build-native <path\\to\\file.(elan|ere)> [--out <path\\to\\out.exe>]\n"
@@ -102,8 +102,9 @@ static void print_help() {
                  "  --compile builds a standalone Windows .exe for the given erelang file.\n"
                  "  Imports are resolved at compile-time and embedded into the executable.\n"
                  "  Each compiled app writes manifest.erelang next to the exe with build + content metadata.\n"
-                 "  By default, the compiled app links dynamically when erelang.dll is available for a tiny fast-building stub.\n"
-                 "  Use --static for a larger single-file executable.\n"
+                 "  By default, --compile emits a self-contained executable (no erelang.dll required).\n"
+                 "  Use --dynamic for a tiny launcher that depends on erelang.dll.\n"
+                 "  Use --dynamic --bundle-runtime to copy erelang.dll next to the output.\n"
                  "  --make-debug builds a debugger exe from examples/lib/debugger.elan.\n"
                  "  --debug when running loads the debug driver and prefers debug_main.\n";
 }
@@ -792,6 +793,7 @@ struct CompileOptions {
     std::optional<fs::path> output{};
     bool preferStatic{false};
     bool preferDynamic{false};
+    bool bundleRuntime{false};
 };
 
 struct MakeDebugOptions {
@@ -874,10 +876,12 @@ struct Command {
                 cmd.compile.preferStatic = true;
             } else if (token == "--dynamic") {
                 cmd.compile.preferDynamic = true;
+            } else if (token == "--bundle-runtime") {
+                cmd.compile.bundleRuntime = true;
             }
         }
         if (!cmd.compile.preferStatic && !cmd.compile.preferDynamic) {
-            cmd.compile.preferDynamic = true;
+            cmd.compile.preferStatic = true;
         }
         return cmd;
     }
@@ -1592,13 +1596,15 @@ int main(int argc, char** argv) {
         fs::path output;
         bool preferStatic = false;
         bool preferDynamic = false;
+        bool bundleRuntime = false;
         for (size_t i=2; i<args.size(); ++i) {
             if (args[i] == "--output" && i+1 < args.size()) { output = args[i+1]; ++i; }
             else if (args[i] == "--static") { preferStatic = true; }
             else if (args[i] == "--dynamic") { preferDynamic = true; }
+            else if (args[i] == "--bundle-runtime") { bundleRuntime = true; }
         }
-        // Prefer the tiny dynamic launcher by default; --static keeps the older single-file mode.
-        if (!preferStatic && !preferDynamic) preferDynamic = true;
+        // Default to a self-contained executable unless --dynamic is explicitly requested.
+        if (!preferStatic && !preferDynamic) preferStatic = true;
         if (output.empty()) {
             output = input;
             output.replace_extension(".exe");
@@ -1737,24 +1743,39 @@ int main(int argc, char** argv) {
         return {};
     };
 
-    std::vector<fs::path> dllRoots;
-    if (!configName.empty()) {
-        dllRoots.push_back(layout.binDir / "dll" / configName);
-        dllRoots.push_back(layout.buildRoot / "bin" / "dll" / configName);
-        dllRoots.push_back(layout.buildRoot / "bin" / configName);
+    // Prefer optimized runtime artifacts even when erelang itself was built in Debug.
+    // This keeps compiled app size lower in default --compile mode.
+    std::vector<std::string> preferredConfigs{ "MinSizeRel", "Release", "RelWithDebInfo" };
+    if (!configName.empty() &&
+        std::find(preferredConfigs.begin(), preferredConfigs.end(), configName) == preferredConfigs.end()) {
+        preferredConfigs.push_back(configName);
     }
-    dllRoots.push_back(layout.binDir / "dll");
-    dllRoots.push_back(layout.binDir);
-    dllRoots.push_back(layout.buildRoot);
+
+    auto append_unique = [](std::vector<fs::path>& roots, const fs::path& candidate) {
+        if (candidate.empty()) return;
+        if (std::find(roots.begin(), roots.end(), candidate) == roots.end()) {
+            roots.push_back(candidate);
+        }
+    };
+
+    std::vector<fs::path> dllRoots;
+    for (const auto& cfg : preferredConfigs) {
+        append_unique(dllRoots, layout.binDir / "dll" / cfg);
+        append_unique(dllRoots, layout.buildRoot / "bin" / "dll" / cfg);
+        append_unique(dllRoots, layout.buildRoot / "bin" / cfg);
+    }
+    append_unique(dllRoots, layout.binDir / "dll");
+    append_unique(dllRoots, layout.binDir);
+    append_unique(dllRoots, layout.buildRoot);
 
     std::vector<fs::path> libRoots;
-    if (!configName.empty()) {
-        libRoots.push_back(layout.buildRoot / "lib" / configName);
-        libRoots.push_back(layout.buildRoot / configName);
+    for (const auto& cfg : preferredConfigs) {
+        append_unique(libRoots, layout.buildRoot / "lib" / cfg);
+        append_unique(libRoots, layout.buildRoot / cfg);
     }
-    libRoots.push_back(layout.buildRoot / "lib");
-    libRoots.push_back(layout.buildRoot);
-    libRoots.push_back(layout.binDir);
+    append_unique(libRoots, layout.buildRoot / "lib");
+    append_unique(libRoots, layout.buildRoot);
+    append_unique(libRoots, layout.binDir);
 
     fs::path dllPath = locate_file(dllRoots, { "liberelang.dll", "erelang.dll" });
     fs::path importLibA = locate_file(libRoots, { "liberelang.dll.a" });
@@ -1840,21 +1861,36 @@ int main(int argc, char** argv) {
     if (useDynamic) {
         fs::path chosenImplib = fs::exists(importLibA) ? importLibA : importLibMSVC;
         std::cout << "[erelang] Using dynamic erelang: " << dllPath << " with import lib " << chosenImplib << "\n";
+        if (!bundleRuntime) {
+            std::cout << "[erelang] Runtime bundling: disabled (no erelang.dll copy)\n";
+        }
     } else {
         std::cout << "[erelang] Using lib: " << libPath << "\n";
     }
     std::cout << "[erelang] Using includes: " << includeDir << "\n";
     std::cout << "[erelang] Temp project: " << tempProj << "\n";
-        // Generate main.cpp
-        std::ofstream outCpp(tempProj / "main.cpp", std::ios::binary);
-        outCpp << (useDynamic ? generate_dynamic_bootstrap_source(input, orderedFiles)
-                              : generate_bootstrap_source(input, orderedFiles));
-        outCpp.close();
-        // Generate CMakeLists.txt
-    std::ofstream outCmake(tempProj / "CMakeLists.txt", std::ios::binary);
+        auto write_if_changed = [](const fs::path& file, const std::string& content) {
+            std::error_code ec;
+            if (fs::exists(file, ec)) {
+                std::ifstream in(file, std::ios::binary);
+                std::ostringstream old;
+                old << in.rdbuf();
+                if (old.str() == content) {
+                    return;
+                }
+            }
+            std::ofstream out(file, std::ios::binary);
+            out << content;
+        };
+
+        const std::string generatedMain = useDynamic ? generate_dynamic_bootstrap_source(input, orderedFiles)
+                                                     : generate_bootstrap_source(input, orderedFiles);
+        write_if_changed(tempProj / "main.cpp", generatedMain);
+
     const std::string libLoc = libPath.generic_string();
     const std::string incLoc = includeDir.generic_string();
-    outCmake << "cmake_minimum_required(VERSION 3.20)\n"
+    std::ostringstream cmakeContent;
+    cmakeContent << "cmake_minimum_required(VERSION 3.20)\n"
         "project(erelangApp LANGUAGES CXX)\n"
         "set(CMAKE_CXX_STANDARD 20)\n"
         "if(NOT CMAKE_BUILD_TYPE)\n"
@@ -1867,13 +1903,13 @@ int main(int argc, char** argv) {
     "add_executable(app main.cpp)\n";
     if (useDynamic) {
         if (fs::exists(importLibA)) {
-            outCmake << "# MinGW: link directly to import library\n"
+            cmakeContent << "# MinGW: link directly to import library\n"
                         "target_include_directories(app PRIVATE \"" << incLoc << "\")\n"
                         "target_link_libraries(app PRIVATE \"" << (importLibA.generic_string()) << "\" advapi32 user32 gdi32 comctl32 rpcrt4 winhttp)\n";
         } else {
             const std::string dllLoc = dllPath.generic_string();
             const std::string implibLoc = importLibMSVC.generic_string();
-            outCmake << "# MSVC: import shared lib via IMPORTED target\n"
+            cmakeContent << "# MSVC: import shared lib via IMPORTED target\n"
                         "add_library(erelang SHARED IMPORTED)\n"
                         "set_target_properties(erelang PROPERTIES IMPORTED_LOCATION \"" << dllLoc << "\")\n"
                         "set_target_properties(erelang PROPERTIES IMPORTED_IMPLIB \"" << implibLoc << "\")\n"
@@ -1881,13 +1917,13 @@ int main(int argc, char** argv) {
                         "target_link_libraries(app PRIVATE erelang advapi32 user32 gdi32 comctl32 rpcrt4 winhttp)\n";
         }
     } else {
-    outCmake << "add_library(erelang STATIC IMPORTED)\n"
+    cmakeContent << "add_library(erelang STATIC IMPORTED)\n"
             "set_target_properties(erelang PROPERTIES IMPORTED_LOCATION \"" << libLoc << "\")\n"
             "target_include_directories(erelang INTERFACE \"" << incLoc << "\")\n"
             "target_include_directories(app PRIVATE \"" << incLoc << "\")\n"
             "target_link_libraries(app PRIVATE erelang advapi32 user32 gdi32 comctl32 rpcrt4 winhttp)\n";
     }
-        outCmake.close();
+        write_if_changed(tempProj / "CMakeLists.txt", cmakeContent.str());
 
     fs::path tempBuild = tempProj / "build";
         fs::create_directories(tempBuild);
@@ -1991,9 +2027,15 @@ int main(int argc, char** argv) {
     copy_manifests(layout.projectRoot / "libs");
     copy_manifests(layout.projectRoot / "Erelang" / "libs");
 
-        // If using dynamic runtime, copy erelang.dll
-        if (useDynamic) {
-            std::error_code ec; fs::copy_file(dllPath, output.parent_path() / dllPath.filename(), fs::copy_options::overwrite_existing, ec);
+        // Only copy runtime DLL when explicitly requested.
+        if (useDynamic && bundleRuntime) {
+            std::error_code ec;
+            fs::copy_file(dllPath, output.parent_path() / dllPath.filename(), fs::copy_options::overwrite_existing, ec);
+        } else {
+            std::error_code ec;
+            fs::remove(output.parent_path() / "liberelang.dll", ec);
+            ec = {};
+            fs::remove(output.parent_path() / "erelang.dll", ec);
         }
 
         // Generate manifest.erelang next to the built exe
@@ -2046,9 +2088,6 @@ int main(int argc, char** argv) {
             (void)run_command(stripCmd, absOut.parent_path());
         }
 #endif
-
-        // Cleanup temp project
-        std::error_code rmec; fs::remove_all(tempProj, rmec);
 
         std::cout << "Built: " << output << "\n";
         return 0;

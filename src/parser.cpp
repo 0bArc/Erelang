@@ -881,6 +881,10 @@ Statement Parser::parse_statement() {
     if (is_word_or_kw(peek(), "break")) {
         return parse_break();
     }
+    // continue
+    if (is_word_or_kw(peek(), "continue")) {
+        return parse_continue();
+    }
     // if
     if (is_word_or_kw(peek(), "if")) {
         return parse_if();
@@ -1456,10 +1460,12 @@ BreakStmt Parser::parse_break() {
     if (!match_word("break")) {
         throw std::runtime_error("Expected `break`");
     }
-
-    expect(TokenKind::Semicolon, ";");
-
     return BreakStmt{};
+}
+
+ContinueStmt Parser::parse_continue() {
+    if (!match_word("continue")) throw std::runtime_error("Expected 'continue'");
+    return ContinueStmt{};
 }
 
 WhileStmt Parser::parse_while() {
@@ -1751,35 +1757,41 @@ SwitchStmt Parser::parse_switch() {
            peek().kind != TokenKind::End)
     {
         if (match_word("case")) {
-
             const Token& v = consume();
-
             if (!(v.kind == TokenKind::String ||
                   v.kind == TokenKind::Word ||
-                  v.kind == TokenKind::Number))
-            {
+                  v.kind == TokenKind::Keyword ||
+                  v.kind == TokenKind::Number)) {
                 throw std::runtime_error("Expected case value");
             }
 
             expect(TokenKind::Colon, ":");
+            skip_separators();
 
-            Block b = parse_block();
+            auto body = std::make_shared<Block>();
+            while (peek().kind != TokenKind::RBrace &&
+                   peek().kind != TokenKind::End &&
+                   !is_word_or_kw(peek(), "case") &&
+                   !is_word_or_kw(peek(), "default")) {
+                body->stmts.push_back(parse_statement());
+                skip_separators();
+            }
 
-            sw.cases.push_back(
-                SwitchCase{
-                    v.text,
-                    std::make_shared<Block>(std::move(b))
-                }
-            );
-
-        }
-        else if (match_word("default")) {
-
+            sw.cases.push_back(SwitchCase{ v.text, body });
+        } else if (match_word("default")) {
             expect(TokenKind::Colon, ":");
+            skip_separators();
 
-            sw.defaultBlk =
-                std::make_shared<Block>(parse_block());
+            auto body = std::make_shared<Block>();
+            while (peek().kind != TokenKind::RBrace &&
+                   peek().kind != TokenKind::End &&
+                   !is_word_or_kw(peek(), "case") &&
+                   !is_word_or_kw(peek(), "default")) {
+                body->stmts.push_back(parse_statement());
+                skip_separators();
+            }
 
+            sw.defaultBlk = body;
         }
         else {
 

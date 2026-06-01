@@ -1,0 +1,60 @@
+@erelang
+
+public entity Player {
+    public field name: str;
+    public field hp: int;
+}
+
+struct Vec2 {
+    x: int;
+    y: int;
+}
+
+public action print_array(values) {
+    for (v : values) {
+        print "value={v}";
+    }
+}
+
+public action print_dict(d) {
+    for (k, v : d) {
+        print k + " -> " + toString(v);
+    }
+}
+
+public action main {
+    print "=== Arrays ===";
+    let nums = [2,4,6,8];
+    print_array(nums);
+
+    print "=== Dictionaries (Map-like) ===";
+    let stats = {
+        "gold": 120,
+        "zone": "forest",
+        "alive": true
+    };
+    print_dict(stats);
+
+    print "=== Struct values ===";
+    Vec2 pos = {"x": 3, "y": 4};
+    print "x={pos.x}, y={pos.y}";
+
+    print "=== Entity values ===";
+    let p = new Player();
+    p.name = "Astra";
+    p.hp = 100;
+    print "Player {p.name} has {p.hp} hp";
+
+    print "=== Condition + loop ===";
+    let i = 0;
+    while (i < 3) {
+        if (i == 1) {
+            print "middle";
+        } else {
+            print "i={i}";
+        }
+        i = i + 1;
+    }
+}
+
+run main;

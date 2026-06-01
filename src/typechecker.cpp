@@ -107,7 +107,24 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
             if (ctx.scopes) {
                 if (auto* v = ctx.scopes->lookup(node.name)) { v->used = true; inferred = v->type; }
                 else {
-                    DiagBuilder(result_, Severity::Error, "Use before declaration: " + node.name, "TC010", ctx.actionName()).emit();
+                    bool resolvedEnum = false;
+                    if (ctx.program) {
+                        for (const auto& en : ctx.program->enums) {
+                            for (const auto& member : en.members) {
+                                if (node.name == member ||
+                                    node.name == en.name + "::" + member ||
+                                    node.name == en.name + "." + member) {
+                                    inferred = {"enum:" + en.name};
+                                    resolvedEnum = true;
+                                    break;
+                                }
+                            }
+                            if (resolvedEnum) break;
+                        }
+                    }
+                    if (!resolvedEnum) {
+                        DiagBuilder(result_, Severity::Error, "Use before declaration: " + node.name, "TC010", ctx.actionName()).emit();
+                    }
                 }
             }
         } else if constexpr (std::is_same_v<T, BinaryExpr>) {

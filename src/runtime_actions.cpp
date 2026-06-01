@@ -249,6 +249,10 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
 
     return;
     }
+    if (std::holds_alternative<ContinueStmt>(s)) {
+        ctx.continueSignal = true;
+        return;
+    }
 
     if (std::holds_alternative<WhileStmt>(s)) {
 
@@ -261,6 +265,10 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
         if (ctx.breakSignal) {
             ctx.breakSignal = false;
             break;
+        }
+        if (ctx.continueSignal) {
+            ctx.continueSignal = false;
+            continue;
         }
 
         if (ctx.returned) {
@@ -275,6 +283,14 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
         const int64_t count = to_int(eval_string(*st.count, env));
         for (int64_t i = 0; i < count; ++i) {
             exec_block(*st.body, program, ctx, env);
+            if (ctx.continueSignal) {
+                ctx.continueSignal = false;
+                continue;
+            }
+            if (ctx.breakSignal) {
+                ctx.breakSignal = false;
+                break;
+            }
             if (ctx.returned) {
                 break;
             }
@@ -291,6 +307,13 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 if (!is_truthy(c)) break;
             }
             exec_block(*st.body, program, ctx, env);
+            if (ctx.breakSignal) {
+                ctx.breakSignal = false;
+                break;
+            }
+            if (ctx.continueSignal) {
+                ctx.continueSignal = false;
+            }
             if (ctx.returned) {
                 break;
             }
@@ -305,6 +328,13 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
         const auto& st = std::get<DoWhileStmt>(s);
         while (true) {
             exec_block(*st.body, program, ctx, env);
+            if (ctx.breakSignal) {
+                ctx.breakSignal = false;
+                break;
+            }
+            if (ctx.continueSignal) {
+                ctx.continueSignal = false;
+            }
             if (ctx.returned) {
                 break;
             }
@@ -328,6 +358,14 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 for (const auto& item : it->second) {
                     env.vars[st.var] = item;
                     exec_block(*st.body, program, ctx, env);
+                    if (ctx.breakSignal) {
+                        ctx.breakSignal = false;
+                        break;
+                    }
+                    if (ctx.continueSignal) {
+                        ctx.continueSignal = false;
+                        continue;
+                    }
                     if (ctx.returned) {
                         break;
                     }
@@ -345,6 +383,14 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                         env.vars[st.var] = kv.first;
                     }
                     exec_block(*st.body, program, ctx, env);
+                    if (ctx.breakSignal) {
+                        ctx.breakSignal = false;
+                        break;
+                    }
+                    if (ctx.continueSignal) {
+                        ctx.continueSignal = false;
+                        continue;
+                    }
                     if (ctx.returned) {
                         break;
                     }
@@ -406,6 +452,10 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
             if (c.value == sel) { exec_block(*c.body, program, ctx, env); matched = true; break; }
         }
         if (!matched && sw.defaultBlk) exec_block(*sw.defaultBlk, program, ctx, env);
+        if (ctx.breakSignal) {
+            // Consume break inside switch so it does not leak to outer loops.
+            ctx.breakSignal = false;
+        }
         return;
     }
     if (std::holds_alternative<SetStmt>(s)) {
@@ -927,7 +977,7 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
 void Runtime::exec_block(const Block& b, const Program& program, ExecContext& ctx, Env& env) const {
     for (const auto& st : b.stmts) {
         exec_stmt(st, program, ctx, env);
-        if (ctx.returned) {
+        if (ctx.returned || ctx.breakSignal || ctx.continueSignal) {
             break;
         }
     }

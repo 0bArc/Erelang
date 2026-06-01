@@ -357,7 +357,7 @@ static void load_program_recursive(const std::string& file,
     erelang::LexerOptions lxopts; lxopts.enableDurations = true; lxopts.enableUnits = true; lxopts.enablePolyIdentifiers = true; lxopts.emitDocComments = true; lxopts.emitComments = false;
     erelang::Lexer lx(std::move(source), lxopts);
     auto tokens = lx.lex();
-    erelang::Parser ps(std::move(tokens), key);
+    erelang::Parser ps(std::move(tokens));
     erelang::Program prog = ps.parse();
     for (auto& a : prog.actions) a.sourcePath = key;
     for (auto& h : prog.hooks) h.sourcePath = key;
@@ -530,7 +530,7 @@ static std::string generate_bootstrap_source(const fs::path& mainFile,
             erelang::LexerOptions lxopts; lxopts.enableDurations = true; lxopts.enableUnits = true; lxopts.enablePolyIdentifiers = true; lxopts.emitDocComments = true; lxopts.emitComments = false;
             Lexer lx(std::move(source), lxopts);
             auto tokens = lx.lex();
-            Parser ps(std::move(tokens), key);
+            Parser ps(std::move(tokens));
             Program prog = ps.parse();
             for (auto& a : prog.actions) a.sourcePath = key;
             for (auto& h : prog.hooks) h.sourcePath = key;
@@ -1619,7 +1619,7 @@ int main(int argc, char** argv) {
                 std::string text = preprocess_source(read_all_text(key));
                 erelang::Lexer lx(text, lxopts);
                 auto toks = lx.lex();
-                erelang::Parser ps(std::move(toks), key);
+                erelang::Parser ps(std::move(toks));
                 erelang::Program prog = ps.parse();
                 orderedFiles.emplace_back(key, std::move(text));
                 for (const auto& imp : prog.imports) {
@@ -1726,24 +1726,47 @@ int main(int argc, char** argv) {
 
     const std::string& configName = layout.config;
     auto locate_file = [](const std::vector<fs::path>& roots, const std::vector<std::string>& names) -> fs::path {
+        fs::path best;
+        fs::file_time_type bestTime{};
+        bool hasBest = false;
+        std::error_code ec;
         for (const auto& root : roots) {
             if (root.empty()) continue;
             for (const auto& name : names) {
                 fs::path candidate = root / name;
-                if (fs::exists(candidate)) {
-                    return candidate;
+                if (!fs::exists(candidate, ec) || ec) {
+                    ec.clear();
+                    continue;
+                }
+                auto t = fs::last_write_time(candidate, ec);
+                if (ec) {
+                    ec.clear();
+                    if (!hasBest) {
+                        best = candidate;
+                        hasBest = true;
+                    }
+                    continue;
+                }
+                if (!hasBest || t > bestTime) {
+                    best = candidate;
+                    bestTime = t;
+                    hasBest = true;
                 }
             }
         }
-        return {};
+        return best;
     };
 
     // Prefer optimized runtime artifacts even when erelang itself was built in Debug.
     // This keeps compiled app size lower in default --compile mode.
-    std::vector<std::string> preferredConfigs{ "MinSizeRel", "Release", "RelWithDebInfo" };
-    if (!configName.empty() &&
-        std::find(preferredConfigs.begin(), preferredConfigs.end(), configName) == preferredConfigs.end()) {
+    std::vector<std::string> preferredConfigs;
+    if (!configName.empty()) {
         preferredConfigs.push_back(configName);
+    }
+    for (const auto& cfg : { std::string("MinSizeRel"), std::string("Release"), std::string("RelWithDebInfo"), std::string("Debug") }) {
+        if (std::find(preferredConfigs.begin(), preferredConfigs.end(), cfg) == preferredConfigs.end()) {
+            preferredConfigs.push_back(cfg);
+        }
     }
 
     auto append_unique = [](std::vector<fs::path>& roots, const fs::path& candidate) {

@@ -90,6 +90,7 @@ private:
         std::vector<std::thread> threads;   // child threads spawned by actions
         bool returned = false;              // early return flag
         bool breakSignal = false; // break signal
+        bool continueSignal = false; // continue signal
         std::string returnValue;            // captured return value
     };
 

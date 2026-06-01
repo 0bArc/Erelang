@@ -1,0 +1,70 @@
+@erelang
+
+struct Vec2 {
+  x: int
+  y: int
+
+  public action set(nx: int, ny: int) {
+    self.x = nx;
+    self.y = ny;
+  }
+
+  public action length_sq(): int {
+    return self.x * self.x + self.y * self.y;
+  }
+}
+
+public entity Player {
+  public field name: str
+  public field hp: int
+
+  public action init(n: str, startHp: int) {
+    self.name = n;
+    self.hp = startHp;
+  }
+
+  public action damage(amount: int) {
+    self.hp = self.hp - amount;
+  }
+
+  public action print_status() {
+    print "Player {self.name} has {self.hp} hp";
+  }
+}
+
+public action main {
+  print "=== Arrays ===";
+  Array<int> nums = [2, 4, 6, 8];
+  for (n : nums) {
+    print "n={n}";
+  }
+
+  print "=== Dictionaries (Map-like) ===";
+  Map<string, any> stats = {"gold": 120, "zone": "forest", "alive": true};
+  for (k, v : stats) {
+    print "{k} -> {v}";
+  }
+
+  print "=== Structs ===";
+  Vec2 pos = {"x": 3, "y": 4};
+  print "len^2(before)={pos:length_sq()}";
+  pos:set(6, 8);
+  print "len^2(after)={pos:length_sq()}";
+
+  print "=== Entities ===";
+  let p = new Player("Astra", 100);
+  p:print_status();
+  p:damage(35);
+  p:print_status();
+
+  print "=== Loop + condition ===";
+  for (i = 0; i < 3; i = i + 1) {
+    if (i == 1) {
+      print "middle";
+    } else {
+      print "i={i}";
+    }
+  }
+}
+
+run main;

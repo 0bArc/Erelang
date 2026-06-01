@@ -116,6 +116,16 @@ int Runtime::run(const Program& program) const {
         if (g.value) globalVars_[g.name] = eval_string(*g.value, rootEnv);
         rootEnv.vars[g.name] = globalVars_[g.name];
     }
+    for (const auto& en : program.enums) {
+        for (const auto& member : en.members) {
+            const std::string scopedColon = en.name + "::" + member;
+            const std::string scopedDot = en.name + "." + member;
+            rootEnv.vars[scopedColon] = member;
+            rootEnv.vars[scopedDot] = member;
+            globalVars_[scopedColon] = member;
+            globalVars_[scopedDot] = member;
+        }
+    }
     // Seed file-level directives into env (simple string values); apply special ones
     for (const auto& d : program.directives) {
         if (d.value) rootEnv.vars[d.name] = *d.value; else rootEnv.vars[d.name] = "true";
@@ -424,6 +434,14 @@ int Runtime::run_single_action(const Program& program, std::string_view actionNa
                 catch (...) { globalVars_[g.name] = ""; }
             } else {
                 globalVars_[g.name] = "";
+            }
+        }
+        for (const auto& en : program.enums) {
+            for (const auto& member : en.members) {
+                const std::string scopedColon = en.name + "::" + member;
+                const std::string scopedDot = en.name + "." + member;
+                globalVars_[scopedColon] = member;
+                globalVars_[scopedDot] = member;
             }
         }
         dispatchPluginHooks("datahook", false);

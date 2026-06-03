@@ -77,18 +77,31 @@ Outputs (Debug):
 ### Run a program
 
 ```bash
-./build/bin/Debug/erelang.exe examples/your_script.elan
+./build/bin/Debug/erelang.exe examples/program.elan
 ```
 
 Example with an imported module:
 
 ```elan
-import builtin/math as math
+@erelang
+#include <builtin/math> as math
 
-public action main() {
-  print(math.add(2, 3))
+public action main {
+    print math.add(2, 3);
 }
+
+run main;
 ```
+
+## Documentation
+
+Full docs live under **[docs/](docs/README.md)** — topic guides (`filesystem.md`, `network.md`, `automation.md`, …) instead of one monolithic file.
+
+## Status
+
+**Alpha** — all doc examples validated and passing as of 2026-06-03.
+
+Tested modules: core builtins, collections, strings, math, crypto, regex, binary, data, filesystem, process/system, low-level (file handles, strbuf), automation patterns.
 
 ## Roadmap
 
@@ -97,6 +110,7 @@ public action main() {
 - [x] Interpreter runtime (modular split)
 - [x] Import-gated builtin modules
 - [x] Plugin manifest loading
+- [x] All doc examples validated (alpha)
 - [ ] Shrink core builtins further; move fs helpers fully behind `builtin/fs`
 - [ ] Advanced type system
 - [ ] VM / LLVM backend

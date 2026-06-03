@@ -228,7 +228,7 @@ std::string __erelang_builtin_system_dispatch(const std::string& name, const std
         return state.lastOutput;
     }
 
-    if (name == "system.last_exit_code") {
+    if (name == "system.last_exit" || name == "system.last_exit_code") {
         auto& state = system_state();
         std::scoped_lock lock(state.mutex);
         return std::to_string(static_cast<long long>(state.lastExitCode));

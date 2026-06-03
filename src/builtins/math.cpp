@@ -20,8 +20,8 @@ static std::string math_dispatch(const std::string& name, const std::vector<std:
     if (name == "sin") { return std::to_string(std::sin(to_d(argS(0)))); }
     if (name == "cos") { return std::to_string(std::cos(to_d(argS(0)))); }
     if (name == "tan") { return std::to_string(std::tan(to_d(argS(0)))); }
-    if (name == "sqrt") { return std::to_string(std::sqrt(std::max(0.0, to_d(argS(0))))); }
-    if (name == "pow") { return std::to_string(std::pow(to_d(argS(0)), to_d(argS(1)))); }
+    if (name == "sqrt") { return std::to_string((long long)std::round(std::sqrt(std::max(0.0, to_d(argS(0)))))); }
+    if (name == "pow") { return std::to_string((long long)std::round(std::pow(to_d(argS(0)), to_d(argS(1))))); }
     if (name == "abs") { return std::to_string(std::llabs(to_i(argS(0)))); }
     if (name == "min") { long long a = to_i(argS(0)), b = to_i(argS(1)); return std::to_string(a < b ? a : b); }
     if (name == "max") { long long a = to_i(argS(0)), b = to_i(argS(1)); return std::to_string(a > b ? a : b); }

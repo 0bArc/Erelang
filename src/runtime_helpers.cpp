@@ -115,6 +115,45 @@ std::filesystem::path path_from_u8(const std::string& s) {
     return std::filesystem::path(std::u8string(first, last));
 }
 
+std::filesystem::path infer_entry_script_directory(const Program& program) {
+    auto parent_of = [](const std::string& sourcePath) -> std::filesystem::path {
+        if (sourcePath.empty()) {
+            return {};
+        }
+        return std::filesystem::path(sourcePath).parent_path();
+    };
+    const std::string entry = program.runTarget.value_or("main");
+    for (const auto& action : program.actions) {
+        if (action.name == entry && !action.sourcePath.empty()) {
+            return parent_of(action.sourcePath);
+        }
+    }
+    for (const auto& action : program.actions) {
+        if (action.name == "main" && !action.sourcePath.empty()) {
+            return parent_of(action.sourcePath);
+        }
+    }
+    for (const auto& action : program.actions) {
+        if (!action.sourcePath.empty()) {
+            return parent_of(action.sourcePath);
+        }
+    }
+    return {};
+}
+
+std::filesystem::path resolve_filesystem_path(
+    const std::string& raw,
+    const std::filesystem::path& scriptDirectory) {
+    std::filesystem::path p = path_from_u8(raw);
+    if (p.is_absolute()) {
+        return p.lexically_normal();
+    }
+    if (!scriptDirectory.empty()) {
+        return (scriptDirectory / p).lexically_normal();
+    }
+    return (fs::current_path() / p).lexically_normal();
+}
+
 double to_double(const std::string& s) {
     try {
         return std::stod(s);

@@ -119,6 +119,8 @@ std::optional<std::string> resolve_builtin_module_method(
 
         if (path_is(normalizedPath, {"builtin/network", "builtin/net"})) {
             if (methodName == "get") return std::string("http_get");
+            if (methodName == "post") return std::string("http_post");
+            if (methodName == "status") return std::string("http_status");
             if (methodName == "download") return std::string("http_download");
             if (methodName == "encode" || methodName == "url_encode") return std::string("url_encode");
             if (methodName.rfind("http_", 0) == 0 || methodName.rfind("network.", 0) == 0 ||
@@ -167,9 +169,11 @@ std::optional<std::string> resolve_builtin_module_method(
         }
 
         if (path_is(normalizedPath, {"builtin/system"})) {
-            if (methodName.rfind("system.", 0) == 0) {
-                return methodName;
-            }
+            if (methodName == "execute") return std::string("system.execute");
+            if (methodName == "output")  return std::string("system.output");
+            if (methodName == "last_exit") return std::string("system.last_exit");
+            if (methodName == "cmd")     return std::string("system.cmd");
+            if (methodName.rfind("system.", 0) == 0) return methodName;
         }
     }
 
@@ -238,13 +242,14 @@ void bind_builtin_module_aliases(const Program& program, std::unordered_map<std:
 
         if (path_is(normalizedPath, {"builtin/network", "builtin/net"})) {
             bind_alias(alias, "get", "http_get");
+            bind_alias(alias, "post", "http_post");
+            bind_alias(alias, "status", "http_status");
             bind_alias(alias, "download", "http_download");
             bind_alias(alias, "encode", "url_encode");
             bind_same(alias, {
-                "http_get", "http_download", "hls_download_best", "url_encode",
+                "http_get", "http_post", "http_status", "http_download",
+                "hls_download_best", "url_encode",
                 "network.ip.flush", "network.ip.release", "network.ip.renew", "network.ip.registerdns",
-                "network.debug.enable", "network.debug.disable", "network.debug.status",
-                "network.debug.last", "network.debug.clear", "network.debug.log_tail",
             });
         }
 
@@ -287,9 +292,10 @@ void bind_builtin_module_aliases(const Program& program, std::unordered_map<std:
         }
 
         if (path_is(normalizedPath, {"builtin/system"})) {
-            bind_same(alias, {
-                "system.cmd", "system.execute", "system.output", "system.last_exit", "system.ip.flush",
-            });
+            bind_alias(alias, "execute",   "system.execute");
+            bind_alias(alias, "output",    "system.output");
+            bind_alias(alias, "last_exit", "system.last_exit");
+            bind_alias(alias, "cmd",       "system.cmd");
         }
     }
 }

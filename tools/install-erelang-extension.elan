@@ -1,0 +1,75 @@
+@erelang
+#include <builtin/fs> as fs
+#include <builtin/path> as path
+
+public action die(msg) {
+  stderr_print(msg);
+  exit(1);
+}
+
+public action must_ok(code, msg) {
+  if (code != "0") {
+    die(msg);
+  }
+}
+
+public action main {
+  let root = env("ERELANG_REPO_ROOT");
+  if (string.len(root) == 0) {
+    root = fs.cwd();
+  }
+
+  let marker = path.join(root, "erevos-language", "package.json");
+  if (!fs.exists(marker)) {
+    let parent = path.join(root, "..");
+    let marker2 = path.join(parent, "erevos-language", "package.json");
+    if (fs.exists(marker2)) {
+      root = parent;
+    } else {
+      die("Run from repo root or set ERELANG_REPO_ROOT");
+    }
+  }
+
+  let extDir = path.join(root, "erevos-language");
+  let vsixPath = path.join(extDir, "erelang_language.vsix");
+  let extId = "localdev.erelang-language";
+
+  print "repo={root}";
+  print "ext={extDir}";
+
+  chdir(extDir);
+  exec("cmd /c del /q erelang-language-*.vsix 2>nul");
+
+  let nm = path.join(extDir, "node_modules");
+  if (!fs.exists(nm)) {
+    print "npm install...";
+    must_ok(exec("cmd /c npm install"), "npm install failed");
+  }
+
+  print "compile TypeScript...";
+  must_ok(exec("cmd /c npm run compile"), "npm run compile failed");
+
+  print "package -> erelang_language.vsix (version in package.json unchanged)...";
+  must_ok(exec("cmd /c npx @vscode/vsce package --allow-missing-repository -o erelang_language.vsix"), "vsce package failed");
+
+  if (!fs.exists(vsixPath)) {
+    die("VSIX missing after package");
+  }
+
+  let codeCmd = path.join(env("LOCALAPPDATA"), "Programs", "Microsoft VS Code", "bin", "code.cmd");
+  if (!fs.exists(codeCmd)) {
+    codeCmd = path.join(env("LOCALAPPDATA"), "Programs", "cursor", "bin", "cursor.cmd");
+  }
+  if (!fs.exists(codeCmd)) {
+    die("code.cmd / cursor.cmd not found");
+  }
+
+  print "install {extId}...";
+  exec("cmd /c call \"" + codeCmd + "\" --uninstall-extension " + extId + " 2>nul");
+  must_ok(exec("cmd /c call \"" + codeCmd + "\" --install-extension \"" + vsixPath + "\" --force"), "extension install failed");
+
+  print "done: {vsixPath}";
+  print "reload: Developer: Reload Window";
+}
+
+run main;

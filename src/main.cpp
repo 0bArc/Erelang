@@ -191,6 +191,10 @@ int main(int argc, char** argv) {
             }
             const auto& language = resolve_language(p);
             Program prog = lex_program(std::move(source), language, key);
+            for (auto& a : prog.actions) a.sourcePath = key;
+            for (auto& h : prog.hooks) h.sourcePath = key;
+            for (auto& e : prog.entities) e.sourcePath = key;
+            for (auto& g : prog.globals) g.sourcePath = key;
             // load imports first
             for (const auto& imp : prog.imports) {
                 if (imp.pluginGlob) continue;
@@ -205,8 +209,6 @@ int main(int argc, char** argv) {
                 if (ip.is_relative()) ip = p.parent_path() / ip;
                 load_prog(ip.string());
             }
-            // Debug: list entities found in this file
-            std::cerr << "[loader] loaded " << key << " actions=" << prog.actions.size() << " entities=" << prog.entities.size() << " imports=" << prog.imports.size() << "\n";
             ordered.push_back(std::move(prog));
         };
         std::vector<Runtime::PluginRecord> pluginCallbacks;

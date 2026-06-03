@@ -5,7 +5,6 @@
 #include "erelang/runtime_helpers.hpp"
 #include "erelang/runtime_imports.hpp"
 #include "erelang/parser.hpp"
-#include "erelang/policy.hpp"
 #include "erelang/runtime.hpp"
 #include "erelang/version.hpp"
 #include "erelang/features/serialization.hpp"
@@ -124,6 +123,9 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
     }
 
     auto argS = [&](size_t i){ return i < args.size() ? eval_string(*args[i], env) : std::string(); };
+    auto fsPath = [&](size_t i) -> std::filesystem::path {
+        return resolve_filesystem_path(argS(i), scriptDirectory_);
+    };
     // If the name refers to a scripted action in the running program, execute it and return any ctx.returnValue
     if (currentProgram_) {
         if (const Action* sa = find_action(*currentProgram_, nameStr)) {
@@ -150,11 +152,6 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
             for (const auto& kv : calleeEnv.vars) if (globalNames_.count(kv.first)) globalVars_[kv.first] = kv.second;
             return actCtx.returned ? actCtx.returnValue : std::string();
         }
-    }
-    // Policy gate: deny if not allowed
-    if (!PolicyManager::instance().is_allowed(nameStr)) {
-        // Silent deny returns empty; later we can emit a diagnostic variable or throw
-        return {};
     }
     // Deterministic scaffolding
     static bool s_deterministic = false;
@@ -988,21 +985,21 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
     if (nameStr == "prompt") {
         std::string msg = argS(0); std::cout << msg; std::cout.flush(); std::string s; std::getline(std::cin, s); return s;
     }
-    // Filesystem utilities
+    // Filesystem utilities (relative paths resolve against entry script directory)
     if (nameStr == "read_text") {
-        std::ifstream in(argS(0), std::ios::binary);
+        std::ifstream in(fsPath(0), std::ios::binary);
         if (!in) return {};
         std::ostringstream ss; ss << in.rdbuf();
         return ss.str();
     }
     if (nameStr == "write_text") {
-        std::ofstream out(argS(0), std::ios::binary);
+        std::ofstream out(fsPath(0), std::ios::binary);
         if (!out) return {};
         out << argS(1);
         return {};
     }
     if (nameStr == "append_text") {
-        std::ofstream out(argS(0), std::ios::binary | std::ios::app);
+        std::ofstream out(fsPath(0), std::ios::binary | std::ios::app);
         if (!out) return {};
         out << argS(1);
         return {};
@@ -1025,7 +1022,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         } else {
             return {};
         }
-        auto file = std::make_unique<std::fstream>(argS(0), openMode);
+        auto file = std::make_unique<std::fstream>(fsPath(0), openMode);
         if (!(*file)) return {};
         const int id = g_nextFileId++;
         g_fileStreams[id] = std::move(file);
@@ -1113,33 +1110,33 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         return it->second->good() ? "true" : "false";
     }
     if (nameStr == "file_exists") {
-        return std::filesystem::exists(argS(0)) ? std::string("true") : std::string("false");
+        return std::filesystem::exists(fsPath(0)) ? std::string("true") : std::string("false");
     }
     if (nameStr == "file_size") {
         std::error_code ec;
-        auto size = std::filesystem::file_size(argS(0), ec);
+        auto size = std::filesystem::file_size(fsPath(0), ec);
         if (ec) return "-1";
         return std::to_string(static_cast<long long>(size));
     }
     if (nameStr == "mkdirs") {
-        std::error_code ec; std::filesystem::create_directories(argS(0), ec); return {};
+        std::error_code ec; std::filesystem::create_directories(fsPath(0), ec); return {};
     }
     if (nameStr == "copy_file") {
-        std::error_code ec; bool ok = std::filesystem::copy_file(argS(0), argS(1), std::filesystem::copy_options::overwrite_existing, ec);
+        std::error_code ec; bool ok = std::filesystem::copy_file(fsPath(0), fsPath(1), std::filesystem::copy_options::overwrite_existing, ec);
         return ok && !ec ? std::string("true") : std::string("false");
     }
     if (nameStr == "move_file") {
-        std::error_code ec; std::filesystem::rename(argS(0), argS(1), ec);
+        std::error_code ec; std::filesystem::rename(fsPath(0), fsPath(1), ec);
         return !ec ? std::string("true") : std::string("false");
     }
     if (nameStr == "delete_file") {
-        std::error_code ec; std::filesystem::remove(argS(0), ec);
+        std::error_code ec; std::filesystem::remove(fsPath(0), ec);
         return !ec ? std::string("true") : std::string("false");
     }
     if (nameStr == "list_files") {
         int id = g_nextListId++;
         g_lists[id] = {};
-        std::error_code ec; for (auto& e : std::filesystem::directory_iterator(argS(0), ec)) {
+        std::error_code ec; for (auto& e : std::filesystem::directory_iterator(fsPath(0), ec)) {
             g_lists[id].push_back(e.path().string());
         }
         std::sort(g_lists[id].begin(), g_lists[id].end());
@@ -1149,7 +1146,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         return std::filesystem::current_path().string();
     }
     if (nameStr == "chdir") {
-        std::error_code ec; std::filesystem::current_path(argS(0), ec); return !ec ? std::string("true") : std::string("false");
+        std::error_code ec; std::filesystem::current_path(fsPath(0), ec); return !ec ? std::string("true") : std::string("false");
     }
     if (nameStr == "path_join") {
         if (args.empty()) return {};
@@ -1170,7 +1167,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
     }
     if (nameStr == "file_mtime") {
         std::error_code ec;
-        auto ft = std::filesystem::last_write_time(argS(0), ec);
+        auto ft = std::filesystem::last_write_time(fsPath(0), ec);
         if (ec) return "0";
         auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
             ft - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now());

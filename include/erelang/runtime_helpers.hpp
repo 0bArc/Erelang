@@ -43,6 +43,10 @@ extern std::unordered_map<int, std::deque<std::string>> g_queues;
 [[nodiscard]] std::string format_pointer_handle(int id);
 [[nodiscard]] std::optional<int> parse_pointer_handle(const std::string& handle);
 [[nodiscard]] std::filesystem::path path_from_u8(const std::string& s);
+[[nodiscard]] std::filesystem::path infer_entry_script_directory(const Program& program);
+[[nodiscard]] std::filesystem::path resolve_filesystem_path(
+    const std::string& raw,
+    const std::filesystem::path& scriptDirectory);
 [[nodiscard]] double to_double(const std::string& s);
 [[nodiscard]] bool is_float_string(const std::string& s);
 [[nodiscard]] bool is_int_string(const std::string& s);

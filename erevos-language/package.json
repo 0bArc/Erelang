@@ -3,15 +3,13 @@
   "displayName": "Erelang Language",
   "publisher": "localdev",
   "description": "Syntax highlighting and language basics for Erelang (.ere/.elan)",
-  "version": "0.0.16",
+  "version": "0.0.21",
   "engines": {
     "vscode": "^1.104.0"
   },
+  "icon": "icon.png",
   "categories": [
     "Programming Languages"
-  ],
-  "activationEvents": [
-    "onLanguage:erelang"
   ],
   "contributes": {
     "commands": [
@@ -21,13 +19,25 @@
         "category": "Erelang"
       }
     ],
+    "configurationDefaults": {
+      "[erelang]": {
+        "editor.quickSuggestions": {
+          "other": "on",
+          "comments": "off",
+          "strings": "on"
+        },
+        "editor.suggestOnTriggerCharacters": true,
+        "editor.acceptSuggestionOnEnter": "smart",
+        "editor.wordBasedSuggestions": "off"
+      }
+    },
     "configuration": {
       "title": "Erelang",
       "properties": {
         "erelang.autoSuggestIdentifiers": {
           "type": "boolean",
           "default": true,
-          "description": "Retrigger IntelliSense while typing or deleting identifier characters in Erelang files, without reopening suggestions on plain Enter/newline edits."
+          "description": "Retrigger IntelliSense while typing identifier characters in Erelang files. Suggestions are filtered to the word being typed."
         },
         "erelang.debugCompletion": {
           "type": "boolean",
@@ -48,6 +58,10 @@
           ".elan",
           ".0bs"
         ],
+        "icon": {
+          "light": "./icons/erelang-light.png",
+          "dark": "./icons/erelang-dark.png"
+        },
         "configuration": "./language-configuration.json"
       },
       {
@@ -97,10 +111,11 @@
   },
   "main": "./out/extension.js",
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "build:icon": "powershell -NoProfile -ExecutionPolicy Bypass -File ../tools/build-erelang-icon.ps1",
+    "vscode:prepublish": "npm run build:icon && npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "package": "vsce package",
+    "package": "vsce package --allow-missing-repository -o erelang_language.vsix",
     "test": "echo No tests",
     "postinstall": "node ./node_modules/vscode/bin/install"
   },

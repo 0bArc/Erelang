@@ -13,7 +13,6 @@
 #include "erelang/symboltable.hpp"
 #include "erelang/modules.hpp"
 #include "erelang/version.hpp"
-#include "erelang/policy.hpp"
 #include "erelang/features/serialization.hpp"
 
 #include <algorithm>
@@ -101,6 +100,7 @@ void Runtime::set_cli_args(const std::vector<std::string>& args) { s_cliArgs = a
 
 int Runtime::run(const Program& program) const {
     currentProgram_ = &program;
+    scriptDirectory_ = infer_entry_script_directory(program);
     std::string entry = program.runTarget.value_or("main");
     const Action* a = find_action(program, entry);
     if (!a) throw std::runtime_error("Action not found: " + entry);
@@ -216,6 +216,7 @@ int Runtime::run(const Program& program) const {
         }
     };
     seedPluginAliases(rootEnv);
+    bind_builtin_module_aliases(program, globalVars_);
     bind_builtin_module_aliases(program, rootEnv.vars);
     auto dispatchPluginHooks = [&](std::string_view hookName, bool reverseOrder) {
         if (pluginRecords_.empty()) {
@@ -290,6 +291,7 @@ int Runtime::run(const Program& program) const {
 
 int Runtime::run_single_action(const Program& program, std::string_view actionName) const {
     currentProgram_ = &program;
+    scriptDirectory_ = infer_entry_script_directory(program);
     const Action* a = find_action(program, actionName);
     if (!a) { currentProgram_ = nullptr; return 1; }
     if (program.strict && a->visibility != Visibility::Public) { currentProgram_ = nullptr; return 2; }
@@ -454,6 +456,7 @@ int Runtime::run_single_action(const Program& program, std::string_view actionNa
             for (auto& kv : se.vars) if (globalNames_.count(kv.first)) globalVars_[kv.first] = kv.second;
         }
     }
+    bind_builtin_module_aliases(program, globalVars_);
     for (const auto& kv : globalVars_) env.vars[kv.first] = kv.second;
     seedPluginAliases(env);
     bind_builtin_module_aliases(program, env.vars);

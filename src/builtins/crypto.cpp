@@ -15,11 +15,12 @@ static std::string to_hex(const std::vector<uint8_t>& data) {
     return ss.str();
 }
 
-// Simple FNV-1a 64-bit hash (fast, not cryptographically secure)
+// Simple FNV-1a 64-bit hash — returns lowercase hex string
 static std::string fnv1a(const std::string& s) {
     uint64_t h = 1469598103934665603ull;
     for (unsigned char c : s) { h ^= c; h *= 1099511628211ull; }
-    return std::to_string((unsigned long long)h);
+    std::ostringstream ss; ss << std::hex << std::setfill('0') << std::setw(16) << h;
+    return ss.str();
 }
 
 // Simple XORShift32 PRNG state (per process) for random_bytes fallback

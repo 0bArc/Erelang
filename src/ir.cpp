@@ -493,6 +493,8 @@ private:
                 emit("sleep", {"#" + std::to_string(s.ms)});
             } else if constexpr (std::is_same_v<T, std::shared_ptr<ParallelStmt>>) {
                 if (s) lower_block(s->body);
+            } else if constexpr (std::is_same_v<T, ImportStmt>) {
+                // Resolved at program load; no IR.
             }
         }, stmt);
     }

@@ -29,7 +29,6 @@
 #include "erelang/symboltable.hpp"
 #include "erelang/modules.hpp"
 #include "erelang/version.hpp"
-#include "erelang/policy.hpp"
 #include "erelang/plugins.hpp"
 #include "erelang/ir.hpp"
 #include "erelang/codegen_x64.hpp"
@@ -607,10 +606,7 @@ static std::string generate_bootstrap_source(const fs::path& mainFile,
         auto tcRes = tc.check(mainProg);
         if (!tcRes.ok) {
             for (auto& d : tcRes.diagnostics) {
-                const char* tag = d.severity == erelang::Severity::Warning ? "[warn] " : (d.severity == erelang::Severity::Note ? "[note] " : "[error] ");
-                std::cerr << tag << d.code << ": " << d.message;
-                if (!d.context.empty()) std::cerr << " (" << d.context << ")";
-                std::cerr << "\n";
+                std::cerr << erelang::format_diagnostic(d) << "\n";
             }
             return 1;
         }
@@ -1170,7 +1166,6 @@ struct ExecutionContext {
         return 1;
     }
 
-    erelang::PolicyManager::instance().load("policy.cfg");
     erelang::Runtime::set_cli_args(originalArgs);
 
     try {
@@ -1273,13 +1268,7 @@ struct ExecutionContext {
         auto tcResult = typeChecker.check(mainProgram);
         if (!tcResult.ok) {
             for (const auto& diag : tcResult.diagnostics) {
-                const char* tag = diag.severity == erelang::Severity::Warning ? "[warn] "
-                                  : (diag.severity == erelang::Severity::Note ? "[note] " : "[error] ");
-                std::cerr << tag << diag.code << ": " << diag.message;
-                if (!diag.context.empty()) {
-                    std::cerr << " (" << diag.context << ")";
-                }
-                std::cerr << '\n';
+                std::cerr << erelang::format_diagnostic(diag) << '\n';
             }
             return 1;
         }
@@ -1419,9 +1408,6 @@ int main(int argc, char** argv) {
     std::vector<std::string> args(argv + 1, argv + argc);
     // Pass CLI args to runtime for deterministic seed scan
     erelang::Runtime::set_cli_args(args);
-    // Load policy file if present (policy.cfg) in current directory
-    erelang::PolicyManager::instance().load("policy.cfg");
-
     erelang::ExecutionContext ctx = erelang::build_execution_context(argc > 0 ? argv[0] : nullptr);
     [[maybe_unused]] auto& pluginManifests = ctx.pluginManifests;
 #ifdef ERELANG_STATIC_RUNNER

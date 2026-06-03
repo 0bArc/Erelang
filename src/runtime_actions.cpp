@@ -51,6 +51,12 @@ const Action* Runtime::find_entity_method(const Entity& e, std::string_view name
 }
 
 void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext& ctx, Env& env) const {
+    if (std::holds_alternative<ImportStmt>(s)) {
+        (void)program;
+        (void)ctx;
+        (void)env;
+        return;
+    }
     if (std::holds_alternative<PrintStmt>(s)) {
         const auto& st = std::get<PrintStmt>(s);
         std::cout << eval_string(*st.value, env) << std::endl;
@@ -146,6 +152,17 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
             }
         }
         // Support object construction on right-hand side: let x = new Type(args)
+        if (std::holds_alternative<FunctionCallExpr>(st.value->node)) {
+            const auto& fc = std::get<FunctionCallExpr>(st.value->node);
+            if (const StructDecl* sd = find_struct_decl(program, fc.name)) {
+                env.vars[st.name] = std::string("struct:") + sd->name;
+                for (const auto& f : sd->fields) {
+                    env.vars[st.name + "." + f.name] = "0";
+                }
+                if (globalNames_.count(st.name)) globalVars_[st.name] = env.vars[st.name];
+                return;
+            }
+        }
         if (std::holds_alternative<NewExpr>(st.value->node)) {
             const auto& ne = std::get<NewExpr>(st.value->node);
             const Entity* ent = find_entity(program, ne.typeName);
@@ -165,17 +182,18 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
             }
             // bind and run optional init(name, ...) only if 'new' provided arguments
             if (const Action* init = find_entity_method(*ent, "init")) {
-                if (!ne.args.empty()) {
-                    Env selfEnv;
-                    // bind params from args
-                    for (size_t i=0; i<init->params.size() && i<ne.args.size(); ++i) {
-                        selfEnv.vars[init->params[i].name] = eval_string(*ne.args[i], env);
-                    }
-                    // expose 'self' object by name
-                    selfEnv.objects["self"] = obj;
-                    ExecContext child;
-                    exec_block(init->body, program, child, selfEnv);
-                    for (auto& th : child.threads) if (th.joinable()) th.join();
+                Env selfEnv;
+                for (size_t i=0; i<init->params.size() && i<ne.args.size(); ++i) {
+                    selfEnv.vars[init->params[i].name] = eval_string(*ne.args[i], env);
+                }
+                selfEnv.objects["self"] = obj;
+                for (const auto& kv : obj->fields) selfEnv.vars[kv.first] = kv.second;
+                ExecContext child;
+                exec_block(init->body, program, child, selfEnv);
+                for (auto& th : child.threads) if (th.joinable()) th.join();
+                for (auto& f : obj->fields) {
+                    auto vit = selfEnv.vars.find(f.first);
+                    if (vit != selfEnv.vars.end()) f.second = vit->second;
                 }
             }
             env.objects[st.name] = obj;
@@ -535,7 +553,6 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
             }
             break;
         }
-        throw std::runtime_error("Method syntax disabled in manual mode: " + mc.objectName + "." + mc.method);
 
         // Support dynamic list/dict method calls using handles stored in variables
         auto vhit = env.vars.find(mc.objectName);

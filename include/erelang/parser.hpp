@@ -31,6 +31,7 @@ struct TernaryExpr { ExprPtr cond; ExprPtr thenExpr; ExprPtr elseExpr; };
 struct UnaryExpr { UnOp op; ExprPtr expr; };
 struct NewExpr { std::string typeName; std::vector<ExprPtr> args; };
 struct MemberExpr { std::string objectName; std::string field; };
+struct IndexExpr { ExprPtr object; ExprPtr index; };
 struct FunctionCallExpr {
     std::string name;
     std::vector<ExprPtr> args;
@@ -38,7 +39,7 @@ struct FunctionCallExpr {
 };
 
 struct Expr {
-    std::variant<ExprString, ExprNull, ExprNumber, ExprBool, ExprIdent, BinaryExpr, TernaryExpr, UnaryExpr, NewExpr, MemberExpr, FunctionCallExpr> node;
+    std::variant<ExprString, ExprNull, ExprNumber, ExprBool, ExprIdent, BinaryExpr, TernaryExpr, UnaryExpr, NewExpr, MemberExpr, IndexExpr, FunctionCallExpr> node;
 };
 
 struct Block; // forward for recursive AST
@@ -73,8 +74,9 @@ struct ForInStmt { std::string var; std::optional<std::string> valueVar; bool us
 struct TryCatchStmt { std::shared_ptr<Block> tryBlk; std::string catchVar; std::shared_ptr<Block> catchBlk; };
 struct UnsafeStmt { std::shared_ptr<Block> body; };
 struct PointerSetStmt { ExprPtr pointer; ExprPtr value; };
+struct ImportStmt {};
 
-using Statement = std::variant<PrintStmt, SleepStmt, ActionCallStmt, std::shared_ptr<ParallelStmt>, WaitAllStmt, PauseStmt, InputStmt, FireStmt, LetStmt, ReturnStmt, SetStmt, MethodCallStmt, IfStmt, SwitchStmt, WhileStmt, DoWhileStmt, RepeatStmt, ForStmt, ForInStmt, TryCatchStmt, UnsafeStmt, PointerSetStmt, BreakStmt, ContinueStmt>;
+using Statement = std::variant<PrintStmt, SleepStmt, ActionCallStmt, std::shared_ptr<ParallelStmt>, WaitAllStmt, PauseStmt, InputStmt, FireStmt, LetStmt, ReturnStmt, SetStmt, MethodCallStmt, IfStmt, SwitchStmt, WhileStmt, DoWhileStmt, RepeatStmt, ForStmt, ForInStmt, TryCatchStmt, UnsafeStmt, PointerSetStmt, BreakStmt, ContinueStmt, ImportStmt>;
 
 struct Block { std::vector<Statement> stmts; };
 
@@ -115,7 +117,13 @@ struct Entity {
     std::string sourcePath;
 };
 
-struct GlobalDecl { std::string name; ExprPtr value; std::string sourcePath; };
+struct GlobalDecl {
+    std::string name;
+    ExprPtr value;
+    std::string sourcePath;
+    Visibility visibility{Visibility::Public};
+    bool exported{false};
+};
 
 struct ImportDecl {
     std::string path;
@@ -188,6 +196,7 @@ private:
     TypeAliasDecl parse_type_alias();
     std::vector<Attribute> parse_attributes();
     std::string parse_type_annotation();
+    ImportDecl parse_import_decl();
     ExprPtr parse_expression();
     ExprPtr parse_ternary();
     ExprPtr parse_coalesce();
@@ -207,6 +216,7 @@ private:
     std::vector<std::string> namespaceStack_;
     bool parsingEntityMethod_{false};
     std::string sourceName_;
+    std::vector<ImportDecl>* programImports_{nullptr};
 };
 
 } // namespace erelang

@@ -1,0 +1,22 @@
+@erelang
+
+public entity Counter {
+  public field value: int;
+
+  public action init(v: int) {
+    self.value = v;
+  }
+
+  public int bump(int step) {
+    self.value = self.value + step;
+    return self.value;
+  }
+}
+
+public action main {
+  let c = new Counter();
+  c.init(10);
+  print c.bump(5);
+}
+
+run main;

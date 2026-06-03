@@ -108,6 +108,7 @@ private:
 
     // Track currently running Program for callbacks (thread-safe under assumption single active run() at a time).
     mutable const Program* currentProgram_ = nullptr; // lifetime: referenced Program must outlive thread workers.
+    mutable std::filesystem::path scriptDirectory_; // entry script parent dir for relative fs paths
     mutable std::unordered_map<std::string, std::string> globalVars_; // global variable backing store
     mutable std::unordered_set<std::string> globalNames_;             // quick membership for globals
     mutable std::unordered_map<std::string, ExprPtr> interpolationExprCache_;

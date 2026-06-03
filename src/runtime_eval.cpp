@@ -42,7 +42,7 @@ std::optional<ExprPtr> Runtime::parse_interpolation_expr(std::string_view exprTe
         script += "public action __fmt {\n";
         script += "  return ";
         script += key;
-        script += "\n}";
+        script += ";\n}";
 
         LexerOptions lxopts;
         lxopts.enableDurations = true;
@@ -358,9 +358,100 @@ std::string Runtime::eval_string(const Expr& e, const Env& env) const {
         if (it != env.vars.end()) return it->second;
         return {};
     }
+    if (std::holds_alternative<IndexExpr>(e.node)) {
+        const auto& ix = std::get<IndexExpr>(e.node);
+        const std::string container = eval_string(*ix.object, env);
+        const std::string indexValue = eval_string(*ix.index, env);
+        if (container.rfind("list:", 0) == 0) {
+            const int id = static_cast<int>(to_int(container.substr(5)));
+            const int idx = static_cast<int>(to_int(indexValue));
+            auto it = g_lists.find(id);
+            if (it != g_lists.end()) {
+                const auto& vec = it->second;
+                if (idx >= 0 && idx < static_cast<int>(vec.size())) return vec[idx];
+            }
+            return "0";
+        }
+        if (container.rfind("dict:", 0) == 0) {
+            const int id = static_cast<int>(to_int(container.substr(5)));
+            auto dit = g_dicts.find(id);
+            if (dit != g_dicts.end()) {
+                auto fit = dit->second.find(indexValue);
+                if (fit != dit->second.end()) return fit->second;
+            }
+            return {};
+        }
+        return {};
+    }
     if (std::holds_alternative<FunctionCallExpr>(e.node)) {
         const auto& fc = std::get<FunctionCallExpr>(e.node);
         if (currentProgram_) {
+            const auto dot = fc.name.rfind('.');
+            if (dot != std::string::npos && dot > 0 && dot + 1 < fc.name.size()) {
+                const std::string objectName = fc.name.substr(0, dot);
+                const std::string methodName = fc.name.substr(dot + 1);
+                auto invoke_entity_method = [&](ObjPtr obj) -> std::optional<std::string> {
+                    const Entity* ent = find_entity(*currentProgram_, obj->typeName);
+                    if (!ent) return std::nullopt;
+                    const Action* meth = find_entity_method(*ent, methodName);
+                    if (!meth) return std::nullopt;
+                    Env callEnv;
+                    for (const auto& kv : globalVars_) callEnv.vars[kv.first] = kv.second;
+                    for (size_t i = 0; i < meth->params.size() && i < fc.args.size(); ++i) {
+                        callEnv.vars[meth->params[i].name] = eval_string(*fc.args[i], env);
+                    }
+                    callEnv.objects["self"] = obj;
+                    for (const auto& kv : obj->fields) callEnv.vars[kv.first] = kv.second;
+                    ExecContext child;
+                    exec_block(meth->body, *currentProgram_, child, callEnv);
+                    for (auto& th : child.threads) if (th.joinable()) th.join();
+                    for (auto& f : obj->fields) {
+                        auto vit = callEnv.vars.find(f.first);
+                        if (vit != callEnv.vars.end()) f.second = vit->second;
+                    }
+                    if (child.returned) return child.returnValue;
+                    return std::string{};
+                };
+                if (auto oit = env.objects.find(objectName); oit != env.objects.end()) {
+                    if (auto ret = invoke_entity_method(oit->second)) return *ret;
+                }
+                if (objectName == "self") {
+                    if (auto oit = env.objects.find("self"); oit != env.objects.end()) {
+                        if (auto ret = invoke_entity_method(oit->second)) return *ret;
+                    }
+                }
+                auto varIt = env.vars.find(objectName);
+                if (varIt != env.vars.end() && varIt->second.rfind("struct:", 0) == 0) {
+                    const std::string structName = varIt->second.substr(7);
+                    const StructDecl* sd = find_struct_decl(*currentProgram_, structName);
+                    const Action* method = sd ? find_struct_method(*sd, methodName) : nullptr;
+                    if (method) {
+                        Env callEnv;
+                        for (const auto& kv : globalVars_) callEnv.vars[kv.first] = kv.second;
+                        for (size_t i = 0; i < method->params.size() && i < fc.args.size(); ++i) {
+                            callEnv.vars[method->params[i].name] = eval_string(*fc.args[i], env);
+                        }
+                        callEnv.vars["self"] = varIt->second;
+                        for (const auto& f : sd->fields) {
+                            const std::string objectField = objectName + "." + f.name;
+                            auto fit = env.vars.find(objectField);
+                            const std::string value = (fit != env.vars.end()) ? fit->second : std::string{};
+                            callEnv.vars[f.name] = value;
+                            callEnv.vars["self." + f.name] = value;
+                        }
+                        ExecContext child;
+                        exec_block(method->body, *currentProgram_, child, callEnv);
+                        for (auto& th : child.threads) if (th.joinable()) th.join();
+                        if (child.returned) return child.returnValue;
+                        return {};
+                    }
+                }
+            }
+            if (const StructDecl* sd = find_struct_decl(*currentProgram_, fc.name)) {
+                (void)sd;
+                (void)fc;
+                return std::string("struct:") + sd->name;
+            }
             if (const Action* action = find_action(*currentProgram_, fc.name)) {
                 if (currentProgram_->strict && action->visibility != Visibility::Public) {
                     throw std::runtime_error("Action not public: " + action->name);

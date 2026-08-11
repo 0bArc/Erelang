@@ -1,4 +1,4 @@
-# 2026-06-02 — Print expression + VSIX highlighting (part 1)
+# 2026-06-02  --  Print expression + VSIX highlighting (part 1)
 
 ## Correction (same day)
 

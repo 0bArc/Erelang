@@ -14,7 +14,8 @@ static std::string regex_dispatch(const std::string& name, const std::vector<std
     // argv = {text, pattern} or {text, pattern, repl}
     if (name == "regex_match") {
         const std::string text = argS(0), pat = argS(1);
-        try { std::regex re(pat); return std::regex_search(text, re) ? "true" : "false"; }
+        // Full match: the pattern must cover the entire input, not a substring.
+        try { std::regex re(pat); return std::regex_match(text, re) ? "true" : "false"; }
         catch (...) { return "false"; }
     }
     if (name == "regex_find") {

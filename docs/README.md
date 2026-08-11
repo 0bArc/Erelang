@@ -10,7 +10,7 @@ Scripting language + Windows-first interpreter. Programs use the `.elan` extensi
 | [language.md](language.md) | Actions, types, control flow, entities |
 | [imports.md](imports.md) | `#include`, local modules, module list |
 | [automation.md](automation.md) | File, process, HTTP scripting patterns |
-| [diagnostics.md](diagnostics.md) | Typechecker codes (`TC001`, …) |
+| [diagnostics.md](diagnostics.md) | Typechecker codes (`TC001`, ...) |
 
 ## Builtin modules (import required)
 
@@ -43,8 +43,16 @@ Scripting language + Windows-first interpreter. Programs use the `.elan` extensi
 |-----|--|
 | [toolchain.md](toolchain.md) | `erelang`, `obc`, CMake targets, CLI flags |
 
+## Runtime & language reviews
+
+| Doc | |
+|-----|--|
+| [runtime-review.md](runtime-review.md) | Severity-ordered runtime findings (P0/P1/P2) and suggested improvements |
+| [language-gaps.md](language-gaps.md) | Missing language features with implemented-vs-missing status |
+
 ## Examples in repo
 
-- `examples/program.elan` — beginner hello-world demo
-- `examples/language_kitchen_sink.elan` — entities, structs, collections, control flow
-- `examples/modules/math.elan` — reusable action library
+- `examples/program.elan`: beginner hello-world demo
+- `examples/language_kitchen_sink.elan`: entities, structs, collections, control flow
+- `examples/modules/math.elan`: reusable action library
+- `examples/testfile.elan`: CLI-tool capability demo (arg parsing, subprocess capture, file I/O)

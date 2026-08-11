@@ -15,8 +15,8 @@ cmake --build build --target erelang_runner -j 8
 
 Optional flags:
 
-- `-DERELANG_EXPERIMENTAL=ON` — enable `builtin/threads` and `builtin/monitor`
-- `-DCMAKE_BUILD_TYPE=Release` — smaller, optimized binary
+- `-DERELANG_EXPERIMENTAL=ON`: enable `builtin/threads` and `builtin/monitor`
+- `-DCMAKE_BUILD_TYPE=Release`: smaller, optimized binary
 
 Binary location: `build/bin/Debug/erelang.exe` (or `Release/` for release builds)
 
@@ -56,9 +56,9 @@ The `@erelang` directive at the top of a file is recommended but not required.
 
 ## Next steps
 
-1. [language.md](language.md) — syntax reference  
-2. [filesystem.md](filesystem.md) — read and write files  
-3. [imports.md](imports.md) — use `builtin/*` modules  
-4. [core-builtins.md](core-builtins.md) — built-in functions  
+1. [language.md](language.md): syntax reference  
+2. [filesystem.md](filesystem.md): read and write files  
+3. [imports.md](imports.md): use `builtin/*` modules  
+4. [core-builtins.md](core-builtins.md): built-in functions  
 
-VS Code extension: `erevos-language/` — install the `.vsix` or build from source with `npm run package` inside that folder.
+VS Code extension: `erevos-language/`: install the `.vsix` or build from source with `npm run package` inside that folder.

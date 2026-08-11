@@ -13,6 +13,7 @@
 #include <mutex>
 #include <utility>
 #include <array>
+#include <limits>
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -45,6 +46,29 @@ static std::string narrow_utf8(const std::wstring& text) {
     std::string narrow(static_cast<std::size_t>(required), '\0');
     WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), narrow.data(), required, nullptr, nullptr);
     return narrow;
+}
+
+static bool send_request_with_headers(HINTERNET request, const std::string& extraHeaders, const std::string& body, const std::string& contentType) {
+    // Build full header string from extraHeaders + optional Content-Type
+    std::wstring fullHeaders;
+    if (!extraHeaders.empty()) {
+        fullHeaders = widen_utf8(extraHeaders);
+    }
+    if (!contentType.empty()) {
+        if (!fullHeaders.empty()) fullHeaders += L"\r\n";
+        fullHeaders += L"Content-Type: " + widen_utf8(contentType);
+    }
+
+    DWORD bodyLen = 0;
+    if (body.size() > static_cast<std::size_t>(std::numeric_limits<DWORD>::max())) return false;
+    bodyLen = static_cast<DWORD>(body.size());
+
+    LPCWSTR hdrPtr = fullHeaders.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : fullHeaders.c_str();
+    DWORD hdrLen = fullHeaders.empty() ? 0 : static_cast<DWORD>(fullHeaders.size());
+
+    return WinHttpSendRequest(request, hdrPtr, hdrLen,
+                              body.empty() ? WINHTTP_NO_REQUEST_DATA : const_cast<char*>(body.data()),
+                              bodyLen, bodyLen, 0) != FALSE;
 }
 
 struct WinHttpSession {
@@ -82,6 +106,10 @@ static bool winhttp_open(WinHttpSession& s, const std::string& url, const wchar_
         0);
     if (!s.session) return false;
 
+    // Bound resolution/connect/send/receive so a dead server cannot hang the
+    // interpreter indefinitely.
+    WinHttpSetTimeouts(s.session, 10000, 10000, 15000, 30000);
+
     s.connect = WinHttpConnect(s.session, uc.lpszHostName, uc.nPort, 0);
     if (!s.connect) return false;
 
@@ -91,6 +119,9 @@ static bool winhttp_open(WinHttpSession& s, const std::string& url, const wchar_
     return s.request != nullptr;
 }
 
+// Cap the amount of body read from a server to avoid unbounded memory growth.
+static constexpr std::size_t kMaxResponseBytes = 64 * 1024 * 1024;
+
 static std::string winhttp_read_response(HINTERNET request) {
     std::string out;
     DWORD avail = 0;
@@ -98,6 +129,7 @@ static std::string winhttp_read_response(HINTERNET request) {
         std::string buf(avail, '\0');
         DWORD read = 0;
         if (!WinHttpReadData(request, buf.data(), avail, &read) || read == 0) break;
+        if (out.size() + read > kMaxResponseBytes) break;
         out.append(buf.data(), read);
     }
     return out;
@@ -115,14 +147,54 @@ static std::string http_post_impl(const std::string& url, const std::string& bod
     WinHttpSession s;
     if (!winhttp_open(s, url, L"POST")) return {};
 
-    const std::wstring ct = widen_utf8(contentType.empty() ? "application/x-www-form-urlencoded" : contentType);
-    const std::wstring headers = L"Content-Type: " + ct;
+    // WinHttpSendRequest's length fields are DWORD; reject oversized bodies
+    // instead of silently truncating.
+    if (body.size() > std::numeric_limits<DWORD>::max()) return {};
 
-    DWORD bodyLen = static_cast<DWORD>(body.size());
-    if (!WinHttpSendRequest(s.request, headers.c_str(), static_cast<DWORD>(headers.size()),
-                            const_cast<char*>(body.data()), bodyLen, bodyLen, 0)) return {};
+    const std::string effectiveCT = contentType.empty() ? "application/x-www-form-urlencoded" : contentType;
+    if (!send_request_with_headers(s.request, "", body, effectiveCT)) return {};
     if (!WinHttpReceiveResponse(s.request, nullptr)) return {};
     return winhttp_read_response(s.request);
+}
+
+static std::string http_get_auth_impl(const std::string& url, const std::string& authHeader) {
+    WinHttpSession s;
+    if (!winhttp_open(s, url, L"GET")) return {};
+    if (!send_request_with_headers(s.request, authHeader, "", "")) return {};
+    if (!WinHttpReceiveResponse(s.request, nullptr)) return {};
+    return winhttp_read_response(s.request);
+}
+
+static std::string http_post_auth_impl(const std::string& url, const std::string& body, const std::string& contentType, const std::string& authHeader) {
+    WinHttpSession s;
+    if (!winhttp_open(s, url, L"POST")) return {};
+    if (body.size() > std::numeric_limits<DWORD>::max()) return {};
+    const std::string effectiveCT = contentType.empty() ? "application/json" : contentType;
+    if (!send_request_with_headers(s.request, authHeader, body, effectiveCT)) return {};
+    if (!WinHttpReceiveResponse(s.request, nullptr)) return {};
+    return winhttp_read_response(s.request);
+}
+
+static std::string http_method_auth_impl(const wchar_t* method, const std::string& url, const std::string& body, const std::string& contentType, const std::string& authHeader) {
+    WinHttpSession s;
+    if (!winhttp_open(s, url, method)) return {};
+    if (body.size() > std::numeric_limits<DWORD>::max()) return {};
+    const std::string effectiveCT = contentType.empty() ? "application/json" : contentType;
+    if (!send_request_with_headers(s.request, authHeader, body, body.empty() ? "" : effectiveCT)) return {};
+    if (!WinHttpReceiveResponse(s.request, nullptr)) return {};
+    return winhttp_read_response(s.request);
+}
+
+static std::string http_put_auth_impl(const std::string& url, const std::string& body, const std::string& contentType, const std::string& authHeader) {
+    return http_method_auth_impl(L"PUT", url, body, contentType, authHeader);
+}
+
+static std::string http_patch_auth_impl(const std::string& url, const std::string& body, const std::string& contentType, const std::string& authHeader) {
+    return http_method_auth_impl(L"PATCH", url, body, contentType, authHeader);
+}
+
+static std::string http_delete_auth_impl(const std::string& url, const std::string& authHeader) {
+    return http_method_auth_impl(L"DELETE", url, "", "", authHeader);
 }
 
 static bool http_download_impl(const std::string& url, const std::filesystem::path& outPath) {
@@ -137,10 +209,13 @@ static bool http_download_impl(const std::string& url, const std::filesystem::pa
     if (!out) return false;
 
     DWORD avail = 0;
+    std::size_t total = 0;
     while (WinHttpQueryDataAvailable(s.request, &avail) && avail > 0) {
         std::string buf(avail, '\0');
         DWORD read = 0;
         if (!WinHttpReadData(s.request, buf.data(), avail, &read) || read == 0) return false;
+        if (total + read > kMaxResponseBytes) return false;
+        total += read;
         out.write(buf.data(), static_cast<std::streamsize>(read));
     }
     return static_cast<bool>(out);
@@ -269,18 +344,40 @@ private:
     HANDLE handle = nullptr;
 };
 
+static std::wstring quote_cmd_arg(const std::wstring& arg) {
+    if (arg.empty()) return L"\"\"";
+    if (arg.find_first_of(L" \t\"") == std::wstring::npos) return arg;
+    std::wstring out = L"\"";
+    size_t backslashes = 0;
+    for (const wchar_t ch : arg) {
+        if (ch == L'\\') {
+            ++backslashes;
+            continue;
+        }
+        if (ch == L'"') {
+            out.append(backslashes * 2 + 1, L'\\');
+            out.push_back(L'"');
+            backslashes = 0;
+            continue;
+        }
+        out.append(backslashes, L'\\');
+        backslashes = 0;
+        out.push_back(ch);
+    }
+    out.append(backslashes * 2, L'\\');
+    out.push_back(L'"');
+    return out;
+}
+
 static ExecResult execute_cmd(const std::vector<std::string>& args) {
     if (args.empty()) return {false, 1, "no program specified"};
 
+    // Quote each argument per the CRT escaping rules so embedded spaces and
+    // quotes (and backslashes preceding quotes) survive CreateProcessW intact.
     std::wstring cmd;
     for (const auto& arg : args) {
         if (!cmd.empty()) cmd.push_back(L' ');
-        cmd.push_back(L'"');
-        for (wchar_t ch : widen_utf8(arg)) {
-            if (ch == L'"') cmd.append(L"\\\"");
-            else cmd.push_back(ch);
-        }
-        cmd.push_back(L'"');
+        cmd += quote_cmd_arg(widen_utf8(arg));
     }
 
     SECURITY_ATTRIBUTES sa{};
@@ -338,6 +435,11 @@ static std::string format_exec_result(const ExecResult& r) {
 
 static std::string http_get_impl(const std::string&) { return {}; }
 static std::string http_post_impl(const std::string&, const std::string&, const std::string&) { return {}; }
+static std::string http_get_auth_impl(const std::string&, const std::string&) { return {}; }
+static std::string http_post_auth_impl(const std::string&, const std::string&, const std::string&, const std::string&) { return {}; }
+static std::string http_put_auth_impl(const std::string&, const std::string&, const std::string&, const std::string&) { return {}; }
+static std::string http_patch_auth_impl(const std::string&, const std::string&, const std::string&, const std::string&) { return {}; }
+static std::string http_delete_auth_impl(const std::string&, const std::string&) { return {}; }
 static bool http_download_impl(const std::string&, const std::filesystem::path&) { return false; }
 static std::string http_get_status_impl(const std::string&) { return {}; }
 static bool hls_download_best_impl(const std::string&, const std::filesystem::path&) { return false; }
@@ -356,7 +458,7 @@ static std::string url_encode_impl(const std::string& s) {
     std::ostringstream o;
     for (unsigned char c : s) {
         if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') o << c;
-        else o << '%' << std::uppercase << std::hex << static_cast<int>(c) << std::nouppercase << std::dec;
+        else o << '%' << std::uppercase << std::setw(2) << std::setfill('0') << std::hex << static_cast<int>(c) << std::nouppercase << std::dec << std::setfill(' ');
     }
     return o.str();
 }
@@ -369,6 +471,11 @@ static std::string net_dispatch(const std::string& name, const std::vector<std::
 
     if (name == "http_get") return http_get_impl(argS(0));
     if (name == "http_post") return http_post_impl(argS(0), argS(1), argS(2));
+    if (name == "http_get_auth") return http_get_auth_impl(argS(0), argS(1));
+    if (name == "http_post_auth") return http_post_auth_impl(argS(0), argS(1), argS(2), argS(3));
+    if (name == "http_put_auth") return http_put_auth_impl(argS(0), argS(1), argS(2), argS(3));
+    if (name == "http_patch_auth") return http_patch_auth_impl(argS(0), argS(1), argS(2), argS(3));
+    if (name == "http_delete_auth") return http_delete_auth_impl(argS(0), argS(1));
     if (name == "http_status") return http_get_status_impl(argS(0));
 
     if (name == "http_download") {

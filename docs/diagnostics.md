@@ -6,7 +6,7 @@ The typechecker emits `TC***` codes before the script runs. **Errors** stop exec
 
 | Code | Meaning |
 |------|---------|
-| `TC001` | Unknown action or builtin — missing import, or typo |
+| `TC001` | Unknown action or builtin: missing import, or typo |
 | `TC010` | Variable used before declaration |
 | `TC020` / `TC021` | Parameter count mismatch |
 | `TC030` | Variable redeclared in same scope |
@@ -25,7 +25,7 @@ The typechecker emits `TC***` codes before the script runs. **Errors** stop exec
 | `TC131` | Unused entity method |
 | `TC132` | Unused entity |
 
-## Fixing TC001 — unknown builtin
+## Fixing TC001: unknown builtin
 
 ```
 [error] TC001: Unknown action: file_open (main)
@@ -37,15 +37,15 @@ The typechecker emits `TC***` codes before the script runs. **Errors** stop exec
 
 Every builtin-gated function requires its module to be imported. See [imports.md](imports.md) for the full module list.
 
-## Fixing TC001 — typo in action name
+## Fixing TC001: typo in action name
 
 Check the name you're calling matches the declared `public action` name exactly (case-sensitive).
 
-## Fixing TC130 — unused included action
+## Fixing TC130: unused included action
 
 `#include <modules/math.elan>` merges every `public action`. Either call them or remove the include.
 
-## Fixing TC111 — no entry point
+## Fixing TC111: no entry point
 
 Every runnable file needs:
 

@@ -87,12 +87,17 @@ std::optional<std::string> resolve_builtin_module_method(
             if (methodName == "move") return std::string("move_file");
             if (methodName == "remove") return std::string("delete_file");
             if (methodName == "list") return std::string("list_files");
+            if (methodName == "load") return std::string("load_elan");
+            if (methodName == "load_dir") return std::string("load_elan_dir");
             if (methodName == "cwd") return std::string("cwd");
             if (methodName == "chdir") return std::string("chdir");
             if (methodName == "join") return std::string("path_join");
             if (methodName == "parent" || methodName == "dirname") return std::string("path_dirname");
             if (methodName == "name" || methodName == "basename") return std::string("path_basename");
             if (methodName == "ext") return std::string("path_ext");
+            if (methodName == "load_elan" || methodName == "load_elan_dir" || methodName == "call_action") {
+                return methodName;
+            }
         }
 
         if (path_is(normalizedPath, {"builtin/path", "builtin/erepath"})) {
@@ -119,7 +124,15 @@ std::optional<std::string> resolve_builtin_module_method(
 
         if (path_is(normalizedPath, {"builtin/network", "builtin/net"})) {
             if (methodName == "get") return std::string("http_get");
+            if (methodName == "get_auth") return std::string("http_get_auth");
             if (methodName == "post") return std::string("http_post");
+            if (methodName == "post_auth") return std::string("http_post_auth");
+            if (methodName == "put") return std::string("http_put_auth");
+            if (methodName == "put_auth") return std::string("http_put_auth");
+            if (methodName == "patch") return std::string("http_patch_auth");
+            if (methodName == "patch_auth") return std::string("http_patch_auth");
+            if (methodName == "delete") return std::string("http_delete_auth");
+            if (methodName == "delete_auth") return std::string("http_delete_auth");
             if (methodName == "status") return std::string("http_status");
             if (methodName == "download") return std::string("http_download");
             if (methodName == "encode" || methodName == "url_encode") return std::string("url_encode");
@@ -154,6 +167,15 @@ std::optional<std::string> resolve_builtin_module_method(
                 methodName == "tan" || methodName == "sqrt" || methodName == "pow") {
                 return methodName;
             }
+        }
+
+        if (path_is(normalizedPath, {"builtin/websocket", "builtin/ws"})) {
+            if (methodName == "connect") return std::string("ws_connect");
+            if (methodName == "send") return std::string("ws_send");
+            if (methodName == "recv") return std::string("ws_recv");
+            if (methodName == "recv_timeout") return std::string("ws_recv_timeout");
+            if (methodName == "close") return std::string("ws_close");
+            if (methodName.rfind("ws_", 0) == 0) return methodName;
         }
 
         if (path_is(normalizedPath, {"builtin/data"})) {
@@ -208,6 +230,8 @@ void bind_builtin_module_aliases(const Program& program, std::unordered_map<std:
             bind_alias(alias, "move", "move_file");
             bind_alias(alias, "remove", "delete_file");
             bind_alias(alias, "list", "list_files");
+            bind_alias(alias, "load", "load_elan");
+            bind_alias(alias, "load_dir", "load_elan_dir");
             bind_alias(alias, "cwd", "cwd");
             bind_alias(alias, "chdir", "chdir");
             bind_alias(alias, "join", "path_join");
@@ -216,6 +240,7 @@ void bind_builtin_module_aliases(const Program& program, std::unordered_map<std:
             bind_alias(alias, "name", "path_basename");
             bind_alias(alias, "basename", "path_basename");
             bind_alias(alias, "ext", "path_ext");
+            bind_same(alias, {"load_elan", "load_elan_dir", "call_action", "list_files", "read_text", "write_text"});
         }
 
         if (path_is(normalizedPath, {"builtin/path", "builtin/erepath"})) {
@@ -242,12 +267,22 @@ void bind_builtin_module_aliases(const Program& program, std::unordered_map<std:
 
         if (path_is(normalizedPath, {"builtin/network", "builtin/net"})) {
             bind_alias(alias, "get", "http_get");
+            bind_alias(alias, "get_auth", "http_get_auth");
             bind_alias(alias, "post", "http_post");
+            bind_alias(alias, "post_auth", "http_post_auth");
+            bind_alias(alias, "put", "http_put_auth");
+            bind_alias(alias, "put_auth", "http_put_auth");
+            bind_alias(alias, "patch", "http_patch_auth");
+            bind_alias(alias, "patch_auth", "http_patch_auth");
+            bind_alias(alias, "delete", "http_delete_auth");
+            bind_alias(alias, "delete_auth", "http_delete_auth");
             bind_alias(alias, "status", "http_status");
             bind_alias(alias, "download", "http_download");
             bind_alias(alias, "encode", "url_encode");
             bind_same(alias, {
-                "http_get", "http_post", "http_status", "http_download",
+                "http_get", "http_get_auth", "http_post", "http_post_auth",
+                "http_put_auth", "http_patch_auth", "http_delete_auth",
+                "http_status", "http_download",
                 "hls_download_best", "url_encode",
                 "network.ip.flush", "network.ip.release", "network.ip.renew", "network.ip.registerdns",
             });
@@ -289,6 +324,15 @@ void bind_builtin_module_aliases(const Program& program, std::unordered_map<std:
 
         if (path_is(normalizedPath, {"builtin/perm"})) {
             bind_same(alias, {"perm_grant", "perm_revoke", "perm_has", "perm_list"});
+        }
+
+        if (path_is(normalizedPath, {"builtin/websocket", "builtin/ws"})) {
+            bind_alias(alias, "connect", "ws_connect");
+            bind_alias(alias, "send", "ws_send");
+            bind_alias(alias, "recv", "ws_recv");
+            bind_alias(alias, "recv_timeout", "ws_recv_timeout");
+            bind_alias(alias, "close", "ws_close");
+            bind_same(alias, {"ws_connect", "ws_send", "ws_recv", "ws_recv_timeout", "ws_close"});
         }
 
         if (path_is(normalizedPath, {"builtin/system"})) {

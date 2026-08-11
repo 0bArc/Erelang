@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <sstream>
 #include <iomanip>
@@ -24,10 +25,10 @@ static std::string fnv1a(const std::string& s) {
 }
 
 // Simple XORShift32 PRNG state (per process) for random_bytes fallback
-static uint32_t g_xor_state = 0x12345678u;
+static std::atomic<uint32_t> g_xor_state{0x12345678u};
 static uint32_t xorshift32() {
-    uint32_t x = g_xor_state;
-    x ^= x << 13; x ^= x >> 17; x ^= x << 5; g_xor_state = x; return x;
+    uint32_t x = g_xor_state.load(std::memory_order_relaxed);
+    x ^= x << 13; x ^= x >> 17; x ^= x << 5; g_xor_state.store(x, std::memory_order_relaxed); return x;
 }
 
 static std::string crypto_dispatch(const std::string& name, const std::vector<std::string>& argv) {
@@ -39,7 +40,8 @@ static std::string crypto_dispatch(const std::string& name, const std::vector<st
         std::vector<uint8_t> buf; buf.reserve(n);
         for (int i=0;i<n;++i) {
             if ((i & 3) == 0) (void)xorshift32();
-            buf.push_back(uint8_t((g_xor_state >> ((i & 3)*8)) & 0xFF));
+            const uint32_t s = g_xor_state.load(std::memory_order_relaxed);
+            buf.push_back(uint8_t((s >> ((i & 3)*8)) & 0xFF));
         }
         return to_hex(buf);
     }

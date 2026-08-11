@@ -45,7 +45,7 @@ struct MonRecord {
     uint64_t lastSize = 0;
     std::string lastHash;         // fnv1a hex
     std::string lastChange;       // human text of last change
-    uint32_t intervalMs = 2000;   // default poll interval
+    std::atomic<uint32_t> intervalMs{2000};   // default poll interval
 };
 
 std::mutex g_monitorsMutex;
@@ -122,10 +122,32 @@ void run_monitor_loop(MonRecord* rec) {
                 if (!reason.empty()) rec->lastChange = reason;
             }
         }
-        for (uint32_t i=0;i<rec->intervalMs/100;i++) {
+        const uint32_t interval = rec->intervalMs.load();
+        for (uint32_t i = 0; i < interval / 100; i++) {
             if (!rec->running) break;
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
+    }
+}
+} // anon
+
+namespace {
+// Strip the "monitor:" prefix from API handles (threads.cpp uses the same
+// pattern). Raw numeric ids are also accepted for backward compatibility.
+bool parse_monitor_handle(const std::string& h, int& out) {
+    std::string tail = h;
+    if (tail.rfind("monitor:", 0) == 0) {
+        tail = tail.substr(8);
+    }
+    if (tail.empty()) return false;
+    try {
+        size_t pos = 0;
+        const int v = std::stoi(tail, &pos);
+        if (pos != tail.size()) return false;
+        out = v;
+        return true;
+    } catch (...) {
+        return false;
     }
 }
 } // anon
@@ -141,23 +163,26 @@ std::string __erelang_builtin_monitor_dispatch(Runtime* rt, const std::string& n
         std::error_code ec; auto abs = std::filesystem::absolute(p, ec);
         auto rec = std::make_unique<MonRecord>();
         rec->path = abs; rec->key = argv.size()>1? argv[1] : abs.filename().string();
+        MonRecord* rptr = rec.get();
+        // Start the worker before publishing the record so a concurrent
+        // monitor_remove can never find a record whose worker handle is not yet
+        // assigned (which would let the record be destroyed under a running thread).
+        try {
+            rptr->worker = std::thread(run_monitor_loop, rptr);
+        } catch (...) {
+            return {};
+        }
         int id;
         {
             std::lock_guard<std::mutex> lg(g_monitorsMutex);
             id = g_nextMonId++;
             g_monitors[id] = std::move(rec);
         }
-        MonRecord* rptr;
-        {
-            std::lock_guard<std::mutex> lg(g_monitorsMutex);
-            rptr = g_monitors[id].get();
-        }
-        rptr->worker = std::thread(run_monitor_loop, rptr);
         return std::string("monitor:") + std::to_string(id);
     }
     if (name == "monitor_remove") {
         if (argv.empty()) return {};
-        int id = std::atoi(argv[0].c_str());
+        int id; if (!parse_monitor_handle(argv[0], id)) return {};
         std::unique_ptr<MonRecord> rec;
         {
             std::lock_guard<std::mutex> lg(g_monitorsMutex);
@@ -172,13 +197,13 @@ std::string __erelang_builtin_monitor_dispatch(Runtime* rt, const std::string& n
         int listId = g_nextListId++;
         g_lists[listId] = {};
         for (auto& kv : g_monitors) {
-            g_lists[listId].push_back(std::to_string(kv.first));
+            g_lists[listId].push_back(std::string("monitor:") + std::to_string(kv.first));
         }
         return std::string("list:") + std::to_string(listId);
     }
     if (name == "monitor_info") {
         if (argv.empty()) return {};
-        int id = std::atoi(argv[0].c_str());
+        int id; if (!parse_monitor_handle(argv[0], id)) return {};
         std::lock_guard<std::mutex> lg(g_monitorsMutex);
         auto it = g_monitors.find(id);
         if (it == g_monitors.end()) return {};
@@ -194,7 +219,7 @@ std::string __erelang_builtin_monitor_dispatch(Runtime* rt, const std::string& n
     }
     if (name == "monitor_last_change") {
         if (argv.empty()) return {};
-        int id = std::atoi(argv[0].c_str());
+        int id; if (!parse_monitor_handle(argv[0], id)) return {};
         std::lock_guard<std::mutex> lg(g_monitorsMutex);
         auto it = g_monitors.find(id);
         if (it == g_monitors.end()) return {};
@@ -204,12 +229,17 @@ std::string __erelang_builtin_monitor_dispatch(Runtime* rt, const std::string& n
     }
     if (name == "monitor_set_interval") {
         if (argv.size()<2) return {};
-        int id = std::atoi(argv[0].c_str());
-        uint32_t ms = (uint32_t)std::stoul(argv[1]);
+        int id; if (!parse_monitor_handle(argv[0], id)) return {};
+        uint32_t ms;
+        try {
+            ms = (uint32_t)std::stoul(argv[1]);
+        } catch (...) {
+            return {};
+        }
         std::lock_guard<std::mutex> lg(g_monitorsMutex);
         auto it = g_monitors.find(id);
         if (it == g_monitors.end()) return {};
-        it->second->intervalMs = ms < 200 ? 200 : ms; // enforce minimum 200ms
+        it->second->intervalMs.store(ms < 200 ? 200 : ms); // enforce minimum 200ms
         return {};
     }
     return {};

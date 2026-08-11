@@ -1,42 +1,15 @@
 @erelang
-
-// Basic hello-world demo. Run with:
-//   erelang examples/program.elan
+#include <builtin/network> as net
 
 public action main {
-    // --- variables and interpolation ---
-    let name = "Erelang";
-    int version = 1;
-    print "Hello from {name} v{version}!";
-
-    // --- arithmetic ---
-    let a = 10;
-    let b = 3;
-    print "sum={a + b}  diff={a - b}  product={a * b}";
-
-    // --- conditionals ---
-    if (a > b) {
-        print "{a} is greater than {b}";
+    string html = net.get("https://stratware.win");
+    int start = string.find(html, "<a ");
+    if (start >= 0) {
+        string sub = string.substr(html, start, 100);
+        print sub;
     } else {
-        print "{b} is greater than {a}";
+        print "no anchor tag found";
     }
-
-    // --- while loop ---
-    let i = 0;
-    while (i < 3) {
-        print "i={i}";
-        i = i + 1;
-    }
-
-    // --- for loop over a list ---
-    let items = ["apple", "banana", "cherry"];
-    for (item : items) {
-        print "  - {item}";
-    }
-
-    // --- dict literal ---
-    let config = {"host": "localhost", "port": "8080"};
-    print "host={config.host}  port={config.port}";
 }
 
 run main;

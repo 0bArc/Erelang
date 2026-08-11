@@ -84,7 +84,17 @@ std::string gas_escape(std::string_view text) {
 struct FunctionAsmContext {
     std::unordered_map<std::string, int> slotOffset; // symbol -> positive offset from rbp
     std::unordered_map<std::string, std::string> stringLabel; // literal -> label
-    int nextStringId{0};
+    int& nextGlobalStringId;   // shared across functions so .LC labels never collide
+    std::string fnPrefix;      // per-function label prefix (IR labels are per-function)
+    int seq = 0;               // per-function counter for scratch labels
+
+    FunctionAsmContext(int& nextStringId, std::string prefix)
+        : nextGlobalStringId(nextStringId), fnPrefix(std::move(prefix)) {}
+
+    // Unique per-function scratch label (e.g. div-guard branches).
+    std::string fresh(const std::string& hint) {
+        return fnPrefix + sanitize_label(hint) + "_" + std::to_string(seq++);
+    }
 
     int ensure_slot(const std::string& sym) {
         auto it = slotOffset.find(sym);
@@ -97,9 +107,15 @@ struct FunctionAsmContext {
     std::string ensure_string_label(const std::string& literal) {
         auto it = stringLabel.find(literal);
         if (it != stringLabel.end()) return it->second;
-        const std::string label = ".LC" + std::to_string(nextStringId++);
+        const std::string label = ".LC" + std::to_string(nextGlobalStringId++);
         stringLabel.emplace(literal, label);
         return label;
+    }
+
+    // Prefix an IR branch label with this function's name so the same IR label
+    // (e.g. while_start_0) emitted by two functions does not collide.
+    std::string local_label(const std::string& name) const {
+        return fnPrefix + sanitize_label(name);
     }
 };
 
@@ -124,7 +140,19 @@ void emit_load_operand(std::ostringstream& out, FunctionAsmContext& ctx, const s
         return;
     }
     if (is_int_imm(operand)) {
-        out << "    mov " << reg << ", " << operand.substr(1) << "\n";
+        // Canonicalize to decimal: GAS would otherwise interpret a leading
+        // zero (e.g. #077) as octal. The parser already resolves these with
+        // base-0 semantics, so decimal output preserves the language value.
+        const std::string digits(operand.substr(1));
+        std::string canonical;
+        try {
+            std::size_t pos = 0;
+            const long long v = std::stoll(digits, &pos, 0);
+            canonical = (pos == digits.size()) ? std::to_string(v) : digits;
+        } catch (...) {
+            canonical = digits;
+        }
+        out << "    mov " << reg << ", " << canonical << "\n";
         return;
     }
     if (is_string_imm(operand)) {
@@ -199,14 +227,6 @@ void emit_call_with_operands(std::ostringstream& out,
 
 } // namespace
 
-std::string X64Codegen::emit_nasm_win64(const IRModule& module) const {
-    std::ostringstream out;
-    out << "; erelang x64 backend (NASM compatibility stub)\n";
-    out << "; use --emit-asm for active GAS/win64 backend\n";
-    out << "; functions: " << module.functions.size() << "\n";
-    return out.str();
-}
-
 std::string X64Codegen::emit_gas_win64_demo(const IRModule& module) const {
     std::ostringstream out;
     out << ".intel_syntax noprefix\n";
@@ -237,22 +257,28 @@ std::string X64Codegen::emit_gas_win64_demo(const IRModule& module) const {
     out << "    ret\n\n";
 
     std::string dataSection;
-    std::unordered_map<std::string, std::string> globalStringLabels;
+    std::unordered_map<std::string, std::string> globalStringLabels;    // text -> label (dedup for format strings)
+    std::unordered_map<std::string, std::string> emittedStringData;     // label -> text (one entry per emitted label)
 
     auto ensure_global_string = [&](const std::string& text) {
         auto it = globalStringLabels.find(text);
         if (it != globalStringLabels.end()) return it->second;
         const std::string label = ".LG" + std::to_string(globalStringLabels.size());
         globalStringLabels[text] = label;
+        emittedStringData[label] = text;
         return label;
     };
 
     const std::string intFmtLabel = ensure_global_string("%lld\\n");
     const std::string inputFmtLabel = ensure_global_string("%1023s");
     const std::string inputBufLabel = ".L_INPUT_BUF";
+    const std::string divByZeroMsgLabel = ensure_global_string("runtime error: division by zero or overflow\\n");
+
+    // Shared across functions so .LC string labels never collide.
+    int globalStringId = 0;
 
     for (const auto& fn : module.functions) {
-        FunctionAsmContext ctx;
+        FunctionAsmContext ctx(globalStringId, "erelang_fn_" + sanitize_label(fn.name) + "_");
         collect_slots(ctx, fn);
         const int frame = aligned_frame_size(ctx);
         const std::string fnEnd = fnLabel[fn.name] + "_end";
@@ -277,18 +303,18 @@ std::string X64Codegen::emit_gas_win64_demo(const IRModule& module) const {
                 continue;
             }
             if (ins.opcode == "label") {
-                if (!ins.operands.empty()) out << sanitize_label(ins.operands[0]) << ":\n";
+                if (!ins.operands.empty()) out << ctx.local_label(ins.operands[0]) << ":\n";
                 continue;
             }
             if (ins.opcode == "jmp") {
-                if (!ins.operands.empty()) out << "    jmp " << sanitize_label(ins.operands[0]) << "\n";
+                if (!ins.operands.empty()) out << "    jmp " << ctx.local_label(ins.operands[0]) << "\n";
                 continue;
             }
             if (ins.opcode == "jz") {
                 if (ins.operands.size() >= 2) {
                     emit_load_operand(out, ctx, "rax", ins.operands[0]);
                     out << "    cmp rax, 0\n";
-                    out << "    je " << sanitize_label(ins.operands[1]) << "\n";
+                    out << "    je " << ctx.local_label(ins.operands[1]) << "\n";
                 }
                 continue;
             }
@@ -296,7 +322,7 @@ std::string X64Codegen::emit_gas_win64_demo(const IRModule& module) const {
                 if (ins.operands.size() >= 2) {
                     emit_load_operand(out, ctx, "rax", ins.operands[0]);
                     out << "    cmp rax, 0\n";
-                    out << "    jne " << sanitize_label(ins.operands[1]) << "\n";
+                    out << "    jne " << ctx.local_label(ins.operands[1]) << "\n";
                 }
                 continue;
             }
@@ -317,9 +343,31 @@ std::string X64Codegen::emit_gas_win64_demo(const IRModule& module) const {
                     emit_load_operand(out, ctx, "rax", ins.operands[1]);
                     out << "    cqo\n";
                     emit_load_operand(out, ctx, "r10", ins.operands[2]);
+                    // idiv traps on divide-by-zero and INT64_MIN / -1; guard both
+                    // so the process reports an error instead of SIGFPE.
+                    const std::string okLabel = ctx.fresh("div_ok");
+                    const std::string errLabel = ctx.fresh("div_err");
+                    const std::string doneLabel = ctx.fresh("div_done");
+                    out << "    test r10, r10\n";
+                    out << "    jz " << errLabel << "\n";
+                    out << "    cmp r10, -1\n";
+                    out << "    jne " << okLabel << "\n";
+                    out << "    mov r11, 0x8000000000000000\n";
+                    out << "    cmp rax, r11\n";
+                    out << "    je " << errLabel << "\n";
+                    out << okLabel << ":\n";
                     out << "    idiv r10\n";
                     if (ins.opcode == "div") emit_store_symbol(out, ctx, dst, "rax");
                     else emit_store_symbol(out, ctx, dst, "rdx");
+                    out << "    jmp " << doneLabel << "\n";
+                    out << errLabel << ":\n";
+                    out << "    sub rsp, 32\n";
+                    out << "    lea rcx, " << divByZeroMsgLabel << "[rip]\n";
+                    out << "    call puts\n";
+                    out << "    add rsp, 32\n";
+                    out << "    mov ecx, 1\n";
+                    out << "    call exit\n";
+                    out << doneLabel << ":\n";
                 }
                 continue;
             }
@@ -432,7 +480,11 @@ std::string X64Codegen::emit_gas_win64_demo(const IRModule& module) const {
                         }
                         emit_call_with_operands(out, ctx, fit->second, args);
                     } else {
-                        out << "    # unresolved call target: " << callee << "\n";
+                        // Builtin calls have no native stub; silently dropping them
+                        // would leave a stale rax that the following `call` stores.
+                        // Trap instead so the failure is visible.
+                        out << "    # unsupported builtin call target: " << callee << "\n";
+                        out << "    ud2\n";
                     }
                 }
                 continue;
@@ -460,16 +512,19 @@ std::string X64Codegen::emit_gas_win64_demo(const IRModule& module) const {
         out << "    ret\n\n";
 
         for (const auto& kv : ctx.stringLabel) {
-            globalStringLabels.try_emplace(kv.first, kv.second);
+            // Every per-function .LC label must be emitted exactly once. Labels
+            // are globally unique (shared counter), so keying by label is safe
+            // even when two functions reference the same literal text.
+            emittedStringData[kv.second] = kv.first;
         }
     }
 
     out << ".section .rdata,\"dr\"\n";
-    std::vector<std::pair<std::string, std::string>> orderedStrings(globalStringLabels.begin(), globalStringLabels.end());
+    std::vector<std::pair<std::string, std::string>> orderedStrings(emittedStringData.begin(), emittedStringData.end());
     std::sort(orderedStrings.begin(), orderedStrings.end(), [](const auto& a, const auto& b) {
-        return a.second < b.second;
+        return a.first < b.first;
     });
-    for (const auto& [text, label] : orderedStrings) {
+    for (const auto& [label, text] : orderedStrings) {
         out << label << ": .asciz \"" << gas_escape(text) << "\"\n";
     }
     out << ".bss\n";

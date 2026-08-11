@@ -17,9 +17,9 @@ import builtin/system as sys
 import builtin/fs as fs
 
 public action main() {
-  let html = net.http_get("https://example.com")
-  let sum = math.add(2, 3)
-  let store = data.data_new()
+  html = net.http_get("https://example.com")
+  sum = math.add(2, 3)
+  store = data.data_new()
 }
 ```
 

@@ -37,6 +37,9 @@ extern std::unordered_map<int, std::deque<std::string>> g_queues;
 
 [[nodiscard]] std::string slurp_text(const std::filesystem::path& p);
 [[nodiscard]] std::string trim_copy(std::string_view value);
+// Clear per-run global container state (lists, dicts, pointers, files, sets,
+// queues, string buffers) so repeated run() calls do not leak IDs or handles.
+void reset_global_container_state();
 [[nodiscard]] std::string join_strings(std::vector<std::string> items, char separator = ',');
 [[nodiscard]] std::pair<std::string, std::string> split_core_query(const std::string& query);
 [[nodiscard]] int64_t to_int(const std::string& s);

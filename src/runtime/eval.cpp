@@ -141,7 +141,10 @@ std::string Runtime::eval_string(const Expr& e, const Env& env) const {
     }
     if (std::holds_alternative<ExprNumber>(e.node)) {
         const auto& n = std::get<ExprNumber>(e.node);
-        if (!n.raw.empty()) return n.raw;
+        // Preserve the literal spelling only when it round-trips as a plain
+        // decimal int/float (e.g. "42", "2.5"). Non-decimal literals like
+        // hex ("0x1e") must be emitted as their numeric value.
+        if (!n.raw.empty() && (is_int_string(n.raw) || is_float_string(n.raw))) return n.raw;
         return std::to_string(n.v);
     }
     if (std::holds_alternative<ExprBool>(e.node)) return std::get<ExprBool>(e.node).v ? "true" : "false";
@@ -196,8 +199,14 @@ std::string Runtime::eval_string(const Expr& e, const Env& env) const {
         const auto& u = std::get<UnaryExpr>(e.node);
         std::string v = eval_string(*u.expr, env);
         switch (u.op) {
-            case UnOp::Neg: return std::to_string(-to_int(v));
-            case UnOp::Not: return (v == "true" || to_int(v) != 0) ? "false" : "true";
+            case UnOp::Neg: {
+                if (is_float_string(v)) {
+                    const double dv = to_double(v);
+                    return std::to_string(-dv);
+                }
+                return std::to_string(-to_int(v));
+            }
+            case UnOp::Not: return is_truthy(v) ? "false" : "true";
             case UnOp::Deref: {
                 if (v.rfind("ref:", 0) == 0) {
                     const std::string varName = v.substr(4);
@@ -292,9 +301,8 @@ std::string Runtime::eval_string(const Expr& e, const Env& env) const {
                     return std::to_string(li + ri);
                 }
                 if (!leftIsInt && !rightIsInt) return ls + rs;
-                if (!leftIsInt && rightIsInt && is_explicit_string_expr(b.right)) return ls + rs;
-                if (leftIsInt && !rightIsInt && is_explicit_string_expr(b.left)) return ls + rs;
-                throw std::runtime_error("Illegal operation: string + int");
+                if (!leftIsInt && rightIsInt) return ls + rs;
+                if (leftIsInt && !rightIsInt) return ls + rs;
             }
             case BinOp::Sub: {
                 if (auto r = unitAddSub(BinOp::Sub); !r.empty()) return r;
@@ -306,25 +314,28 @@ std::string Runtime::eval_string(const Expr& e, const Env& env) const {
                 return std::to_string(li * ri);
             case BinOp::Div:
                 require_int_operands("/");
-                return std::to_string(ri==0?0:li / ri);
+                if (ri == 0) throw std::runtime_error("Division by zero");
+                return std::to_string(li / ri);
             case BinOp::Mod:
                 require_int_operands("%");
-                return std::to_string(ri==0?0:li % ri);
+                if (ri == 0) throw std::runtime_error("Modulo by zero");
+                return std::to_string(li % ri);
             case BinOp::Pow: {
                 require_int_operands("^");
                 if (ri < 0) return "0";
+                if (ri > 62) throw std::runtime_error("Exponent too large for integer power");
                 int64_t value = 1;
                 for (int64_t i = 0; i < ri; ++i) value *= li;
                 return std::to_string(value);
             }
             case BinOp::EQ: return (ls == rs) ? "true" : "false";
             case BinOp::NE: return (ls != rs) ? "true" : "false";
-            case BinOp::LT: return (li < ri) ? "true" : "false";
-            case BinOp::LE: return (li <= ri) ? "true" : "false";
-            case BinOp::GT: return (li > ri) ? "true" : "false";
-            case BinOp::GE: return (li >= ri) ? "true" : "false";
-            case BinOp::And: return ((ls=="true" || to_int(ls)!=0) && (rs=="true" || to_int(rs)!=0)) ? "true" : "false";
-            case BinOp::Or: return ((ls=="true" || to_int(ls)!=0) || (rs=="true" || to_int(rs)!=0)) ? "true" : "false";
+            case BinOp::LT: return (is_int_string(ls) && is_int_string(rs) ? (li < ri) : (ls < rs)) ? "true" : "false";
+            case BinOp::LE: return (is_int_string(ls) && is_int_string(rs) ? (li <= ri) : (ls <= rs)) ? "true" : "false";
+            case BinOp::GT: return (is_int_string(ls) && is_int_string(rs) ? (li > ri) : (ls > rs)) ? "true" : "false";
+            case BinOp::GE: return (is_int_string(ls) && is_int_string(rs) ? (li >= ri) : (ls >= rs)) ? "true" : "false";
+            case BinOp::And: return (is_truthy(ls) && is_truthy(rs)) ? "true" : "false";
+            case BinOp::Or: return (is_truthy(ls) || is_truthy(rs)) ? "true" : "false";
             case BinOp::Coalesce: {
                 const bool leftNullish = ls.empty() || ls == "nullptr";
                 return (!leftNullish ? ls : rs);
@@ -334,7 +345,7 @@ std::string Runtime::eval_string(const Expr& e, const Env& env) const {
     if (std::holds_alternative<TernaryExpr>(e.node)) {
         const auto& t = std::get<TernaryExpr>(e.node);
         const std::string cond = eval_string(*t.cond, env);
-        const bool truthy = (cond == "true" || to_int(cond) != 0);
+        const bool truthy = is_truthy(cond);
         return truthy ? eval_string(*t.thenExpr, env) : eval_string(*t.elseExpr, env);
     }
     if (std::holds_alternative<MemberExpr>(e.node)) {
@@ -478,7 +489,15 @@ std::string Runtime::eval_string(const Expr& e, const Env& env) const {
                 return calleeCtx.returnValue;
             }
         }
-        return eval_builtin_call(fc.name, fc.args, env, fc.collectionLiteral);
+        return eval_builtin_call(fc.name, fc.args, env, true);
+    }
+    if (std::holds_alternative<ListLiteralExpr>(e.node)) {
+        const auto& lit = std::get<ListLiteralExpr>(e.node);
+        return eval_builtin_call("list_new", lit.elements, env, true);
+    }
+    if (std::holds_alternative<DictLiteralExpr>(e.node)) {
+        const auto& lit = std::get<DictLiteralExpr>(e.node);
+        return eval_builtin_call("dict_new", lit.entries, env, true);
     }
     if (std::holds_alternative<NewExpr>(e.node)) {
         const auto& ne = std::get<NewExpr>(e.node);

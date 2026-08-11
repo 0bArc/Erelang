@@ -6,10 +6,10 @@
 @erelang
 
 public action main {
-    let name = "World";
+    name = "World";
     print "Hello {name}";
 
-    let x = 42;
+    x = 42;
     print "x is {x}";
 }
 
@@ -37,7 +37,7 @@ Interpolation `{expr}` evaluates the expression and embeds the result. Nested st
 @erelang
 
 public action main {
-    let s = "  Hello, World!  ";
+    s = "  Hello, World!  ";
     print string.strip(s);
     print string.lower(s);
     print string.upper(s);
@@ -62,7 +62,7 @@ run main;
 @erelang
 
 public action main {
-    let n = toint("42") + 8;
+    n = toint("42") + 8;
     print n;
     print tostr(n);
 }
@@ -78,9 +78,9 @@ Use `+` to join strings:
 @erelang
 
 public action main {
-    let first = "Hello";
-    let second = "World";
-    let joined = first + ", " + second + "!";
+    first = "Hello";
+    second = "World";
+    joined = first + ", " + second + "!";
     print joined;
 }
 
@@ -91,9 +91,9 @@ run main;
 
 | Builtin | Returns |
 |---------|---------|
-| `char_is_digit(s)` | bool string — first char is digit |
-| `char_is_alpha(s)` | bool string — first char is letter |
-| `char_is_space(s)` | bool string — first char is whitespace |
+| `char_is_digit(s)` | bool string: first char is digit |
+| `char_is_alpha(s)` | bool string: first char is letter |
+| `char_is_space(s)` | bool string: first char is whitespace |
 
 ## String buffers (advanced)
 
@@ -112,10 +112,10 @@ For building large strings incrementally without repeated concatenation:
 @erelang
 
 public action main {
-    let b = strbuf_new();
+    b = strbuf_new();
     strbuf_append(b, "line one\n");
     strbuf_append(b, "line two\n");
-    let result = strbuf_to_string(b);
+    result = strbuf_to_string(b);
     strbuf_free(b);
     print result;
 }

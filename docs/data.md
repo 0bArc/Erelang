@@ -23,14 +23,14 @@ In-memory key/value store with optional disk persistence. Good for saving app st
 #include <builtin/data> as db
 
 public action main {
-    let s = data_load("state.txt");
+    s = data_load("state.txt");
     if (data_has(s, "count") == "false") {
         data_set(s, "count", "0");
     }
-    let n = toint(data_get(s, "count")) + 1;
+    n = toint(data_get(s, "count")) + 1;
     data_set(s, "count", tostr(n));
     data_save(s, "state.txt");
-    print "run #{n}";
+    print "run {n}";
 }
 
 run main;

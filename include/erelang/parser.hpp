@@ -35,11 +35,18 @@ struct IndexExpr { ExprPtr object; ExprPtr index; };
 struct FunctionCallExpr {
     std::string name;
     std::vector<ExprPtr> args;
-    bool collectionLiteral{false};
+};
+
+struct ListLiteralExpr {
+    std::vector<ExprPtr> elements;
+};
+
+struct DictLiteralExpr {
+    std::vector<ExprPtr> entries; // alternating key-string, value pairs
 };
 
 struct Expr {
-    std::variant<ExprString, ExprNull, ExprNumber, ExprBool, ExprIdent, BinaryExpr, TernaryExpr, UnaryExpr, NewExpr, MemberExpr, IndexExpr, FunctionCallExpr> node;
+    std::variant<ExprString, ExprNull, ExprNumber, ExprBool, ExprIdent, BinaryExpr, TernaryExpr, UnaryExpr, NewExpr, MemberExpr, IndexExpr, FunctionCallExpr, ListLiteralExpr, DictLiteralExpr> node;
 };
 
 struct Block; // forward for recursive AST
@@ -70,7 +77,7 @@ struct ForStmt {
     std::shared_ptr<Block> step; // optional single-statement block
     std::shared_ptr<Block> body;
 };
-struct ForInStmt { std::string var; std::optional<std::string> valueVar; bool usedColon{false}; ExprPtr iterable; std::shared_ptr<Block> body; };
+struct ForInStmt { std::string var; std::string varType; std::optional<std::string> valueVar; bool usedColon{false}; ExprPtr iterable; std::shared_ptr<Block> body; };
 struct TryCatchStmt { std::shared_ptr<Block> tryBlk; std::string catchVar; std::shared_ptr<Block> catchBlk; };
 struct UnsafeStmt { std::shared_ptr<Block> body; };
 struct PointerSetStmt { ExprPtr pointer; ExprPtr value; };
@@ -119,6 +126,7 @@ struct Entity {
 
 struct GlobalDecl {
     std::string name;
+    std::string typeName; // optional type annotation (string, int, bool, ...)
     ExprPtr value;
     std::string sourcePath;
     Visibility visibility{Visibility::Public};
@@ -129,6 +137,7 @@ struct ImportDecl {
     std::string path;
     std::optional<std::string> alias;
     bool pluginGlob{false};
+    std::vector<std::string> namedImports; // import {a,b,c} from "path" → expands to individual imports
 };
 
 struct ExternDecl {
@@ -217,6 +226,9 @@ private:
     bool parsingEntityMethod_{false};
     std::string sourceName_;
     std::vector<ImportDecl>* programImports_{nullptr};
+    std::vector<std::string> pendingErrors_; // errors from block recovery, drained by parse_program
+    int inTernaryThen_{0}; // >0 while parsing a ternary then-branch: suppresses ':' method sugar
+    int parseDepth_{0};    // recursion guard against deeply nested expressions/statements
 };
 
 } // namespace erelang

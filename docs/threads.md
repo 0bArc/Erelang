@@ -31,7 +31,7 @@ public action worker {
 }
 
 public action main {
-    let id = thread_run("worker");
+    id = thread_run("worker");
     print "started thread={id}";
     thread_join(id);
     print "all done";
@@ -44,7 +44,7 @@ run main;
 
 - `thread_run` takes the **name** of an action as a string, not the action itself.
 - Use `thread_wait_all()` to wait for all active threads before exiting.
-- Threads share global variables — coordinate access carefully.
+- Threads share global variables: coordinate access carefully.
 
 ## Related
 

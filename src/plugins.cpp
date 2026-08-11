@@ -204,43 +204,91 @@ namespace fs = std::filesystem;
 }
 
 [[nodiscard]] std::optional<std::string> extract_block(std::string_view text, std::string_view tag) {
-    const std::string open = "<" + std::string{tag} + ">";
-    const std::string close = "</" + std::string{tag} + ">";
-    auto pos = text.find(open);
+    // Case-insensitive tag matching: manifests may use <Hook> or <hook>.
+    auto find_open = [&](std::size_t from) -> std::size_t {
+        for (std::size_t i = from; i < text.size(); ++i) {
+            if (text[i] != '<' || i + 1 >= text.size()) continue;
+            std::size_t j = i + 1, k = 0;
+            while (k < tag.size() && j < text.size() &&
+                   std::tolower(static_cast<unsigned char>(text[j])) == std::tolower(static_cast<unsigned char>(tag[k]))) {
+                ++j; ++k;
+            }
+            if (k == tag.size() && j < text.size() && text[j] == '>') return i;
+        }
+        return std::string_view::npos;
+    };
+    auto find_close = [&](std::size_t from) -> std::size_t {
+        for (std::size_t i = from; i + 2 < text.size(); ++i) {
+            if (text[i] != '<' || text[i + 1] != '/') continue;
+            std::size_t j = i + 2, k = 0;
+            while (k < tag.size() && j < text.size() &&
+                   std::tolower(static_cast<unsigned char>(text[j])) == std::tolower(static_cast<unsigned char>(tag[k]))) {
+                ++j; ++k;
+            }
+            if (k == tag.size() && j < text.size() && text[j] == '>') return i;
+        }
+        return std::string_view::npos;
+    };
+    const auto pos = find_open(0);
     if (pos == std::string_view::npos) {
         return std::nullopt;
     }
-    pos += open.size();
+    // content starts after '<' + tag + '>'
+    const std::size_t contentStart = pos + 1 + tag.size() + 1;
     std::size_t depth = 1;
-    auto cur = pos;
+    auto cur = contentStart;
     while (depth > 0) {
-        const auto nextOpen = text.find(open, cur);
-        const auto nextClose = text.find(close, cur);
+        const auto nextOpen = find_open(cur);
+        const auto nextClose = find_close(cur);
         if (nextClose == std::string_view::npos) {
             return std::nullopt;
         }
         if (nextOpen != std::string_view::npos && nextOpen < nextClose) {
             ++depth;
-            cur = nextOpen + open.size();
+            cur = nextOpen + 1 + tag.size() + 1;
             continue;
         }
         if (--depth == 0) {
-            return std::string{text.substr(pos, nextClose - pos)};
+            return std::string{text.substr(contentStart, nextClose - contentStart)};
         }
-        cur = nextClose + close.size();
+        cur = nextClose + 2 + tag.size() + 1;
     }
     return std::nullopt;
 }
 
 [[nodiscard]] std::optional<std::string> extract_single(std::string_view text, std::string_view tag) {
-    const std::string open = "<" + std::string{tag} + ">";
-    const std::string close = "</" + std::string{tag} + ">";
-    const auto start = text.find(open);
+    // Case-insensitive open/close tag lookup; inner content is preserved as-is.
+    auto find_open = [&](std::size_t from) -> std::size_t {
+        for (std::size_t i = from; i < text.size(); ++i) {
+            if (text[i] != '<' || i + 1 >= text.size()) continue;
+            std::size_t j = i + 1, k = 0;
+            while (k < tag.size() && j < text.size() &&
+                   std::tolower(static_cast<unsigned char>(text[j])) == std::tolower(static_cast<unsigned char>(tag[k]))) {
+                ++j; ++k;
+            }
+            if (k == tag.size() && j < text.size() && text[j] == '>') return i;
+        }
+        return std::string_view::npos;
+    };
+    auto find_close = [&](std::size_t from) -> std::size_t {
+        for (std::size_t i = from; i + 2 < text.size(); ++i) {
+            if (text[i] != '<' || text[i + 1] != '/') continue;
+            std::size_t j = i + 2, k = 0;
+            while (k < tag.size() && j < text.size() &&
+                   std::tolower(static_cast<unsigned char>(text[j])) == std::tolower(static_cast<unsigned char>(tag[k]))) {
+                ++j; ++k;
+            }
+            if (k == tag.size() && j < text.size() && text[j] == '>') return i;
+        }
+        return std::string_view::npos;
+    };
+    const auto start = find_open(0);
     if (start == std::string_view::npos) {
         return std::nullopt;
     }
-    const auto valueStart = start + open.size();
-    const auto end = text.find(close, valueStart);
+    // Skip '<' + tag + '>'
+    const auto valueStart = start + 1 + tag.size() + 1;
+    const auto end = find_close(valueStart);
     if (end == std::string_view::npos) {
         return std::nullopt;
     }
@@ -249,21 +297,44 @@ namespace fs = std::filesystem;
 
 [[nodiscard]] std::vector<std::string> extract_multi(std::string_view text, std::string_view tag) {
     std::vector<std::string> values;
-    const std::string open = "<" + std::string{tag} + ">";
-    const std::string close = "</" + std::string{tag} + ">";
     auto searchStart = std::size_t{0};
     while (true) {
-        const auto start = text.find(open, searchStart);
+        std::size_t start = std::string_view::npos;
+        for (std::size_t i = searchStart; i < text.size(); ++i) {
+            if (text[i] != '<' || i + 1 >= text.size()) continue;
+            std::size_t j = i + 1, k = 0;
+            while (k < tag.size() && j < text.size() &&
+                   std::tolower(static_cast<unsigned char>(text[j])) == std::tolower(static_cast<unsigned char>(tag[k]))) {
+                ++j; ++k;
+            }
+            if (k == tag.size() && j < text.size() && text[j] == '>') {
+                start = i;
+                break;
+            }
+        }
         if (start == std::string_view::npos) {
             break;
         }
-        const auto valueStart = start + open.size();
-        const auto end = text.find(close, valueStart);
+        // Skip '<' + tag + '>'
+        const auto valueStart = start + 1 + tag.size() + 1;
+        std::size_t end = std::string_view::npos;
+        for (std::size_t i = valueStart; i + 2 < text.size(); ++i) {
+            if (text[i] != '<' || text[i + 1] != '/') continue;
+            std::size_t j = i + 2, k = 0;
+            while (k < tag.size() && j < text.size() &&
+                   std::tolower(static_cast<unsigned char>(text[j])) == std::tolower(static_cast<unsigned char>(tag[k]))) {
+                ++j; ++k;
+            }
+            if (k == tag.size() && j < text.size() && text[j] == '>') {
+                end = i;
+                break;
+            }
+        }
         if (end == std::string_view::npos) {
             break;
         }
         values.emplace_back(trim_copy(text.substr(valueStart, end - valueStart)));
-        searchStart = end + close.size();
+        searchStart = end + 2 + tag.size() + 1;
     }
     return values;
 }
@@ -486,13 +557,22 @@ std::vector<PluginManifest> discover_plugins(const std::filesystem::path& rootDi
             return;
         }
 
-        for (const auto& entry : fs::directory_iterator(root, ec)) {
+        fs::directory_iterator it(root, ec);
+        if (ec) {
+            if (log) {
+                *log << "[plugins] directory iteration error in '" << root.string() << "': " << ec.message() << "\n";
+            }
+            return;
+        }
+        const fs::directory_iterator endIt;
+        for (; it != endIt; it.increment(ec)) {
             if (ec) {
                 if (log) {
                     *log << "[plugins] directory iteration error in '" << root.string() << "': " << ec.message() << "\n";
                 }
                 break;
             }
+            const auto& entry = *it;
             if (!entry.is_directory()) {
                 continue;
             }
@@ -604,12 +684,29 @@ std::vector<PluginManifest> discover_plugins(const std::filesystem::path& rootDi
 
             if (auto contentBlock = extract_block(*pluginBlock, "content")) {
                 auto includes = extract_multi(*contentBlock, "include");
+                // Canonical base so containment checks are reliable.
+                std::error_code baseEc;
+                const fs::path baseDir = fs::weakly_canonical(manifest.baseDirectory, baseEc);
+                const fs::path baseDirForCheck = baseEc ? manifest.baseDirectory.lexically_normal() : baseDir;
                 for (const auto& rel : includes) {
                     if (rel.empty()) {
                         continue;
                     }
 
-                    fs::path resolved = manifest.baseDirectory / fs::path(rel).lexically_normal();
+                    fs::path resolved = (baseDirForCheck / fs::path(rel)).lexically_normal();
+                    // Reject include paths that escape the plugin base directory.
+                    const std::string baseStr = baseDirForCheck.generic_string();
+                    const std::string resolvedStr = resolved.generic_string();
+                    const bool contained = resolvedStr == baseStr ||
+                        (resolvedStr.size() > baseStr.size() + 1 &&
+                         resolvedStr.rfind(baseStr + "/", 0) == 0);
+                    if (!contained) {
+                        if (log) {
+                            *log << "[plugins] rejecting include path escaping plugin directory '" << rel << "' for " << manifest_label(manifestPath) << "\n";
+                        }
+                        continue;
+                    }
+
                     if (!fs::exists(resolved)) {
                         if (log) {
                             *log << "[plugins] missing include file '" << rel << "' for " << manifest_label(manifestPath) << "\n";

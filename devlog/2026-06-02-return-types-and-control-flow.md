@@ -1,16 +1,16 @@
-# 2026-06-02 — Return types, bool control flow, visibility (part 2)
+# 2026-06-02  --  Return types, bool control flow, visibility (part 2)
 
 ## Return types (two syntaxes)
 
 Functions can declare a return type in either form:
 
 ```elan
-// Classic — keyword "action" + trailing type
+// Classic  --  keyword "action" + trailing type
 public action sum(int x, int y): int {
   return x + y
 }
 
-// Type-first — return type before name (no "action" keyword)
+// Type-first  --  return type before name (no "action" keyword)
 public int clamp(int val, int min_val, int max_val) {
   if (val < min_val) { return min_val }
   if (val > max_val) { return max_val }
@@ -33,16 +33,16 @@ Typechecker checks `return` values against the declared type (`TC040` / `TC121`)
 
 - **Actions:** `public action foo` / `private action bar` (unchanged).
 - **Type-first:** `private int next_raw()` etc.
-- **Globals:** `public global MATH_PI = 3.14` / `private global INTERNAL = 0` — visibility stored on `GlobalDecl`.
+- **Globals:** `public global MATH_PI = 3.14` / `private global INTERNAL = 0`  --  visibility stored on `GlobalDecl`.
 - **Entities:** `public` / `private` on fields and methods (existing).
 
 `@strict` continues to enforce visibility at runtime for cross-module calls.
 
 ## Examples updated
 
-- `examples/modules/math.elan` — `public int clamp(...)`
-- `examples/feature_pass_v2.elan` — `public int add`, `public int bump`
-- `tools/install-erelang-extension.elan` — `!fs.exists(...)` instead of `== "false"`
+- `examples/modules/math.elan`  --  `public int clamp(...)`
+- `examples/feature_pass_v2.elan`  --  `public int add`, `public int bump`
+- `tools/install-erelang-extension.elan`  --  `!fs.exists(...)` instead of `== "false"`
 
 ## Verify
 

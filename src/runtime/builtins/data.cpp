@@ -10,6 +10,27 @@ namespace erelang {
 struct DataStore { std::unordered_map<std::string,std::string> kv; };
 static std::unordered_map<int, DataStore> g_datastores; static int g_nextStoreId = 1;
 
+// Parse a "data:<id>" handle; returns -1 for malformed handles so callers
+// can bail out instead of throwing std::stoi.
+static int parse_data_handle(const std::string& h) {
+    if (h.rfind("data:", 0) != 0) return -1;
+    try {
+        auto tail = h.substr(5);
+        if (tail.empty()) return -1;
+        std::size_t pos = 0;
+        int v = std::stoi(tail, &pos);
+        if (pos != tail.size()) return -1;
+        return v;
+    } catch (...) {
+        return -1;
+    }
+}
+
+static DataStore* find_store(int id) {
+    auto it = g_datastores.find(id);
+    return it == g_datastores.end() ? nullptr : &it->second;
+}
+
 static std::string data_dispatch(const std::string& name, const std::vector<std::string>& argv) {
     auto argS = [&](size_t i){ return i<argv.size()?argv[i]:std::string(); };
     if (name == "data_new") {
@@ -17,30 +38,41 @@ static std::string data_dispatch(const std::string& name, const std::vector<std:
     }
     if (name == "data_set") {
         auto h = argS(0); auto k = argS(1); auto v = argS(2);
-        if (h.rfind("data:",0)==0){ int id = std::stoi(h.substr(5)); g_datastores[id].kv[k]=v; }
+        int id = parse_data_handle(h);
+        if (id >= 0) { if (auto* store = find_store(id)) store->kv[k] = v; }
         return {};
     }
     if (name == "data_get") {
         auto h = argS(0); auto k = argS(1);
-        if (h.rfind("data:",0)==0){ int id = std::stoi(h.substr(5)); auto it=g_datastores[id].kv.find(k); if(it!=g_datastores[id].kv.end()) return it->second; }
+        int id = parse_data_handle(h);
+        if (id >= 0) { if (auto* store = find_store(id)) { auto it=store->kv.find(k); if(it!=store->kv.end()) return it->second; } }
         return {};
     }
     if (name == "data_has") {
         auto h = argS(0); auto k = argS(1);
-        if (h.rfind("data:",0)==0){ int id = std::stoi(h.substr(5)); return g_datastores[id].kv.count(k)?"true":"false"; }
+        int id = parse_data_handle(h);
+        if (id >= 0) { if (auto* store = find_store(id)) return store->kv.count(k)?"true":"false"; }
         return "false";
     }
     if (name == "data_keys") {
-        auto h = argS(0); if (h.rfind("data:",0)!=0) return {};
-        int id = std::stoi(h.substr(5)); int lid = ++g_nextStoreId; // reuse counter for lists? safer to not; but using list is simpler via runtime would need access
-        // Fallback: return joined keys since we cannot allocate list here without internal handle access
-        std::ostringstream ss; bool first=true; for (auto &kv : g_datastores[id].kv){ if(!first) ss<<","; first=false; ss<<kv.first; }
+        auto h = argS(0);
+        int id = parse_data_handle(h);
+        if (id < 0) return {};
+        DataStore* store = find_store(id);
+        if (!store) return {};
+        std::ostringstream ss; bool first=true; for (auto &kv : store->kv){ if(!first) ss<<","; first=false; ss<<kv.first; }
         return ss.str();
     }
     if (name == "data_save") {
         auto h = argS(0); auto path = argS(1);
-        if (h.rfind("data:",0)==0) { int id = std::stoi(h.substr(5)); std::ofstream out(path, std::ios::binary); for(auto &kv: g_datastores[id].kv){ out<<kv.first<<"="<<kv.second<<"\n"; } }
-        return {};
+        int id = parse_data_handle(h);
+        if (id < 0) return {};
+        DataStore* store = find_store(id);
+        if (!store) return {};
+        std::ofstream out(path, std::ios::binary);
+        if (!out) return "false";
+        for (auto &kv : store->kv) { out<<kv.first<<"="<<kv.second<<"\n"; }
+        return out.good() ? "true" : "false";
     }
     if (name == "data_load") {
         auto path = argS(0); std::ifstream in(path, std::ios::binary); if(!in) return {};

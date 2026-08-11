@@ -21,6 +21,10 @@ namespace erelang {
 
 const Action* Runtime::find_action(const Program& program, std::string_view name) const {
     for (const auto& a : program.actions) if (a.name == name) return &a;
+    {
+        std::lock_guard<std::mutex> lock(dynamicActionsMutex_);
+        for (const auto& a : dynamicActions_) if (a.name == name) return &a;
+    }
     if (name.find("::") == std::string_view::npos) {
         const Action* found = nullptr;
         std::string suffix = std::string("::") + std::string(name);
@@ -28,6 +32,15 @@ const Action* Runtime::find_action(const Program& program, std::string_view name
             if (a.name.size() > suffix.size() && a.name.rfind(suffix) == a.name.size() - suffix.size()) {
                 if (found) return nullptr;
                 found = &a;
+            }
+        }
+        if (!found) {
+            std::lock_guard<std::mutex> lock(dynamicActionsMutex_);
+            for (const auto& a : dynamicActions_) {
+                if (a.name.size() > suffix.size() && a.name.rfind(suffix) == a.name.size() - suffix.size()) {
+                    if (found) return nullptr;
+                    found = &a;
+                }
             }
         }
         if (found) return found;
@@ -215,7 +228,11 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                     return std::string("string");
                 };
                 const std::string actualType = infer_runtime_value_type(v);
-                if (!runtime_declared_type_matches(st.declaredType, actualType)) {
+                const std::string declaredNorm = normalize_runtime_type_name(st.declaredType);
+                // string declarations accept anything printable (snowflake IDs look like ints)
+                if (declaredNorm == "string" || declaredNorm == "str") {
+                    // keep v as-is
+                } else if (!runtime_declared_type_matches(st.declaredType, actualType)) {
                     throw std::runtime_error(
                         "Type mismatch in declaration '" + st.name + "': declared " + st.declaredType + " but got " + actualType
                     );
@@ -238,13 +255,12 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
     }
     if (std::holds_alternative<ReturnStmt>(s)) {
         const auto& rs = std::get<ReturnStmt>(s);
-        // Evaluate return expression if provided
-        try {
-            std::string rv;
-            if (rs.value && *rs.value) rv = eval_string(**rs.value, env); else rv.clear();
-            ctx.returned = true;
-            ctx.returnValue = rv;
-        } catch (...) { }
+        // Evaluate return expression if provided; propagate evaluation errors
+        // so a failing return expression is not silently converted to "".
+        std::string rv;
+        if (rs.value && *rs.value) rv = eval_string(**rs.value, env);
+        ctx.returned = true;
+        ctx.returnValue = rv;
         return;
     }
     if (std::holds_alternative<FireStmt>(s)) {
@@ -504,6 +520,35 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 env.vars[st.varOrField] = val;
             }
         } else {
+            if (std::holds_alternative<NewExpr>(st.value->node)) {
+                const auto& ne = std::get<NewExpr>(st.value->node);
+                const Entity* ent = find_entity(program, ne.typeName);
+                if (!ent) throw std::runtime_error("Unknown entity: " + ne.typeName);
+                if (program.strict && ent->visibility != Visibility::Public)
+                    throw std::runtime_error("Entity not public: " + ne.typeName);
+                auto obj = std::make_shared<Object>();
+                obj->typeName = ne.typeName;
+                for (const auto& f : ent->fields) {
+                    obj->fields[f.name] = f.defaultValue ? eval_string(*f.defaultValue, env) : std::string{};
+                }
+                if (const Action* init = find_entity_method(*ent, "init")) {
+                    Env selfEnv;
+                    for (size_t i = 0; i < init->params.size() && i < ne.args.size(); ++i)
+                        selfEnv.vars[init->params[i].name] = eval_string(*ne.args[i], env);
+                    selfEnv.objects["self"] = obj;
+                    for (const auto& kv : obj->fields) selfEnv.vars[kv.first] = kv.second;
+                    ExecContext child;
+                    exec_block(init->body, program, child, selfEnv);
+                    for (auto& th : child.threads) if (th.joinable()) th.join();
+                    for (auto& f : obj->fields) {
+                        if (auto vit = selfEnv.vars.find(f.first); vit != selfEnv.vars.end()) f.second = vit->second;
+                    }
+                }
+                env.objects[st.varOrField] = obj;
+                env.vars[st.varOrField] = st.varOrField;
+                if (globalNames_.count(st.varOrField)) globalVars_[st.varOrField] = env.vars[st.varOrField];
+                return;
+            }
             std::string v = eval_string(*st.value, env);
             env.vars[st.varOrField] = v;
             if (globalNames_.count(st.varOrField)) globalVars_[st.varOrField] = v;
@@ -580,6 +625,7 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
             if (mapMethod == "remove_path") mapMethod = "remove";
 
             if (handle.rfind("list:", 0) == 0 && listMethod == "forEach") {
+                if (mc.args.empty()) return;
                 int id = to_int(handle.substr(5));
                 // forEach(actionName)
                 std::string actionName = eval_string(*mc.args[0], env);
@@ -726,6 +772,7 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 return;
             }
             if (handle.rfind("dict:", 0) == 0 && mapMethod == "forEach") {
+                if (mc.args.empty()) return;
                 int id = to_int(handle.substr(5));
                 std::string actionName = eval_string(*mc.args[0], env);
                 for (const auto& kv : g_dicts[id]) {

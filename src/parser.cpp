@@ -2,8 +2,29 @@
 #include <stdexcept>
 #include <cctype>
 #include <sstream>
+#include <limits>
 
 namespace erelang {
+
+// Guards against pathological nesting (e.g. `((((...))))`) overflowing the
+// call stack; fails with a clear error instead of crashing.
+namespace {
+constexpr int kMaxParseDepth = 2048;
+class ParseDepthGuard {
+public:
+    explicit ParseDepthGuard(int& depth) : depth_(depth) {
+        if (++depth_ > kMaxParseDepth) {
+            --depth_;
+            throw std::runtime_error("Parser recursion depth exceeded (expression/statement nested too deeply)");
+        }
+    }
+    ~ParseDepthGuard() { --depth_; }
+    ParseDepthGuard(const ParseDepthGuard&) = delete;
+    ParseDepthGuard& operator=(const ParseDepthGuard&) = delete;
+private:
+    int& depth_;
+};
+} // namespace
 
 Parser::Parser(std::vector<Token> tokens) : tokens_(std::move(tokens)) {}
 Parser::Parser(std::vector<Token> tokens, std::string sourceName)
@@ -79,7 +100,8 @@ static bool is_probable_type_start(const Token& t) {
         w == "array" || w == "map" || w == "dictionary" || w == "hashmap" ||
         w == "u8" || w == "u16" || w == "u32" || w == "u64" ||
         w == "i8" || w == "i16" || w == "i32" || w == "i64" ||
-        w == "uint" || w == "unsigned" || w == "unsignedint") {
+        w == "uint" || w == "unsigned" || w == "unsignedint" ||
+        w == "pointer") {
         return true;
     }
     const unsigned char first = static_cast<unsigned char>(t.text[0]);
@@ -146,16 +168,54 @@ static int64_t parse_numeric_literal(const std::string& text) {
         return value;
     }
 
+    // Hex literals must be parsed before the float path: digits like 'e'/'E'
+    // would otherwise make stod() treat them as a decimal exponent (0x1e -> 0).
+    if (text.size() > 2 && text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
+        try {
+            return static_cast<int64_t>(std::stoll(text, nullptr, 16));
+        } catch (...) {
+            throw std::runtime_error("Invalid hex literal: " + text);
+        }
+    }
+
     if (text.find('.') != std::string::npos || text.find('e') != std::string::npos || text.find('E') != std::string::npos) {
         const double dv = std::stod(text);
+        if (!(dv >= static_cast<double>(std::numeric_limits<int64_t>::min()) &&
+              dv <= static_cast<double>(std::numeric_limits<int64_t>::max()))) {
+            throw std::runtime_error("Numeric literal out of int64 range: " + text);
+        }
         return static_cast<int64_t>(dv);
     }
 
-    size_t idx = 0;
-    return std::stoll(text, &idx, 0);
+    // stoll(..., 0) treats a leading zero as octal, so reject 08/09 style literals.
+    if (text.size() > 1 && text[0] == '0') {
+        for (size_t i = 1; i < text.size(); ++i) {
+            if (text[i] < '0' || text[i] > '7') {
+                throw std::runtime_error("Invalid octal literal: " + text);
+            }
+        }
+    }
+
+    try {
+        size_t idx = 0;
+        const int64_t value = std::stoll(text, &idx, 0);
+        if (idx != text.size()) {
+            throw std::runtime_error("Invalid numeric literal: " + text);
+        }
+        return value;
+    } catch (const std::runtime_error&) {
+        throw;
+    } catch (...) {
+        throw std::runtime_error("Invalid numeric literal: " + text);
+    }
 }
 
 static bool is_float_literal_text(const std::string& text) {
+    // Hex literals may contain 'e'/'E' as plain digits (0x1e), so they must
+    // never be classified as floats.
+    if (text.size() > 2 && text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
+        return false;
+    }
     return text.find('.') != std::string::npos ||
            text.find('e') != std::string::npos ||
            text.find('E') != std::string::npos;
@@ -190,16 +250,12 @@ static ExprPtr make_default_initializer_for_declared_type(const std::string& dec
         return std::make_shared<Expr>(Expr{ ExprNumber{ 0, true, "0.0" } });
     }
     if (normalized == "array" || normalized.rfind("array<", 0) == 0) {
-        FunctionCallExpr call;
-        call.name = "list_new";
-        call.collectionLiteral = true;
-        return std::make_shared<Expr>(Expr{ call });
+        ListLiteralExpr lit;
+        return std::make_shared<Expr>(Expr{ lit });
     }
     if (normalized == "map" || normalized == "dictionary" || normalized == "hashmap" || normalized.rfind("map<", 0) == 0) {
-        FunctionCallExpr call;
-        call.name = "dict_new";
-        call.collectionLiteral = true;
-        return std::make_shared<Expr>(Expr{ call });
+        DictLiteralExpr lit;
+        return std::make_shared<Expr>(Expr{ lit });
     }
     if (!normalized.empty() && (normalized.back() == '*' || normalized.back() == '&')) {
         return std::make_shared<Expr>(Expr{ ExprNull{} });
@@ -241,14 +297,19 @@ void Parser::skip_separators() {
     while (peek().kind == TokenKind::Newline || peek().kind == TokenKind::Semicolon) consume();
 }
 
-ExprPtr Parser::parse_expression() { return parse_ternary(); }
+ExprPtr Parser::parse_expression() {
+    ParseDepthGuard guard(parseDepth_);
+    return parse_ternary();
+}
 
 ExprPtr Parser::parse_ternary() {
     auto cond = parse_coalesce();
     if (!match(TokenKind::Question)) {
         return cond;
     }
+    ++inTernaryThen_;
     auto thenExpr = parse_expression();
+    --inTernaryThen_;
     expect(TokenKind::Colon, ":");
     auto elseExpr = parse_expression();
     return std::make_shared<Expr>(Expr{ TernaryExpr{ cond, thenExpr, elseExpr } });
@@ -355,7 +416,8 @@ ExprPtr Parser::parse_primary() {
                 target = std::make_shared<Expr>(Expr{ IndexExpr{ target, idx } });
                 continue;
             }
-            if (peek().kind == TokenKind::Colon &&
+            if (inTernaryThen_ == 0 &&
+                peek().kind == TokenKind::Colon &&
                 (peek(1).kind == TokenKind::Word || peek(1).kind == TokenKind::Keyword) &&
                 peek(2).kind == TokenKind::LParen) {
                 consume();
@@ -532,7 +594,7 @@ ExprPtr Parser::parse_primary() {
         if (peek().kind == TokenKind::Greater) consume();
         if (match(TokenKind::LParen)) {
             if (!match(TokenKind::RParen)) {
-                do { (void)parse_expression(); } while (match(TokenKind::Comma));
+                do { call.args.push_back(parse_expression()); } while (match(TokenKind::Comma));
                 expect(TokenKind::RParen, ")");
             }
         }
@@ -557,7 +619,8 @@ ExprPtr Parser::parse_primary() {
                 expect(TokenKind::RParen, ")");
             }
         }
-        return std::make_shared<Expr>(Expr{ ne });
+        // apply_postfix so chained access like `new Foo().bar` and method calls work.
+        return apply_postfix(std::make_shared<Expr>(Expr{ ne }));
     }
     if (t.kind == TokenKind::String || t.kind == TokenKind::Char || t.kind == TokenKind::RawString) {
         consume();
@@ -579,20 +642,6 @@ ExprPtr Parser::parse_primary() {
     if (t.kind == TokenKind::Word || t.kind == TokenKind::Keyword) {
     if (t.text == "true" || t.text == "false") { consume(); return apply_postfix(std::make_shared<Expr>(Expr{ ExprBool{ t.text == "true" } })); }
     if (t.text == "null" || t.text == "nil" || t.text == "nullptr") { consume(); return apply_postfix(std::make_shared<Expr>(Expr{ ExprNull{} })); }
-    if (t.text == "array") {
-        consume();
-        FunctionCallExpr call;
-        call.name = "list_new";
-        call.collectionLiteral = true;
-        return apply_postfix(std::make_shared<Expr>(Expr{ call }));
-    }
-    if (t.text == "map" || t.text == "dictionary" || t.text == "dict" || t.text == "hashmap") {
-        consume();
-        FunctionCallExpr call;
-        call.name = "dict_new";
-        call.collectionLiteral = true;
-        return apply_postfix(std::make_shared<Expr>(Expr{ call }));
-    }
         consume();
         std::string baseName = ident_text(t);
         while (match(TokenKind::Scope)) {
@@ -637,24 +686,20 @@ ExprPtr Parser::parse_primary() {
         return apply_postfix(std::make_shared<Expr>(Expr{ ExprIdent{ baseName } }));
     }
     if (match(TokenKind::LBracket)) {
-        FunctionCallExpr call;
-        call.name = "list_new";
-        call.collectionLiteral = true;
+        ListLiteralExpr lit;
         skip_separators();
         if (!match(TokenKind::RBracket)) {
             do {
                 skip_separators();
-                call.args.push_back(parse_expression());
+                lit.elements.push_back(parse_expression());
                 skip_separators();
             } while (match(TokenKind::Comma));
             expect(TokenKind::RBracket, "]");
         }
-        return apply_postfix(std::make_shared<Expr>(Expr{ call }));
+        return apply_postfix(std::make_shared<Expr>(Expr{ lit }));
     }
     if (match(TokenKind::LBrace)) {
-        FunctionCallExpr call;
-        call.name = "dict_new";
-        call.collectionLiteral = true;
+        DictLiteralExpr lit;
         skip_separators();
         if (!match(TokenKind::RBrace)) {
             while (true) {
@@ -666,9 +711,9 @@ ExprPtr Parser::parse_primary() {
                 } else {
                     throw std::runtime_error("Expected dictionary key");
                 }
-                call.args.push_back(std::make_shared<Expr>(Expr{ ExprString{ key } }));
+                lit.entries.push_back(std::make_shared<Expr>(Expr{ ExprString{ key } }));
                 expect(TokenKind::Colon, ":");
-                call.args.push_back(parse_expression());
+                lit.entries.push_back(parse_expression());
                 if (match(TokenKind::Comma)) {
                     continue;
                 }
@@ -682,7 +727,7 @@ ExprPtr Parser::parse_primary() {
             }
             expect(TokenKind::RBrace, "}");
         }
-        return apply_postfix(std::make_shared<Expr>(Expr{ call }));
+        return apply_postfix(std::make_shared<Expr>(Expr{ lit }));
     }
     if (match(TokenKind::LParen)) { auto e = parse_expression(); expect(TokenKind::RParen, ")"); return apply_postfix(e); }
     throw std::runtime_error(std::string("Expected expression near token: '") + std::string(peek().text) + "'");
@@ -734,17 +779,20 @@ Block Parser::parse_block(bool allowImplicit) {
             skip_separators();
         } catch (const std::exception& ex) {
             const std::string msg = ex.what() ? std::string(ex.what()) : std::string{};
-            // Preserve the primary missing-semicolon diagnostic so callers still
-            // get a concrete actionable error.
-            if (msg.find("Expected ;") != std::string::npos) {
-                throw;
-            }
+            // Record the error and recover within the block so the rest of the
+            // statements still parse — this prevents one bad line from producing
+            // a flood of cascade "Unexpected top-level token" errors.
+            pendingErrors_.push_back(format_parse_error(sourceName_, peek(), msg.empty() ? "Parse error" : msg));
             synchronize_block();
-            throw;
+            // If synchronize consumed to the closing brace, stop.
+            if (peek().kind == TokenKind::RBrace || peek().kind == TokenKind::End) break;
         }
     }
-    if (hasBraces || (allowImplicit && peek().kind == TokenKind::RBrace)) {
-        expect(TokenKind::RBrace, "}");
+    // Only consume the closing '}' when this block actually opened one. An
+    // implicit body (allowImplicit, no '{') must never eat the enclosing
+    // block's '}' (e.g. an action inside an entity).
+    if (hasBraces) {
+        if (peek().kind == TokenKind::RBrace) consume(); // closing '}'
     }
     return b;
 }
@@ -843,12 +891,24 @@ GlobalDecl Parser::parse_global() {
 
     skip_separators();
     if (!match_word("global")) throw std::runtime_error("Expected 'global'");
+    // Optionally consume a type annotation ("string", "int", "bool", "double", "list", "dict")
+    std::string maybeTypeName;
+    if (peek().kind == TokenKind::Word) {
+        maybeTypeName = ident_text(peek());
+        if (maybeTypeName == "string" || maybeTypeName == "int" || maybeTypeName == "bool" ||
+            maybeTypeName == "double" || maybeTypeName == "float" || maybeTypeName == "list" || maybeTypeName == "dict") {
+            consume();  // skip the type annotation
+        } else {
+            maybeTypeName.clear();
+        }
+    }
     const Token& nameTok = consume();
     if (!(nameTok.kind == TokenKind::Word || nameTok.kind == TokenKind::Keyword)) throw std::runtime_error("Global name");
     expect(TokenKind::Assign, "=");
     auto val = parse_expression();
     GlobalDecl g;
     g.name = qualify_name(ident_text(nameTok));
+    g.typeName = maybeTypeName;
     g.value = val;
     g.visibility = vis;
     g.exported = isExport;
@@ -900,6 +960,7 @@ ExternDecl Parser::parse_extern_decl() {
 }
 
 Statement Parser::parse_statement() {
+    ParseDepthGuard guard(parseDepth_);
     // C++-style pointer assignment: *p = expr
     if (peek().kind == TokenKind::Star) {
         const size_t savePos = pos_;
@@ -1032,11 +1093,25 @@ Statement Parser::parse_statement() {
             throw std::runtime_error("import statement is only valid while parsing a program");
         }
         ImportDecl decl = parse_import_decl();
-        if (decl.path == "/plugins/*/project.elp") {
-            decl.pluginGlob = true;
-            if (!decl.alias) decl.alias = std::string{"plugin"};
+        if (!decl.namedImports.empty()) {
+            // Expand named imports: import {a,b,c} from "path" becomes individual imports
+            auto normalize_path = [](std::string path) {
+                for (auto& ch : path) if (ch == '\\') ch = '/';
+                return path;
+            };
+            for (const auto& name : decl.namedImports) {
+                ImportDecl sub;
+                sub.path = normalize_path(decl.path + "/" + name);
+                sub.alias = name;
+                programImports_->push_back(std::move(sub));
+            }
+        } else {
+            if (decl.path == "/plugins/*/project.elp") {
+                decl.pluginGlob = true;
+                if (!decl.alias) decl.alias = std::string{"plugin"};
+            }
+            programImports_->push_back(std::move(decl));
         }
-        programImports_->push_back(std::move(decl));
         return ImportStmt{};
     }
     // print expr
@@ -1052,7 +1127,9 @@ Statement Parser::parse_statement() {
             return SleepStmt{ parse_duration_ms(t.text) };
         }
         if (t.kind == TokenKind::Number) {
-            int64_t num = std::stoll(t.text);
+            // parse_numeric_literal handles hex/octal/binary/float forms
+            // instead of std::stoll which throws on "0x1e" or "1.5".
+            int64_t num = parse_numeric_literal(t.text);
             if (peek().kind == TokenKind::Word && peek().text == "ms") consume();
             if (parenthesized) expect(TokenKind::RParen, ")");
             return SleepStmt{ num };
@@ -1060,7 +1137,7 @@ Statement Parser::parse_statement() {
         throw std::runtime_error("Expected duration literal or number after 'sleep'");
     }
     // typed declaration with optional constexpr/static modifiers and generic type names
-    if (!is_word_or_kw(peek(), "let") && !is_word_or_kw(peek(), "const") && is_probable_type_start(peek())) {
+    if (!is_word_or_kw(peek(), "const") && is_probable_type_start(peek())) {
         const size_t savePos = pos_;
         bool isConstDecl = false;
         if (match_word("constexpr")) isConstDecl = true;
@@ -1080,17 +1157,20 @@ Statement Parser::parse_statement() {
             pos_ = savePos;
         }
     }
-    // let/const variable declaration (treat keyword or word)
-    if (is_word_or_kw(peek(), "let") || is_word_or_kw(peek(), "const")) {
-        bool isConst = false;
-        if (match_word("let")) isConst = false; else if (match_word("const")) isConst = true;
+    // legacy 'let' — give a clear migration error
+    if (is_word_or_kw(peek(), "let")) {
+        throw std::runtime_error("'let' is no longer supported; use bare assignment: `name = value;`");
+    }
+    // const variable declaration
+    if (is_word_or_kw(peek(), "const")) {
+        consume(); // 'const'
         const Token& nameTok = consume();
         if (nameTok.kind != TokenKind::Word) throw std::runtime_error("Variable name");
         if (!match(TokenKind::Assign) && peek().kind != TokenKind::LBrace) {
             throw std::runtime_error("=");
         }
         auto val = parse_expression();
-        return LetStmt{ isConst, ident_text(nameTok), val, std::string{} };
+        return LetStmt{ true, ident_text(nameTok), val, std::string{} };
     }
     // return [expr] (expression optional)
     if (match_word("return")) {
@@ -1232,7 +1312,7 @@ Statement Parser::parse_statement() {
 
     if (peek().kind == TokenKind::LBrace) {
         throw std::runtime_error(
-            "Unexpected `{` — a bare block is not a statement here. "
+            "Unexpected `{` - a bare block is not a statement here. "
             "After `case N:` use `print ...;` directly or wrap the case body in `{ ... }` (supported). "
             "Statements must live inside an action `{ ... }` body.");
     }
@@ -1244,7 +1324,7 @@ Statement Parser::parse_statement() {
         throw std::runtime_error(
             "'case'/'default' labels belong inside `switch (expr) { ... }`, not as standalone statements");
     }
-    throw std::runtime_error("Unknown statement — not a recognized keyword (let, if, print, return, ...) or assignment/call");
+    throw std::runtime_error("Unknown statement - not a recognized keyword (if, print, return, const, ...) or assignment/call");
 }
 
 ImportDecl Parser::parse_import_decl() {
@@ -1253,6 +1333,22 @@ ImportDecl Parser::parse_import_decl() {
         for (auto& ch : path) if (ch == '\\') ch = '/';
         return path;
     };
+    // Named imports: import {api, slash, gateway} from "plugins/discord"
+    if (peek().kind == TokenKind::LBrace) {
+        consume(); // {
+        skip_separators();
+        do {
+            skip_separators();
+            const Token& nameTok = consume();
+            if (!(nameTok.kind == TokenKind::Word || nameTok.kind == TokenKind::Keyword))
+                throw std::runtime_error("Expected identifier in import list");
+            decl.namedImports.push_back(ident_text(nameTok));
+            skip_separators();
+        } while (match(TokenKind::Comma));
+        expect(TokenKind::RBrace, "}");
+        if (!match_word("from"))
+            throw std::runtime_error("Expected 'from' after named import list");
+    }
     if (match(TokenKind::Less)) {
         std::string path;
         while (peek().kind != TokenKind::Greater && peek().kind != TokenKind::End) {
@@ -1308,13 +1404,32 @@ Program Parser::parse_program() {
     };
     auto synchronize_top_level = [&]() {
         const size_t startPos = pos_;
+        // Skip balanced braces so an error inside an action body doesn't cascade.
+        int braceDepth = 0;
         while (peek().kind != TokenKind::End) {
-            if (peek().kind == TokenKind::Semicolon || peek().kind == TokenKind::Newline) {
+            if (peek().kind == TokenKind::LBrace) {
+                ++braceDepth;
+                consume();
+                continue;
+            }
+            if (peek().kind == TokenKind::RBrace) {
+                if (braceDepth > 0) {
+                    --braceDepth;
+                    consume();
+                    if (braceDepth == 0) break; // consumed the closing brace of the bad block
+                    continue;
+                }
+                // depth == 0: stray closing brace — consume and stop
                 consume();
                 break;
             }
-            if (peek().kind == TokenKind::RBrace || is_top_level_anchor(peek())) {
-                break;
+            if (braceDepth == 0) {
+                // At top level: stop at a known anchor so the next declaration parses cleanly
+                if (is_top_level_anchor(peek())) break;
+                if (peek().kind == TokenKind::Semicolon || peek().kind == TokenKind::Newline) {
+                    consume();
+                    break;
+                }
             }
             consume();
         }
@@ -1486,7 +1601,25 @@ Program Parser::parse_program() {
                 // allow stray separators and ignore unknown top-level '@' blocks handled above
                 skip_separators();
                 if (peek().kind == TokenKind::End) break;
-                if (peek().kind == TokenKind::At) continue;
+                if (peek().kind == TokenKind::At) {
+                    // Dangling attribute with no following declaration. Consume it
+                    // (and its optional args) so parsing always makes progress
+                    // instead of looping forever on e.g. a trailing '@'.
+                    consume();
+                    if (peek().kind == TokenKind::Word || peek().kind == TokenKind::Keyword) {
+                        consume();
+                        if (match(TokenKind::LParen)) {
+                            size_t depth = 1;
+                            while (depth > 0 && peek().kind != TokenKind::End) {
+                                if (peek().kind == TokenKind::LParen) ++depth;
+                                else if (peek().kind == TokenKind::RParen) --depth;
+                                consume();
+                            }
+                        }
+                    }
+                    skip_separators();
+                    continue;
+                }
                 throw std::runtime_error("Unexpected top-level token");
             }
             skip_separators();
@@ -1498,6 +1631,9 @@ Program Parser::parse_program() {
     if (!namespaceStack_.empty()) {
         add_error("Unterminated namespace block");
     }
+    // Drain block-level errors collected during in-place recovery
+    for (auto& e : pendingErrors_) errors.push_back(std::move(e));
+    pendingErrors_.clear();
     if (!errors.empty()) {
         std::ostringstream oss;
         oss << "Syntax errors (" << errors.size() << "):\n";
@@ -1573,13 +1709,12 @@ ForStmt Parser::parse_for() {
     // init (optional)
     std::shared_ptr<Block> initBlk = std::make_shared<Block>();
     if (!match(TokenKind::Semicolon)) {
-        // allow let/const or assignment simple form: name = expr
-        if (peek().kind == TokenKind::Word && (peek().text == "let" || peek().text == "const")) {
-            bool isConst = match_word("let") ? false : (match_word("const"), true);
-            if (!isConst && peek().text == "const") { consume(); isConst = true; }
+        // allow const or bare assignment simple form: name = expr
+        if (is_word_or_kw(peek(), "const")) {
+            consume(); // 'const'
             const Token& nameTok = consume(); if (nameTok.kind != TokenKind::Word) throw std::runtime_error("Variable name");
             expect(TokenKind::Assign, "="); auto val = parse_expression();
-            initBlk->stmts.push_back(LetStmt{ isConst, ident_text(nameTok), val, std::string{} });
+            initBlk->stmts.push_back(LetStmt{ true, ident_text(nameTok), val, std::string{} });
         } else if (peek().kind == TokenKind::Word && peek(1).kind == TokenKind::Assign) {
             const Token& n = consume(); consume(); auto v = parse_expression();
             initBlk->stmts.push_back(SetStmt{ false, ident_text(n), std::string{}, v });
@@ -1616,12 +1751,11 @@ ForStmt Parser::parse_for() {
         if (peek().kind == TokenKind::Word && peek(1).kind == TokenKind::Assign) {
             const Token& n = consume(); consume(); auto v = parse_expression();
             stepBlk->stmts.push_back(SetStmt{ false, ident_text(n), std::string{}, v });
-        } else if (peek().kind == TokenKind::Word && (peek().text == "let" || peek().text == "const")) {
-            bool isConst = match_word("let") ? false : (match_word("const"), true);
-            if (!isConst && peek().text == "const") { consume(); isConst = true; }
+        } else if (is_word_or_kw(peek(), "const")) {
+            consume(); // 'const'
             const Token& nameTok = consume(); if (nameTok.kind != TokenKind::Word) throw std::runtime_error("Variable name");
             expect(TokenKind::Assign, "="); auto val = parse_expression();
-            stepBlk->stmts.push_back(LetStmt{ isConst, ident_text(nameTok), val, std::string{} });
+            stepBlk->stmts.push_back(LetStmt{ true, ident_text(nameTok), val, std::string{} });
         } else {
             const size_t savePos = pos_;
             bool typedAccepted = false;
@@ -1652,13 +1786,23 @@ ForStmt Parser::parse_for() {
 
 ForInStmt Parser::parse_for_in_after_lparen() {
     // Assumes '(' has been consumed
-    auto consume_loop_var_name = [&]() -> std::string {
-        // Supports both: `for (item : xs)` and typed `for (auto item : xs)` forms.
-        if ((peek().kind == TokenKind::Word || peek().kind == TokenKind::Keyword) &&
-            (peek(1).kind == TokenKind::Word || peek(1).kind == TokenKind::Keyword) &&
-            (peek(2).kind == TokenKind::Colon ||
-             peek(2).kind == TokenKind::Comma ||
-             ((peek(2).kind == TokenKind::Word || peek(2).kind == TokenKind::Keyword) && peek(2).text == "in"))) {
+    // Parse optional type annotation before var name: `for (string item : xs)` or `for (item : xs)`
+    auto consume_typed_var = [&](std::string& outType) -> std::string {
+        bool hasType = (peek().kind == TokenKind::Word || peek().kind == TokenKind::Keyword) &&
+                       (peek(1).kind == TokenKind::Word || peek(1).kind == TokenKind::Keyword ||
+                        peek(1).kind == TokenKind::Amp || peek(1).kind == TokenKind::Star) &&
+                       (peek(2).kind == TokenKind::Colon ||
+                        peek(2).kind == TokenKind::Comma ||
+                        peek(2).kind == TokenKind::Amp ||
+                        peek(2).kind == TokenKind::Star ||
+                        ((peek(2).kind == TokenKind::Word || peek(2).kind == TokenKind::Keyword) && peek(2).text == "in"));
+        if (hasType) {
+            const Token& typeTok = consume();
+            std::string t = ident_text(typeTok);
+            if (t != "auto") outType = t;
+        }
+        // Optional reference/pointer qualifier: `for (auto& x : xs)` or `for (int *p : xs)`
+        if (peek().kind == TokenKind::Amp || peek().kind == TokenKind::Star) {
             consume();
         }
         const Token& tok = consume();
@@ -1666,10 +1810,12 @@ ForInStmt Parser::parse_for_in_after_lparen() {
         return ident_text(tok);
     };
 
-    const std::string varName = consume_loop_var_name();
+    std::string varType;
+    const std::string varName = consume_typed_var(varType);
     std::optional<std::string> valueVar;
     if (match(TokenKind::Comma)) {
-        valueVar = consume_loop_var_name();
+        std::string ignored;
+        valueVar = consume_typed_var(ignored);
     }
     bool usedColon = false;
     if (match(TokenKind::Colon)) {
@@ -1683,7 +1829,7 @@ ForInStmt Parser::parse_for_in_after_lparen() {
     auto it = parse_expression();
     expect(TokenKind::RParen, ")");
     auto body = std::make_shared<Block>(parse_block());
-    return ForInStmt{ varName, valueVar, usedColon, it, body };
+    return ForInStmt{ varName, varType, valueVar, usedColon, it, body };
 }
 
 Entity Parser::parse_entity() {
@@ -2138,6 +2284,19 @@ std::string Parser::parse_type_annotation() {
             if (tk.kind == TokenKind::Greater) {
                 --depth;
                 out += ">";
+                continue;
+            }
+            // The lexer emits a single Shr/Shl token for '>>'/'<<', which in
+            // nested generic annotations means two closing/opening brackets.
+            if (tk.kind == TokenKind::Shr) {
+                depth -= 2;
+                out += ">>";
+                if (depth < 0) throw std::runtime_error("Invalid token in type annotation");
+                continue;
+            }
+            if (tk.kind == TokenKind::Shl) {
+                depth += 2;
+                out += "<<";
                 continue;
             }
             if (tk.kind == TokenKind::Comma) {

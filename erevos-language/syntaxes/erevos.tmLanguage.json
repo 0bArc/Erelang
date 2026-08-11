@@ -3,288 +3,237 @@
   "name": "Erelang",
   "scopeName": "source.erelang",
   "patterns": [
-  { "include": "#comments" },
-  { "include": "#includes" },
-  { "include": "#strings" },
-
-  { "include": "#printStmt" },
-
-  { "include": "#foreach" },
-
-  { "include": "#declarations" },
-  { "include": "#builtinCalls" },
-  { "include": "#calls" },
-
-  { "include": "#structAccess" },
-  { "include": "#typeRefs" },
-
-  { "include": "#collectionVars" },
-
-  { "include": "#members" },
-  { "include": "#numbers" },
-
-  { "include": "#keywords" },
-  { "include": "#directives" },
-
-  { "include": "#entities" },
-  { "include": "#actions" },
-
-  { "include": "#identifiers" }
-],
+    { "include": "#comments" },
+    { "include": "#directives" },
+    { "include": "#includes" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#constants" },
+    { "include": "#entityDecl" },
+    { "include": "#actionDecl" },
+    { "include": "#foreachHeader" },
+    { "include": "#typeAnnotation" },
+    { "include": "#storageModifiers" },
+    { "include": "#controlKeywords" },
+    { "include": "#builtinFunctions" },
+    { "include": "#functionCall" },
+    { "include": "#memberAccess" },
+    { "include": "#operators" },
+    { "include": "#punctuation" }
+  ],
   "repository": {
-    "builtinCalls": {
-      "patterns": [
-        {
-          "name": "support.function",
-          "match": "\\b(print|PRINT|sleep|now_ms|env|username|computer_name|machine_guid|uuid|rand_int|args_count|args_get|os\\.args|os\\.args_count|os\\.args_get|exec|os\\.exec|spawn|os\\.spawn|exit|read_line|stdin_read|stderr_print|input|toint|toInt|tofloat|tostr|toString|tobool|dynamic_cast|reinterpret_cast|bit_cast|bitcast|to_json|from_json|sizeof|typeof|decltype|alignof|offsetof|is_base_of|ptr_new|ptr_get|ptr_set|ptr_free|ptr_valid|malloc|free|make_unique|make_shared|unique_reset|shared_reset|string\\.lstrip|string\\.rstrip|string\\.strip|string\\.lower|string\\.upper|string\\.starts_with|string\\.ends_with|string\\.find|string\\.substr|string\\.len|char_is_digit|char_is_space|char_is_alpha|char_is_ident_start|char_is_ident_part|set_new|set_add|set_has|set_remove|set_size|set_values|set_union|set_intersect|set_diff|queue_new|queue_push|queue_pop|queue_peek|queue_len|queue_clear|file_open|file_close|file_read|file_write|file_seek|file_tell|file_flush|file_mtime|file_size|fopen|fclose|fread|fwrite|fseek|ftell|fflush|strbuf_new|strbuf_append|strbuf_clear|strbuf_len|strbuf_to_string|strbuf_free|strbuf_reserve|string_buffer_new|string_buffer_append|string_buffer_clear|string_buffer_len|string_buffer_to_string|string_buffer_free|string_buffer_reserve|color\\.red|color\\.green|color\\.yellow|color\\.blue|color\\.magenta|color\\.cyan|color\\.bold|color\\.reset|table_new|table_put|table_get|table_has|table_remove|table_rows|table_columns|table_row_keys|table_clear_row|table_count_row|win_window_create|win_button_create|win_checkbox_create|win_radiobutton_create|win_slider_create|win_textbox_create|win_label_create|win_on|win_show|win_loop|win_get_text|win_set_text|win_get_check|win_set_check|win_get_slider|win_set_slider|win_close|win_auto_scale|win_set_scale|ui_window_create|ui_label|ui_button|ui_checkbox|ui_radio|ui_slider|ui_textbox|ui_same_line|ui_newline|ui_spacer|ui_separator|ui_load)\\b(?=\\s*\\()"
-        }
-      ]
-    },
+
     "comments": {
       "patterns": [
-        { "name": "comment.line.double-slash", "match": "//.*$" }
-      ]
-    },
-    "strings": {
-      "patterns": [
         {
-          "name": "string.quoted.double",
-          "begin": "\"",
-          "end": "\"",
-          "patterns": [
-            { "match": "\\\\.", "name": "constant.character.escape" },
-            {
-              "name": "meta.interpolation.erelang",
-              "match": "\\{[^\\}]+\\}",
-              "captures": {
-                "0": { "name": "meta.interpolation" }
-              }
-            }
-          ]
-        },
-        {
-          "name": "string.quoted.single",
-          "begin": "'",
-          "end": "'",
-          "patterns": [
-            { "match": "\\\\.", "name": "constant.character.escape" },
-            {
-              "name": "meta.interpolation.erelang",
-              "match": "\\{[^\\}]+\\}",
-              "captures": {
-                "0": { "name": "meta.interpolation" }
-              }
-            }
-          ]
+          "name": "comment.line.double-slash.erelang",
+          "match": "//.*$"
         }
       ]
     },
-    "printStmt": {
+
+    "directives": {
       "patterns": [
         {
-          "name": "meta.print.statement.erelang",
-          "begin": "(\\bprint\\b|\\bPRINT\\b)(\\s+)",
-          "beginCaptures": {
-            "1": { "name": "keyword.other.print.erelang" },
-            "2": { "name": "punctuation.whitespace" }
-          },
-          "end": ";",
-          "endCaptures": {
-            "0": { "name": "punctuation.terminator.statement.erelang" }
-          },
-          "patterns": [
-            { "include": "#strings" },
-            { "include": "#numbers" },
-            { "include": "#calls" },
-            { "include": "#structAccess" },
-            { "include": "#members" },
-            { "match": "\\+|\\-|\\*|/|%|==|!=|<=|>=|<|>|&&|\\|\\|", "name": "keyword.operator.erelang" },
-            { "match": "\\b(true|false|null|nil|nullptr)\\b", "name": "constant.language" },
-            { "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b", "name": "variable.other.readwrite" }
-          ]
+          "name": "keyword.control.directive.erelang",
+          "match": "@[A-Za-z_][A-Za-z0-9_]*\\b"
         }
       ]
     },
-    "structAccess": {
-      "patterns": [
-        {
-          "name": "meta.member.access",
-          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\.([A-Za-z_][A-Za-z0-9_]*)",
-          "captures": {
-            "1": { "name": "variable.other" },
-            "2": { "name": "variable.other.property" }
-          }
-        }
-      ]
-    },
-    "typeRefs": {
-      "patterns": [
-        {
-          "name": "entity.name.type",
-          "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
-        }
-      ]
-    },
-    "calls": {
-      "patterns": [
-        {
-          "name": "meta.function-call",
-          "match": "\\b(?!(?:if|else|while|for|switch|match|case|default|break|continue|return|parallel|wait|all|run|fire|pause|try|catch|await)\\b)([A-Za-z_][A-Za-z0-9_\\.]*)\\s*(?=\\()",
-          "captures": {
-            "1": { "name": "entity.name.function" }
-          }
-        }
-      ]
-    },
-    "numbers": {
-      "patterns": [
-        { "name": "constant.numeric", "match": "\\b[0-9]+\\b" }
-      ]
-    },
-    "members": {
-      "patterns": [
-        {
-          "name": "meta.member.access",
-          "match": "\\.([A-Za-z_][A-Za-z0-9_]*)",
-          "captures": {
-            "1": { "name": "variable.other.property" }
-          }
-        }
-      ]
-    },
-    "keywords": {
-      "patterns": [
-        { "name": "keyword.control", "match": "\\bfor\\b" },
-        { "name": "keyword.control", "match": "\\b(if|else|while|repeat|switch|match|case|default|break|continue|return|parallel|wait|all|run|fire|pause|try|catch|await|unsafe|namespace)\\b" },
-        { "name": "storage.type", "match": "\\b(void|int|double|float|string|str|bool|char|auto|list|array|dict|map|Array|Map|HashMap|any)\\b" },
-        { "name": "storage.modifier", "match": "\\b(action|entity|hook|let|const|constexpr|static|struct|enum|type|import|export|public|private|field|new|async|extern|static_cast|dynamic_cast|reinterpret_cast|bit_cast)\\b" },
-        { "name": "constant.language", "match": "\\b(true|false|null|nil|nullptr)\\b" },
-        { "name": "support.function", "match": "\\b(print|PRINT|sleep|now_ms|env|username|computer_name|machine_guid|uuid|rand_int|args_count|args_get|os\\.args|os\\.args_count|os\\.args_get|exec|os\\.exec|spawn|os\\.spawn|exit|read_line|stdin_read|stderr_print|input|toint|toInt|tofloat|tostr|toString|tobool|dynamic_cast|reinterpret_cast|bit_cast|bitcast|to_json|from_json|sizeof|typeof|decltype|alignof|offsetof|is_base_of|ptr_new|ptr_get|ptr_set|ptr_free|ptr_valid|malloc|free|make_unique|make_shared|unique_reset|shared_reset|string\\.lstrip|string\\.rstrip|string\\.strip|string\\.lower|string\\.upper|string\\.starts_with|string\\.ends_with|string\\.find|string\\.substr|string\\.len|char_is_digit|char_is_space|char_is_alpha|char_is_ident_start|char_is_ident_part|set_new|set_add|set_has|set_remove|set_size|set_values|set_union|set_intersect|set_diff|queue_new|queue_push|queue_pop|queue_peek|queue_len|queue_clear|file_open|file_close|file_read|file_write|file_seek|file_tell|file_flush|file_mtime|file_size|fopen|fclose|fread|fwrite|fseek|ftell|fflush|strbuf_new|strbuf_append|strbuf_clear|strbuf_len|strbuf_to_string|strbuf_free|strbuf_reserve|string_buffer_new|string_buffer_append|string_buffer_clear|string_buffer_len|string_buffer_to_string|string_buffer_free|string_buffer_reserve|color\\.red|color\\.green|color\\.yellow|color\\.blue|color\\.magenta|color\\.cyan|color\\.bold|color\\.reset|table_new|table_put|table_get|table_has|table_remove|table_rows|table_columns|table_row_keys|table_clear_row|table_count_row|win_window_create|win_button_create|win_checkbox_create|win_radiobutton_create|win_slider_create|win_textbox_create|win_label_create|win_on|win_show|win_loop|win_get_text|win_set_text|win_get_check|win_set_check|win_get_slider|win_set_slider|win_close|win_auto_scale|win_set_scale|ui_window_create|ui_label|ui_button|ui_checkbox|ui_radio|ui_slider|ui_textbox|ui_same_line|ui_newline|ui_spacer|ui_separator|ui_load)\\b" }
-      ]
-    },
-    "declarations": {
-      "patterns": [
-        {
-          "name": "meta.declaration.variable",
-          "match": "\\b(let|const|constexpr|static|global|int|double|float|string|str|bool|char|auto|Array|Map|HashMap)\\s+([A-Za-z_][A-Za-z0-9_]*)",
-          "captures": {
-            "1": { "name": "storage.modifier" },
-            "2": { "name": "variable.other" }
-          }
-        }
-      ]
-    },
-    "collectionVars": {
-      "patterns": [
-        {
-          "name": "storage.type",
-          "match": "\\b(array|map|dictionary|hashmap|Array|Map|HashMap)\\b"
-        }
-      ]
-    },
-    "foreach": {
-      "patterns": [
-        {
-          "name": "meta.foreach.header",
-          "begin": "\\b(for)\\s*(\\()",
-          "beginCaptures": {
-            "1": { "name": "keyword.control" },
-            "2": { "name": "punctuation.section.group.begin" }
-          },
-          "end": "(\\))",
-          "endCaptures": {
-            "1": { "name": "punctuation.section.group.end" }
-          },
-          "patterns": [
-            {
-              "name": "meta.foreach.loopvar.untyped",
-              "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\b(?=\\s*(?:,|:|\\bin\\b))",
-              "captures": {
-                "1": { "name": "variable.parameter" }
-              }
-            },
-            {
-              "name": "meta.foreach.loopvar.typed",
-              "match": "\\b(?:auto|int|double|float|string|str|bool|char|array|map|dictionary|hashmap|Array<[^>]+>|Map<[^>]+>|HashMap<[^>]+>|[A-Z][A-Za-z0-9_<>,]*)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b(?=\\s*(?:,|:|\\bin\\b))",
-              "captures": {
-                "1": { "name": "variable.parameter" }
-              }
-            },
-            {
-              "name": "meta.foreach.iterable",
-              "match": "(:|\\bin\\b)(\\s*)([A-Za-z_][A-Za-z0-9_]*)",
-              "captures": {
-                "1": { "name": "keyword.operator.foreach" },
-                "3": { "name": "variable.parameter" }
-              }
-            },
-            {
-              "name": "storage.type",
-              "match": "\\b(auto|int|double|float|string|str|bool|char|array|map|dictionary|hashmap|Array<[^>]+>|Map<[^>]+>|HashMap<[^>]+>|[A-Z][A-Za-z0-9_<>,]*)\\b"
-            },
-            {
-              "name": "keyword.operator.foreach",
-              "match": ":|\\bin\\b"
-            }
-          ]
-        }
-      ]
-    },
+
     "includes": {
       "patterns": [
         {
-          "name": "meta.preprocessor.include.partial",
-          "match": "^\\s*(#\\s*(?:i|in|inc|incl|inclu|includ))\\b.*$",
+          "name": "meta.preprocessor.include.erelang",
+          "match": "^\\s*(#include)\\s*(<[^>]*>|\"[^\"]*\")?\\s*(\\bas\\b)?\\s*([A-Za-z_][A-Za-z0-9_]*)?",
           "captures": {
-            "1": { "name": "keyword.control.import" }
-          }
-        },
-        {
-          "name": "meta.preprocessor.include",
-          "match": "^\\s*(#\\s*include)\\s*(<[^>]*>?|\"[^\"]*\"?|[A-Za-z0-9_./-]+)?\\s*(?:\\b(as)\\b\\s+([A-Za-z_][A-Za-z0-9_]*))?\\s*;?\\s*$",
-          "captures": {
-            "1": { "name": "keyword.control.import" },
-            "2": { "name": "string.unquoted" },
-            "3": { "name": "keyword.other" },
-            "4": { "name": "variable.other" }
-          }
-        },
-        {
-          "name": "meta.preprocessor.conditional",
-          "match": "^\\s*(#if|#elif|#else|#endif|#ifdef|#ifndef|#define)\\b.*$",
-          "captures": {
-            "1": { "name": "keyword.control.import" }
+            "1": { "name": "keyword.control.import.erelang" },
+            "2": { "name": "string.unquoted.include.erelang" },
+            "3": { "name": "keyword.other.erelang" },
+            "4": { "name": "entity.name.namespace.erelang" }
           }
         }
       ]
     },
-    "directives": {
-      "patterns": [
-        { "name": "keyword.control.directive", "match": "@(erelang|strict|debug|deprecated|profile|describe|parallel|pure|final|override|hidden|event)\\b" }
-      ]
-    },
-    "entities": {
-      "patterns": [
-        { "name": "entity.name.type", "match": "\\bentity\\s+([A-Za-z_][A-Za-z0-9_]*)", "captures": { "1": { "name": "entity.name.type" } } },
-        { "name": "entity.name.type", "match": "\\bstruct\\s+([A-Za-z_][A-Za-z0-9_]*)", "captures": { "1": { "name": "entity.name.type" } } },
-        { "name": "entity.name.type", "match": "\\benum\\s+([A-Za-z_][A-Za-z0-9_]*)", "captures": { "1": { "name": "entity.name.type" } } }
-      ]
-    },
-    "actions": {
-      "patterns": [
-        { "name": "entity.name.function", "match": "\\baction\\s+([A-Za-z_][A-Za-z0-9_]*)", "captures": { "1": { "name": "entity.name.function" } } }
-      ]
-    },
-    "identifiers": {
+
+    "strings": {
       "patterns": [
         {
-          "name": "variable.other.readwrite",
-          "match": "\\b(?!(?:if|else|while|repeat|for|switch|match|case|default|break|continue|return|parallel|wait|all|run|fire|pause|try|catch|await|unsafe|namespace|action|entity|hook|let|const|constexpr|static|struct|enum|type|import|export|public|private|field|new|async|static_cast|dynamic_cast|reinterpret_cast|bit_cast|bitcast|void|int|double|float|string|str|bool|char|auto|list|array|dict|map|Array|Map|HashMap|any|true|false|null|nil|nullptr|print|PRINT|sleep|now_ms|env|username|computer_name|machine_guid|uuid|rand_int|input|toint|toInt|tofloat|tostr|toString|tobool|to_json|from_json|sizeof|typeof|decltype|alignof|offsetof|is_base_of|ptr_new|ptr_get|ptr_set|ptr_free|ptr_valid|malloc|free|make_unique|make_shared|unique_reset|shared_reset|file_open|file_close|file_read|file_write|file_seek|file_tell|file_flush|fopen|fclose|fread|fwrite|fseek|ftell|fflush|strbuf_new|strbuf_append|strbuf_clear|strbuf_len|strbuf_to_string|strbuf_free|strbuf_reserve|string_buffer_new|string_buffer_append|string_buffer_clear|string_buffer_len|string_buffer_to_string|string_buffer_free|string_buffer_reserve)\\b)([a-z_][A-Za-z0-9_]*)\\b",
+          "name": "string.quoted.double.erelang",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            { "name": "constant.character.escape.erelang", "match": "\\\\." },
+            {
+              "name": "meta.interpolation.erelang",
+              "begin": "\\{",
+              "end": "\\}",
+              "beginCaptures": { "0": { "name": "punctuation.definition.template-expression.begin.erelang" } },
+              "endCaptures":   { "0": { "name": "punctuation.definition.template-expression.end.erelang" } },
+              "patterns": [
+                { "include": "#numbers" },
+                { "include": "#constants" },
+                { "include": "#memberAccess" },
+                { "include": "#operators" },
+                { "name": "variable.other.readwrite.erelang", "match": "[A-Za-z_][A-Za-z0-9_]*" }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+
+    "numbers": {
+      "patterns": [
+        { "name": "constant.numeric.erelang", "match": "\\b[0-9]+(\\.[0-9]+)?\\b" }
+      ]
+    },
+
+    "constants": {
+      "patterns": [
+        { "name": "constant.language.erelang", "match": "\\b(true|false|null|nil|nullptr)\\b" }
+      ]
+    },
+
+    "entityDecl": {
+      "patterns": [
+        {
+          "match": "\\b(entity|struct|enum)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
-            "1": { "name": "variable.other.readwrite" }
+            "1": { "name": "storage.type.erelang" },
+            "2": { "name": "entity.name.type.erelang" }
           }
         }
+      ]
+    },
+
+    "actionDecl": {
+      "patterns": [
+        {
+          "match": "\\b(action)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.erelang" },
+            "2": { "name": "entity.name.function.erelang" }
+          }
+        }
+      ]
+    },
+
+    "foreachHeader": {
+      "patterns": [
+        {
+          "name": "meta.foreach.erelang",
+          "begin": "\\b(for)\\s*(\\()",
+          "end": "(\\))",
+          "beginCaptures": {
+            "1": { "name": "keyword.control.erelang" },
+            "2": { "name": "punctuation.section.parens.begin.erelang" }
+          },
+          "endCaptures": {
+            "1": { "name": "punctuation.section.parens.end.erelang" }
+          },
+          "patterns": [
+            { "include": "#comments" },
+            { "include": "#numbers" },
+            { "include": "#constants" },
+            { "include": "#typeAnnotation" },
+            { "name": "keyword.operator.erelang", "match": "(:(?!:)|\\bin\\b)" },
+            { "name": "keyword.operator.erelang", "match": "[=<>!]+|&&|\\|\\|" },
+            { "name": "keyword.operator.erelang", "match": "[+\\-*/%]" },
+            { "name": "punctuation.separator.erelang", "match": "," },
+            { "name": "punctuation.terminator.erelang", "match": ";" },
+            { "name": "variable.parameter.erelang", "match": "[A-Za-z_][A-Za-z0-9_]*" }
+          ]
+        }
+      ]
+    },
+
+    "typeAnnotation": {
+      "patterns": [
+        {
+          "name": "storage.type.erelang",
+          "match": "\\b(void|int|double|float|string|str|bool|char|auto|any|pointer|Array|Map|HashMap|array|map|hashmap|dictionary|u8|u16|u32|u64|i8|i16|i32|i64|uint|unsigned)\\b"
+        },
+        {
+          "name": "storage.type.erelang",
+          "match": "\\b(Array|Map|HashMap)<[^>]*>"
+        }
+      ]
+    },
+
+    "storageModifiers": {
+      "patterns": [
+        {
+          "name": "storage.modifier.erelang",
+          "match": "\\b(public|private|export|extern|const|constexpr|static|global|field|new|async|import|run|let)\\b"
+        }
+      ]
+    },
+
+    "controlKeywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.erelang",
+          "match": "\\b(if|else|while|repeat|for|switch|match|case|default|break|continue|return|parallel|wait|all|fire|pause|try|catch|await|unsafe|namespace|hook|type)\\b"
+        }
+      ]
+    },
+
+    "builtinFunctions": {
+      "patterns": [
+        {
+          "name": "support.function.builtin.erelang",
+          "match": "\\b(print|PRINT|sleep|now_ms|env|username|computer_name|machine_guid|uuid|rand_int|args_count|args_get|exec|spawn|exit|read_line|stdin_read|stderr_print|input|chdir|toint|toInt|tofloat|tostr|toString|tobool|to_json|from_json|sizeof|typeof|decltype|alignof|offsetof|ptr_new|ptr_get|ptr_set|ptr_free|ptr_valid|malloc|free|make_unique|make_shared|unique_reset|shared_reset|string\\.len|string\\.lower|string\\.upper|string\\.strip|string\\.lstrip|string\\.rstrip|string\\.starts_with|string\\.ends_with|string\\.find|string\\.substr|char_is_digit|char_is_space|char_is_alpha|char_is_ident_start|char_is_ident_part|set_new|set_add|set_has|set_remove|set_size|set_values|queue_new|queue_push|queue_pop|queue_peek|queue_len|queue_clear|file_open|file_close|file_read|file_write|file_seek|file_tell|file_flush|file_mtime|file_size|fopen|fclose|fread|fwrite|fseek|ftell|fflush|strbuf_new|strbuf_append|strbuf_clear|strbuf_len|strbuf_to_string|strbuf_free|strbuf_reserve|color\\.red|color\\.green|color\\.yellow|color\\.blue|color\\.magenta|color\\.cyan|color\\.bold|color\\.reset|table_new|table_put|table_get|table_has|table_remove|table_rows|table_columns|table_row_keys|table_clear_row|table_count_row)\\b(?=\\s*[\\(;\\s]|$)"
+        }
+      ]
+    },
+
+    "functionCall": {
+      "patterns": [
+        {
+          "name": "meta.function-call.erelang",
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+          "captures": {
+            "1": { "name": "entity.name.function.erelang" }
+          }
+        }
+      ]
+    },
+
+    "memberAccess": {
+      "patterns": [
+        {
+          "name": "meta.member-access.erelang",
+          "match": "([A-Za-z_][A-Za-z0-9_]*)\\.([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "variable.other.erelang" },
+            "2": { "name": "variable.other.property.erelang" }
+          }
+        }
+      ]
+    },
+
+    "operators": {
+      "patterns": [
+        { "name": "keyword.operator.assignment.erelang", "match": "(?<![=!<>])=(?!=)" },
+        { "name": "keyword.operator.comparison.erelang", "match": "==|!=|<=|>=|<|>" },
+        { "name": "keyword.operator.logical.erelang",    "match": "&&|\\|\\||!" },
+        { "name": "keyword.operator.arithmetic.erelang", "match": "[+\\-*/%]" },
+        { "name": "keyword.operator.bitwise.erelang",    "match": "&|\\||\\^|~|<<|>>" },
+        { "name": "keyword.operator.erelang",            "match": "::|\\?\\.?|\\.\\.\\." }
+      ]
+    },
+
+    "punctuation": {
+      "patterns": [
+        { "name": "punctuation.terminator.statement.erelang", "match": ";" },
+        { "name": "punctuation.separator.erelang",            "match": "," },
+        { "name": "punctuation.section.braces.begin.erelang", "match": "\\{" },
+        { "name": "punctuation.section.braces.end.erelang",   "match": "\\}" },
+        { "name": "punctuation.section.parens.begin.erelang", "match": "\\(" },
+        { "name": "punctuation.section.parens.end.erelang",   "match": "\\)" }
       ]
     }
+
   }
 }

@@ -1,6 +1,6 @@
 # Permissions (in-memory)
 
-Script-level permission registry — not OS ACLs. Useful for gating features inside long-running hosts or plugin systems.
+Script-level permission registry: not OS ACLs. Useful for gating features inside long-running hosts or plugin systems.
 
 ```elan
 #include <builtin/perm> as perm
@@ -11,7 +11,7 @@ Script-level permission registry — not OS ACLs. Useful for gating features ins
 | `perm_grant(name)` | permission name | void |
 | `perm_revoke(name)` | permission name | void |
 | `perm_has(name)` | permission name | `"true"` / `"false"` |
-| `perm_list()` | — | list handle |
+| `perm_list()` |: | list handle |
 
 ## Example
 
@@ -20,9 +20,9 @@ Script-level permission registry — not OS ACLs. Useful for gating features ins
 #include <builtin/perm> as perm
 
 public action main {
-    perm_grant("network.download")
+    perm_grant("network.download");
     if (perm_has("network.download") == "true") {
-        print "allowed"
+        print "allowed";
     }
 }
 

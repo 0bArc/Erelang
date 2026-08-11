@@ -100,16 +100,18 @@ private:
     bool lower_for_in_static(const ForInStmt& s) {
         const std::vector<ExprPtr>* listItems = nullptr;
         const std::vector<DictEntryLiteral>* dictItems = nullptr;
+        // Local storage for inline dict literals: the shared member is clobbered
+        // when a nested for-in over another dict appears inside the loop body.
+        std::vector<DictEntryLiteral> localDictEntries;
 
         if (const auto* call = as_function_call(s.iterable)) {
             if (call->name == "list_new") {
                 listItems = &call->args;
             } else if (call->name == "dict_new") {
-                tmpDictEntries_.clear();
                 for (std::size_t i = 0; i + 1 < call->args.size(); i += 2) {
-                    tmpDictEntries_.push_back(DictEntryLiteral{call->args[i], call->args[i + 1]});
+                    localDictEntries.push_back(DictEntryLiteral{call->args[i], call->args[i + 1]});
                 }
-                dictItems = &tmpDictEntries_;
+                dictItems = &localDictEntries;
             }
         } else if (s.iterable && std::holds_alternative<ExprIdent>(s.iterable->node)) {
             const auto& ident = std::get<ExprIdent>(s.iterable->node);
@@ -124,7 +126,10 @@ private:
         }
 
         if (listItems) {
+            const std::string endLabel = new_label("forin_end");
             for (std::size_t i = 0; i < listItems->size(); ++i) {
+                // continue target: start of next iteration (or loop end for the last one)
+                const std::string contLabel = (i + 1 < listItems->size()) ? new_label("forin_cont") : endLabel;
                 if (s.valueVar.has_value()) {
                     emit("mov", {to_var(s.var), "#" + std::to_string(i)});
                     varTypes_[s.var] = "int";
@@ -136,23 +141,33 @@ private:
                     emit("mov", {to_var(s.var), value.value});
                     varTypes_[s.var] = value.type;
                 }
+                loopStack_.push_back(LoopContext{endLabel, contLabel});
                 if (s.body) lower_block(*s.body);
+                loopStack_.pop_back();
+                emit("label", {contLabel});
             }
+            emit("label", {endLabel});
             return true;
         }
 
         if (dictItems) {
-            for (const auto& entry : *dictItems) {
-                auto key = lower_expr(entry.key);
+            const std::string endLabel = new_label("forin_end");
+            for (std::size_t i = 0; i < dictItems->size(); ++i) {
+                const std::string contLabel = (i + 1 < dictItems->size()) ? new_label("forin_cont") : endLabel;
+                auto key = lower_expr((*dictItems)[i].key);
                 emit("mov", {to_var(s.var), key.value});
                 varTypes_[s.var] = key.type;
                 if (s.valueVar.has_value()) {
-                    auto value = lower_expr(entry.value);
+                    auto value = lower_expr((*dictItems)[i].value);
                     emit("mov", {to_var(*s.valueVar), value.value});
                     varTypes_[*s.valueVar] = value.type;
                 }
+                loopStack_.push_back(LoopContext{endLabel, contLabel});
                 if (s.body) lower_block(*s.body);
+                loopStack_.pop_back();
+                emit("label", {contLabel});
             }
+            emit("label", {endLabel});
             return true;
         }
 
@@ -374,26 +389,36 @@ private:
                 emit("label", {startLabel});
                 auto cond = lower_expr(s.cond);
                 emit("jz", {cond.value, endLabel});
+                loopStack_.push_back(LoopContext{endLabel, startLabel});
                 if (s.body) lower_block(*s.body);
+                loopStack_.pop_back();
                 emit("jmp", {startLabel});
                 emit("label", {endLabel});
             } else if constexpr (std::is_same_v<T, DoWhileStmt>) {
                 const std::string startLabel = new_label("do_start");
+                const std::string endLabel = new_label("do_end");
                 emit("label", {startLabel});
+                loopStack_.push_back(LoopContext{endLabel, startLabel});
                 if (s.body) lower_block(*s.body);
+                loopStack_.pop_back();
                 auto cond = lower_expr(s.cond);
                 emit("jnz", {cond.value, startLabel});
+                emit("label", {endLabel});
             } else if constexpr (std::is_same_v<T, RepeatStmt>) {
                 auto count = lower_expr(s.count);
                 const std::string counter = new_temp();
                 emit("mov", {counter, "#0"});
                 const std::string loopLabel = new_label("repeat_loop");
                 const std::string endLabel = new_label("repeat_end");
+                const std::string continueLabel = new_label("repeat_continue");
                 emit("label", {loopLabel});
                 const std::string cond = new_temp();
                 emit("cmp_lt", {cond, counter, count.value});
                 emit("jz", {cond, endLabel});
+                loopStack_.push_back(LoopContext{endLabel, continueLabel});
                 if (s.body) lower_block(*s.body);
+                loopStack_.pop_back();
+                emit("label", {continueLabel});
                 const std::string one = new_temp();
                 emit("mov", {one, "#1"});
                 const std::string next = new_temp();
@@ -401,6 +426,18 @@ private:
                 emit("mov", {counter, next});
                 emit("jmp", {loopLabel});
                 emit("label", {endLabel});
+            } else if constexpr (std::is_same_v<T, BreakStmt>) {
+                if (loopStack_.empty()) {
+                    emit("nop", {"break-outside-loop"});
+                } else {
+                    emit("jmp", {loopStack_.back().breakLabel});
+                }
+            } else if constexpr (std::is_same_v<T, ContinueStmt>) {
+                if (loopStack_.empty()) {
+                    emit("nop", {"continue-outside-loop"});
+                } else {
+                    emit("jmp", {loopStack_.back().continueLabel});
+                }
             } else if constexpr (std::is_same_v<T, SwitchStmt>) {
                 auto sel = lower_expr(s.selector);
                 const std::string endLabel = new_label("switch_end");
@@ -459,7 +496,9 @@ private:
                     emit("jz", {cond.value, endLabel});
                 }
                 emit("label", {bodyLabel});
+                loopStack_.push_back(LoopContext{endLabel, stepLabel});
                 if (s.body) lower_block(*s.body);
+                loopStack_.pop_back();
                 emit("label", {stepLabel});
                 if (s.step) lower_block(*s.step);
                 emit("jmp", {condLabel});
@@ -506,7 +545,12 @@ private:
     std::unordered_map<std::string, std::string> varTypes_;
     std::unordered_map<std::string, std::vector<ExprPtr>> literalLists_;
     std::unordered_map<std::string, std::vector<DictEntryLiteral>> literalDicts_;
-    std::vector<DictEntryLiteral> tmpDictEntries_;
+
+    struct LoopContext {
+        std::string breakLabel;
+        std::string continueLabel;
+    };
+    std::vector<LoopContext> loopStack_;
 };
 
 } // namespace

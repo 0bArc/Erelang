@@ -1,4 +1,4 @@
-# 2026-05-29 — Runtime modularization & builtin trim
+# 2026-05-29  --  Runtime modularization & builtin trim
 
 ## Summary
 
@@ -19,7 +19,7 @@ Now:
 | `runtime_builtins.cpp` | 1900 | `eval_builtin_call`, import module dispatch |
 | `runtime_imports.cpp` | 245 | `program_imports_module`, alias binding |
 
-New header: `include/erelang/runtime_helpers.hpp` — shared runtime internals used across TUs.
+New header: `include/erelang/runtime_helpers.hpp`  --  shared runtime internals used across TUs.
 
 Mechanical split script: `tmp/split_runtime.py`.
 
@@ -55,16 +55,16 @@ Runtime and typechecker only expose these when the program imports the path:
 
 ## Typechecker
 
-- `init_builtins()` — slim core table
-- `register_imported_module_builtins(program)` — per-program additions when imports seen
-- `resolve_builtin_module_alias_call()` — `fs.read` → `read_text` style resolution (unchanged pattern, extended for math/data/perm/system)
+- `init_builtins()`  --  slim core table
+- `register_imported_module_builtins(program)`  --  per-program additions when imports seen
+- `resolve_builtin_module_alias_call()`  --  `fs.read` → `read_text` style resolution (unchanged pattern, extended for math/data/perm/system)
 
 ## Build & repo hygiene
 
-- `CMakeLists.txt` — added `runtime_helpers.cpp`, `runtime_eval.cpp`, `runtime_actions.cpp` to `erelang` / `erelang_shared` targets
+- `CMakeLists.txt`  --  added `runtime_helpers.cpp`, `runtime_eval.cpp`, `runtime_actions.cpp` to `erelang` / `erelang_shared` targets
 - Deleted local cruft: `build_p1/`, `build_fix/`, `build_tmp/`
-- `.gitignore` — ignore `build_p1/`, `build_tmp/`, `.cache/`
-- `experimental/README.md` — module table updated
+- `.gitignore`  --  ignore `build_p1/`, `build_tmp/`, `.cache/`
+- `experimental/README.md`  --  module table updated
 
 ## Verify
 

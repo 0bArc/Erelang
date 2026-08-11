@@ -48,7 +48,7 @@ run main;
 @erelang
 
 public action main {
-    let home = env("USERPROFILE");
+    home = env("USERPROFILE");
     print "home={home}";
 }
 
@@ -66,7 +66,7 @@ run main;
 @erelang
 
 public action main {
-    let n = args_count();
+    n = args_count();
     print "args={n}";
     if (n > 0) {
         print "first={args_get(0)}";
@@ -158,13 +158,13 @@ Full docs: [collections.md](collections.md)
 
 | Need | Module |
 |------|--------|
-| Files | `builtin/fs` — [filesystem.md](filesystem.md) |
-| HTTP | `builtin/network` — [network.md](network.md) |
-| Math | `builtin/math` — [math.md](math.md) |
-| Shell capture | `builtin/system` — [process.md](process.md) |
-| Regex | `builtin/regex` — [regex.md](regex.md) |
-| Crypto | `builtin/crypto` — [crypto.md](crypto.md) |
-| Binary | `builtin/binary` — [binary.md](binary.md) |
+| Files | `builtin/fs`: [filesystem.md](filesystem.md) |
+| HTTP | `builtin/network`: [network.md](network.md) |
+| Math | `builtin/math`: [math.md](math.md) |
+| Shell capture | `builtin/system`: [process.md](process.md) |
+| Regex | `builtin/regex`: [regex.md](regex.md) |
+| Crypto | `builtin/crypto`: [crypto.md](crypto.md) |
+| Binary | `builtin/binary`: [binary.md](binary.md) |
 
 ## Related
 

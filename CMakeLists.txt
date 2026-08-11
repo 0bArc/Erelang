@@ -69,22 +69,23 @@ endif()
 add_library(erelang STATIC
     src/lexer.cpp
     src/parser.cpp
-    src/runtime.cpp
-    src/runtime_helpers.cpp
-    src/runtime_eval.cpp
-    src/runtime_actions.cpp
-    src/runtime_imports.cpp
-    src/runtime_builtins.cpp
+    src/runtime/core.cpp
+    src/runtime/helpers.cpp
+    src/runtime/eval.cpp
+    src/runtime/actions.cpp
+    src/runtime/imports.cpp
+    src/runtime/builtins.cpp
   src/erodsl/spec.cpp
-  src/builtins/math.cpp
-  src/builtins/network.cpp
-  src/builtins/system.cpp
-  src/builtins/crypto.cpp
-  src/builtins/data.cpp
-  src/builtins/regex.cpp
-  src/builtins/perm.cpp
-  src/builtins/binary.cpp
-  src/features/serialization.cpp
+  src/runtime/builtins/math.cpp
+  src/runtime/builtins/network.cpp
+  src/runtime/builtins/system.cpp
+  src/runtime/builtins/websocket.cpp
+  src/runtime/builtins/crypto.cpp
+  src/runtime/builtins/data.cpp
+  src/runtime/builtins/regex.cpp
+  src/runtime/builtins/perm.cpp
+  src/runtime/builtins/binary.cpp
+  src/runtime/features/serialization.cpp
   src/typechecker.cpp
   src/optimizer.cpp
   src/modules.cpp
@@ -151,19 +152,19 @@ if (BUILD_SHARED_RUNTIME AND SPLIT_RUNTIME_DLLS)
   set_property(TARGET ob_ffi PROPERTY INTERPROCEDURAL_OPTIMIZATION OFF)
   ob_set_output(ob_ffi SHARED)
 
-  add_library(ob_builtins_math SHARED src/builtins/math.cpp)
+  add_library(ob_builtins_math SHARED src/runtime/builtins/math.cpp)
   set_target_properties(ob_builtins_math PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
   target_include_directories(ob_builtins_math PUBLIC include)
   set_property(TARGET ob_builtins_math PROPERTY INTERPROCEDURAL_OPTIMIZATION OFF)
   ob_set_output(ob_builtins_math SHARED)
 
-  add_library(ob_builtins_network SHARED src/builtins/network.cpp)
+  add_library(ob_builtins_network SHARED src/runtime/builtins/network.cpp)
   set_target_properties(ob_builtins_network PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
   target_include_directories(ob_builtins_network PUBLIC include)
   set_property(TARGET ob_builtins_network PROPERTY INTERPROCEDURAL_OPTIMIZATION OFF)
   ob_set_output(ob_builtins_network SHARED)
 
-  add_library(ob_builtins_system SHARED src/builtins/system.cpp)
+  add_library(ob_builtins_system SHARED src/runtime/builtins/system.cpp)
   set_target_properties(ob_builtins_system PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
   target_include_directories(ob_builtins_system PUBLIC include)
   set_property(TARGET ob_builtins_system PROPERTY INTERPROCEDURAL_OPTIMIZATION OFF)
@@ -183,8 +184,8 @@ if (BUILD_SHARED_RUNTIME AND SPLIT_RUNTIME_DLLS)
   ob_set_output(ob_modules SHARED)
 
   add_library(erelang_shared SHARED
-    src/runtime.cpp
-    src/cabi_exports.cpp
+    src/runtime/core.cpp
+    src/runtime/cabi_exports.cpp
     src/lexer.cpp
     src/parser.cpp
     src/ast.cpp
@@ -194,8 +195,8 @@ if (BUILD_SHARED_RUNTIME AND SPLIT_RUNTIME_DLLS)
     src/optimizer.cpp
     src/gc.cpp
     src/ffi.cpp
-    src/builtins/math.cpp
-    src/builtins/network.cpp
+    src/runtime/builtins/math.cpp
+    src/runtime/builtins/network.cpp
     src/stdlib.cpp
     src/modules.cpp
   )
@@ -236,15 +237,16 @@ elseif (BUILD_SHARED_RUNTIME)
     src/lexer.cpp
     src/parser.cpp
     src/erodsl/spec.cpp
-    src/builtins/math.cpp
-    src/builtins/network.cpp
-    src/builtins/system.cpp
-    src/builtins/crypto.cpp
-    src/builtins/data.cpp
-    src/builtins/regex.cpp
-    src/builtins/perm.cpp
-    src/builtins/binary.cpp
-    src/features/serialization.cpp
+    src/runtime/builtins/math.cpp
+    src/runtime/builtins/network.cpp
+    src/runtime/builtins/websocket.cpp
+    src/runtime/builtins/system.cpp
+    src/runtime/builtins/crypto.cpp
+    src/runtime/builtins/data.cpp
+    src/runtime/builtins/regex.cpp
+    src/runtime/builtins/perm.cpp
+    src/runtime/builtins/binary.cpp
+    src/runtime/features/serialization.cpp
     src/typechecker.cpp
     src/optimizer.cpp
     src/modules.cpp
@@ -252,13 +254,13 @@ elseif (BUILD_SHARED_RUNTIME)
     ${_ERELANG_EXPERIMENTAL_SOURCES}
     src/ir.cpp
     src/codegen_x64.cpp
-    src/runtime.cpp
-    src/runtime_helpers.cpp
-    src/runtime_eval.cpp
-    src/runtime_actions.cpp
-    src/runtime_imports.cpp
-    src/runtime_builtins.cpp
-    src/cabi_exports.cpp
+    src/runtime/core.cpp
+    src/runtime/helpers.cpp
+    src/runtime/eval.cpp
+    src/runtime/actions.cpp
+    src/runtime/imports.cpp
+    src/runtime/builtins.cpp
+    src/runtime/cabi_exports.cpp
   )
   set_target_properties(erelang_shared PROPERTIES OUTPUT_NAME "erelang")
   target_compile_definitions(erelang_shared PRIVATE BUILDING_ERELANG_DLL OB_C_ABI_IMPL)
@@ -300,6 +302,22 @@ if (WIN32)
             "$<TARGET_FILE:erelang_runner>"
             "$<TARGET_FILE_DIR:erelang_runner>/obs.exe"
     COMMENT "Creating legacy runner alias obs.exe"
+  )
+  # Config-agnostic copy so `erelang` on PATH always hits the latest build
+  # (PATH points at build/bin and %LOCALAPPDATA%/Erelang/bin — not Debug/Release).
+  add_custom_command(TARGET erelang_runner POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${_OB_OUTPUT_BIN}"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:erelang_runner>"
+            "${_OB_OUTPUT_BIN}/erelang.exe"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$ENV{LOCALAPPDATA}/Erelang/bin"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:erelang_runner>"
+            "$ENV{LOCALAPPDATA}/Erelang/bin/erelang.exe"
+    COMMAND ${CMAKE_COMMAND}
+      -DBIN_DIR=$ENV{LOCALAPPDATA}/Erelang/bin
+      -P ${CMAKE_SOURCE_DIR}/tools/cmake/ensure-erelang-path.cmake
+    COMMENT "Installing erelang.exe for plain `erelang` on PATH"
   )
 endif()
 if (WIN32 AND NOT MSVC AND ERELANG_BUNDLE_MINGW_RUNTIME)

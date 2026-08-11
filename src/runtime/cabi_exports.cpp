@@ -1,6 +1,7 @@
 #include "erelang/cabi.h"
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <sstream>
 #include <optional>
 #include <unordered_set>
@@ -33,9 +34,32 @@ namespace fs = std::filesystem;
 
 static std::string slurp_text(const fs::path& p) {
     std::ifstream in(p, std::ios::binary);
+    if (!in) {
+        std::cerr << "[erelang] warning: cannot read source file: " << p.string() << "\n";
+        return {};
+    }
     std::ostringstream ss; ss << in.rdbuf();
     return ss.str();
 }
+
+#ifdef _WIN32
+// Path of the current module. Uses a growing buffer so paths longer than
+// MAX_PATH do not get truncated (the fixed-buffer form reads OOB past 260 chars).
+static fs::path current_module_path() {
+    DWORD size = MAX_PATH;
+    for (int attempt = 0; attempt < 16; ++attempt) {
+        std::wstring buffer(size, L'\0');
+        const DWORD n = GetModuleFileNameW(nullptr, &buffer[0], static_cast<DWORD>(buffer.size()));
+        if (n == 0) break;
+        if (n < buffer.size()) {
+            buffer.resize(n);
+            return fs::path(std::move(buffer));
+        }
+        size *= 2;
+    }
+    return {};
+}
+#endif
 
 static std::optional<fs::path> materialize_module_file(const std::string& importName) {
     std::string norm = importName; for (auto& ch : norm) if (ch=='\\') ch = '/';
@@ -111,7 +135,9 @@ static int run_programs(std::vector<Program>& ordered, int argc, const char* arg
     (void)optimize_program(mainProg);
     std::vector<std::string> args;
     args.reserve(argc);
-    for (int i = 0; i < argc; ++i) args.emplace_back(argv[i] ? argv[i] : "");
+    if (argv != nullptr) {
+        for (int i = 0; i < argc; ++i) args.emplace_back(argv[i] ? argv[i] : "");
+    }
     Runtime::set_cli_args(args);
     Runtime rt;
     return rt.run(mainProg);
@@ -121,12 +147,13 @@ extern "C" {
 
 OB_API int ob_run_file(const char* main_file, int argc, const char* argv[], int flags, char** out_error) {
     try {
+        if (!main_file) {
+            set_error_string(out_error, "ob_run_file: main_file is null");
+            return 1;
+        }
         fs::path exeP;
 #ifdef _WIN32
-        {
-            wchar_t buf[MAX_PATH]; DWORD n = GetModuleFileNameW(nullptr, buf, MAX_PATH);
-            exeP = fs::path(std::wstring(buf, n));
-        }
+        exeP = current_module_path();
 #endif
         fs::path buildDir = exeP.empty() ? fs::current_path() : exeP.parent_path();
         std::optional<fs::path> projectRoot; if (!buildDir.empty()) projectRoot = buildDir.parent_path();
@@ -179,6 +206,10 @@ OB_API int ob_collect_files(const char* main_file,
                             void* user,
                             char** out_error) {
     try {
+        if (!main_file) {
+            set_error_string(out_error, "ob_collect_files: main_file is null");
+            return 1;
+        }
         std::unordered_set<std::string> visited;
         auto load = [&](auto&& self, const fs::path& f) -> void {
             fs::path ap = fs::absolute(f); std::string key = ap.string(); if (visited.count(key)) return; visited.insert(key);
@@ -211,6 +242,10 @@ OB_API int ob_run_embedded(const char* main_file,
                            int flags,
                            char** out_error) {
     try {
+        if (!main_file) {
+            set_error_string(out_error, "ob_run_embedded: main_file is null");
+            return 1;
+        }
         std::unordered_map<std::string, std::string> embedded;
         for (int i = 0; i < file_count; ++i) {
             if (paths && contents && paths[i] && contents[i]) {
@@ -280,7 +315,7 @@ OB_API int ob_run_embedded(const char* main_file,
             ordered.push_back(std::move(prog));
         };
 
-        load_prog(main_file ? main_file : "");
+        load_prog(main_file);
         return run_programs(ordered, argc, argv, flags, out_error);
     } catch (const std::exception& ex) {
         set_error_string(out_error, ex.what());

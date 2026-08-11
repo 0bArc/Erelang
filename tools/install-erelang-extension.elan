@@ -2,27 +2,27 @@
 #include <builtin/fs> as fs
 #include <builtin/path> as path
 
-public action die(msg) {
+public action die(string msg) {
   stderr_print(msg);
   exit(1);
 }
 
-public action must_ok(code, msg) {
+public action must_ok(string code, string msg) {
   if (code != "0") {
     die(msg);
   }
 }
 
 public action main {
-  let root = env("ERELANG_REPO_ROOT");
+  string root = env("ERELANG_REPO_ROOT");
   if (string.len(root) == 0) {
     root = fs.cwd();
   }
 
-  let marker = path.join(root, "erevos-language", "package.json");
+  string marker = path.join(root, "erevos-language", "package.json");
   if (!fs.exists(marker)) {
-    let parent = path.join(root, "..");
-    let marker2 = path.join(parent, "erevos-language", "package.json");
+    string parent = path.join(root, "..");
+    string marker2 = path.join(parent, "erevos-language", "package.json");
     if (fs.exists(marker2)) {
       root = parent;
     } else {
@@ -30,9 +30,9 @@ public action main {
     }
   }
 
-  let extDir = path.join(root, "erevos-language");
-  let vsixPath = path.join(extDir, "erelang_language.vsix");
-  let extId = "localdev.erelang-language";
+  string extDir = path.join(root, "erevos-language");
+  string vsixPath = path.join(extDir, "erelang_language.vsix");
+  string extId = "localdev.erelang-language";
 
   print "repo={root}";
   print "ext={extDir}";
@@ -40,7 +40,7 @@ public action main {
   chdir(extDir);
   exec("cmd /c del /q erelang-language-*.vsix 2>nul");
 
-  let nm = path.join(extDir, "node_modules");
+  string nm = path.join(extDir, "node_modules");
   if (!fs.exists(nm)) {
     print "npm install...";
     must_ok(exec("cmd /c npm install"), "npm install failed");
@@ -56,7 +56,7 @@ public action main {
     die("VSIX missing after package");
   }
 
-  let codeCmd = path.join(env("LOCALAPPDATA"), "Programs", "Microsoft VS Code", "bin", "code.cmd");
+  string codeCmd = path.join(env("LOCALAPPDATA"), "Programs", "Microsoft VS Code", "bin", "code.cmd");
   if (!fs.exists(codeCmd)) {
     codeCmd = path.join(env("LOCALAPPDATA"), "Programs", "cursor", "bin", "cursor.cmd");
   }

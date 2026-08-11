@@ -2,6 +2,7 @@
 #include "erelang/runtime_imports.hpp"
 #include <algorithm>
 #include <cctype>
+#include <functional>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
@@ -144,6 +145,38 @@ std::string infer_switch_case_type(const std::string& literal) {
     return "unknown";
 }
 
+// Mark variables referenced inside a string literal's `{...}` interpolation
+// as used so TC120 does not report false positives. Interpolated expressions
+// are evaluated at runtime (Runtime::parse_interpolation_expr); here we
+// extract word tokens that resolve to a declared identifier and mark them.
+void mark_interpolation_uses(const std::string& text, CheckContext& ctx) {
+    if (!ctx.scopes) return;
+    std::size_t i = 0;
+    const std::size_t n = text.size();
+    while (i < n) {
+        const std::size_t open = text.find('{', i);
+        if (open == std::string::npos) break;
+        const std::size_t close = text.find('}', open + 1);
+        if (close == std::string::npos) break;
+        std::size_t j = open + 1;
+        while (j < close) {
+            const unsigned char c = static_cast<unsigned char>(text[j]);
+            if (std::isalpha(c) || c == '_') {
+                const std::size_t start = j;
+                while (j < close &&
+                       (std::isalnum(static_cast<unsigned char>(text[j])) || text[j] == '_')) {
+                    ++j;
+                }
+                const std::string word = text.substr(start, j - start);
+                if (VarInfo* v = ctx.scopes->lookup(word)) v->used = true;
+            } else {
+                ++j;
+            }
+        }
+        i = close + 1;
+    }
+}
+
 } // namespace
 
 std::string format_diagnostic(const Diagnostic& d) {
@@ -165,7 +198,10 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
         using T = std::decay_t<decltype(node)>;
         if constexpr (std::is_same_v<T, ExprNumber>) inferred = {node.isFloatLiteral ? "double" : "int"};
         else if constexpr (std::is_same_v<T, ExprBool>) inferred = {"bool"};
-        else if constexpr (std::is_same_v<T, ExprString>) inferred = {"string"};
+        else if constexpr (std::is_same_v<T, ExprString>) {
+            inferred = {"string"};
+            mark_interpolation_uses(node.v, ctx);
+        }
         else if constexpr (std::is_same_v<T, ExprNull>) inferred = {"pointer"};
         else if constexpr (std::is_same_v<T, ExprIdent>) {
             if (ctx.scopes) {
@@ -188,7 +224,7 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
                     }
                     if (!resolvedEnum) {
                         DiagBuilder(result_, Severity::Error, "Use before declaration: " + node.name, "TC010", ctx.actionName())
-                            .hint("Add `let " + node.name + " = ...;` above this line, or import the symbol")
+                            .hint("Add `" + node.name + " = ...;` above this line, or import the symbol")
                             .emit();
                     }
                 }
@@ -255,46 +291,50 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
             (void)check(node.object, ctx);
             (void)check(node.index, ctx);
             inferred = {"unknown"};
-        } else if constexpr (std::is_same_v<T, FunctionCallExpr>) {
-            if (node.collectionLiteral && node.name == "list_new") {
-                std::string elementType = "unknown";
-                for (const auto& arg : node.args) {
-                    elementType = merge_inferred_type(elementType, check(arg, ctx).name);
-                }
-                if (elementType.empty() || elementType == "unknown") elementType = "any";
-                inferred = {"array<" + elementType + ">"};
-                return;
-            }
-            if (node.collectionLiteral && node.name == "dict_new") {
-                std::string valueType = "unknown";
-                for (std::size_t i = 0; i < node.args.size(); ++i) {
-                    const auto argType = check(node.args[i], ctx).name;
-                    if (i % 2 == 1) {
-                        valueType = merge_inferred_type(valueType, argType);
-                    }
-                }
-                if (valueType.empty() || valueType == "unknown") valueType = "any";
-                inferred = {"map<string," + valueType + ">"};
-                return;
-            }
-            static const std::unordered_set<std::string> removedCollectionBuiltins = {
-                "list_new", "list_push", "list_get", "list_len", "list_join", "list_clear", "list_remove_at",
-                "dict_new", "dict_set", "dict_get", "dict_has", "dict_keys", "dict_values", "dict_get_or",
-                "dict_remove", "dict_clear", "dict_size", "dict_merge", "dict_clone", "dict_items", "dict_entries",
-                "dict_set_path", "dict_get_path", "dict_has_path", "dict_remove_path",
-                "hashmap_new", "hashmap_set", "hashmap_put", "hashmap_get", "hashmap_has", "hashmap_contains",
-                "hashmap_get_or", "hashmap_get_or_default", "hashmap_remove", "hashmap_clear", "hashmap_size",
-                "hashmap_keys", "hashmap_values", "hashmap_merge"
-            };
-            if (removedCollectionBuiltins.count(node.name) > 0) {
-                for (const auto& arg : node.args) {
-                    check(arg, ctx);
-                }
+        } else if constexpr (std::is_same_v<T, ListLiteralExpr>) {
+            if (node.elements.empty()) {
                 DiagBuilder(result_, Severity::Error,
-                    "Collection helper removed in manual mode: " + node.name,
-                    "TC141", ctx.actionName()).emit();
-                inferred = {"unknown"};
+                    "Empty array literal `[]` is not allowed — provide at least one element or use a typed declaration with a default value",
+                    "TC055", ctx.actionName())
+                    .hint("Example: `Array<string> items = [\"first\"];` — empty collections must be initialized with values")
+                    .emit();
+                inferred = {"array<any>"};
                 return;
+            }
+            std::string elementType = "unknown";
+            for (const auto& elem : node.elements) {
+                elementType = merge_inferred_type(elementType, check(elem, ctx).name);
+            }
+            if (elementType.empty() || elementType == "unknown") elementType = "any";
+            inferred = {"array<" + elementType + ">"};
+            return;
+        } else if constexpr (std::is_same_v<T, DictLiteralExpr>) {
+            if (node.entries.empty()) {
+                DiagBuilder(result_, Severity::Error,
+                    "Empty map literal `{}` is not allowed — provide at least one key-value pair",
+                    "TC056", ctx.actionName())
+                    .hint("Example: `Map<string,string> config = {\"key\": \"value\"};`")
+                    .emit();
+                inferred = {"map<string,any>"};
+                return;
+            }
+            std::string valueType = "unknown";
+            for (std::size_t i = 0; i < node.entries.size(); ++i) {
+                const auto entryType = check(node.entries[i], ctx).name;
+                if (i % 2 == 1) {
+                    valueType = merge_inferred_type(valueType, entryType);
+                }
+            }
+            if (valueType.empty() || valueType == "unknown") valueType = "any";
+            inferred = {"map<string," + valueType + ">"};
+            return;
+        } else if constexpr (std::is_same_v<T, FunctionCallExpr>) {
+
+            // Walk arguments so identifiers inside them are marked used (TC120)
+            // and argument expressions are type-checked. The collection-literal
+            // and removed-builtin branches above handle their own args.
+            for (const auto& arg : node.args) {
+                (void)check(arg, ctx);
             }
 
             // action or builtin
@@ -316,6 +356,15 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
             const Action* resolved = resolve_action(node.name);
             auto aIt = resolved ? tc_.actions_.find(resolved->name) : tc_.actions_.end();
             if (aIt != tc_.actions_.end()) {
+                tc_.actionUsage_[aIt->second->name].referenced = true;
+                if (aIt->second->params.size() != node.args.size()) {
+                    DiagBuilder(result_, Severity::Error,
+                        "Param count mismatch calling action " + node.name + ": got " + std::to_string(node.args.size()) +
+                        ", expected " + std::to_string(aIt->second->params.size()),
+                        "TC020", ctx.actionName())
+                        .hint("Declare params in `action " + node.name + "(...)` or pass the correct number of arguments")
+                        .emit();
+                }
                 inferred = { aIt->second->returnType.empty()?"void":aIt->second->returnType };
             } else {
                 std::string builtinLookup = node.name;
@@ -323,7 +372,28 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
                     builtinLookup = *mapped;
                 }
                 auto bIt = tc_.builtins_.find(builtinLookup);
-                inferred = bIt==tc_.builtins_.end()?TypeInfo{"unknown"}:TypeInfo{bIt->second.returnType};
+                if (bIt == tc_.builtins_.end()) {
+                    // Unknown calls in expression position must surface as TC001
+                    // instead of silently inferring "unknown". Dotted/qualified
+                    // names resolve at runtime (entity/struct methods), so only
+                    // flag plain identifiers.
+                    if (node.name.find('.') == std::string::npos &&
+                        node.name.find("::") == std::string::npos) {
+                        emit_unknown_call(result_, node.name, ctx.actionName());
+                    }
+                    inferred = {"unknown"};
+                } else {
+                    auto& bi = bIt->second;
+                    if ((int)node.args.size() < bi.minParams || (bi.maxParams >= 0 && (int)node.args.size() > bi.maxParams)) {
+                        DiagBuilder(result_, Severity::Error,
+                            "Param count mismatch calling builtin " + node.name + ": got " + std::to_string(node.args.size()) +
+                            ", expected " + format_param_range(bi.minParams, bi.maxParams),
+                            "TC021", ctx.actionName())
+                            .hint("Builtin signature: " + node.name + "(" + format_param_range(bi.minParams, bi.maxParams) + ")")
+                            .emit();
+                    }
+                    inferred = { bIt->second.returnType };
+                }
             }
         }
     }, e->node);
@@ -393,21 +463,6 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
             } else if (tc_.externActions_.count(stmt.name)) {
                 // extern action declared: allow unresolved runtime binding
             } else {
-                static const std::unordered_set<std::string> removedCollectionBuiltins = {
-                    "list_new", "list_push", "list_get", "list_len", "list_join", "list_clear", "list_remove_at",
-                    "dict_new", "dict_set", "dict_get", "dict_has", "dict_keys", "dict_values", "dict_get_or",
-                    "dict_remove", "dict_clear", "dict_size", "dict_merge", "dict_clone", "dict_items", "dict_entries",
-                    "dict_set_path", "dict_get_path", "dict_has_path", "dict_remove_path",
-                    "hashmap_new", "hashmap_set", "hashmap_put", "hashmap_get", "hashmap_has", "hashmap_contains",
-                    "hashmap_get_or", "hashmap_get_or_default", "hashmap_remove", "hashmap_clear", "hashmap_size",
-                    "hashmap_keys", "hashmap_values", "hashmap_merge"
-                };
-                const bool removedCollectionBuiltin = removedCollectionBuiltins.count(stmt.name) > 0;
-                if (removedCollectionBuiltin) {
-                    DiagBuilder(result_, Severity::Error,
-                        "Collection helper removed in manual mode: " + stmt.name,
-                        "TC141", ctx.actionName()).emit();
-                }
                 bool externResolved = false;
                 if (stmt.name.find("::") == std::string::npos) {
                     const std::string suffix = "::" + stmt.name;
@@ -424,7 +479,7 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                     }
                     externResolved = !foundExtern.empty();
                 }
-                if (!externResolved && !removedCollectionBuiltin) {
+                if (!externResolved) {
                     std::string builtinLookup = stmt.name;
                     if (auto mapped = resolve_builtin_module_alias_call(ctx.program, stmt.name)) {
                         builtinLookup = *mapped;
@@ -498,7 +553,7 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                     DiagBuilder(result_, Severity::Error,
                         "Use before declaration: " + stmt.objectName,
                         "TC010", ctx.actionName())
-                        .hint("Declare with `let " + stmt.objectName + " = ...;` before use, or check import alias spelling")
+                        .hint("Declare `" + stmt.objectName + " = ...;` before use, or check import alias spelling")
                         .emit();
                 }
             }
@@ -539,6 +594,8 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                     expected = "double";
                 } else if (decl == "bool") {
                     expected = "bool";
+                } else if (decl == "pointer") {
+                    expected = "pointer";
                 } else if (decl == "string" || decl == "str" || decl == "char") {
                     expected = "string";
                 } else if (decl == "array") {
@@ -641,11 +698,14 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
             if (!stmt.isMember) {
                 auto* v = scopes.lookup(stmt.varOrField);
                 if (!v) {
-                    DiagBuilder(result_, Severity::Error, "Assign to undeclared variable: " + stmt.varOrField, "TC050", ctx.actionName())
-                        .hint("Declare first: `let " + stmt.varOrField + " = ...;`")
+                    DiagBuilder(result_, Severity::Error,
+                        "Variable '" + stmt.varOrField + "' must be declared with an explicit type before use",
+                        "TC053", ctx.actionName())
+                        .hint("Use a typed declaration: `int " + stmt.varOrField + " = ...;` or `string " + stmt.varOrField + " = ...;`")
                         .emit();
-                }
-                else {
+                    VarInfo vi; vi.type = expr_.check(stmt.value, ctx); vi.isConst = false; vi.assigned = true;
+                    scopes.declare(stmt.varOrField, vi);
+                } else {
                     if (v->isConst) DiagBuilder(result_, Severity::Error, "Cannot assign to const variable: " + stmt.varOrField, "TC051", ctx.actionName()).emit();
                     auto valT = expr_.check(stmt.value, ctx);
                     auto assign_compatible = [&](const std::string& target, const std::string& source) {
@@ -661,7 +721,7 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                         DiagBuilder(result_, Severity::Error,
                             "Assignment type mismatch on " + stmt.varOrField + ": variable is " + v->type.name + ", value is " + valT.name,
                             "TC052", ctx.actionName())
-                            .hint("Cast/coerce with toint/tostr/tobool, or change declared type with `let " + stmt.varOrField + ": " + valT.name + " = ...`")
+                            .hint("Cast/coerce with toint/tostr/tobool, or redeclare with typed form: `" + valT.name + " " + stmt.varOrField + " = ...;`")
                             .emit();
                     }
                     v->assigned = true;
@@ -703,7 +763,14 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
             check_block(*stmt.body, inner, scopes, retType);
         } else if constexpr (std::is_same_v<T, ForInStmt>) {
             auto guard = scopes.push();
-            VarInfo vi; vi.assigned=true; scopes.declare(stmt.var, vi);
+            if (stmt.varType.empty()) {
+                DiagBuilder(result_, Severity::Error,
+                    "Loop variable '" + stmt.var + "' must have an explicit type annotation",
+                    "TC054", ctx.actionName())
+                    .hint("Add a type before the variable name — e.g. `for (string item : items)` or `for (int n : nums)`")
+                    .emit();
+            }
+            VarInfo vi; vi.type = {stmt.varType.empty() ? "unknown" : stmt.varType}; vi.assigned=true; scopes.declare(stmt.var, vi);
             if (stmt.valueVar) {
                 VarInfo vv; vv.assigned=true; scopes.declare(*stmt.valueVar, vv);
             }
@@ -736,8 +803,8 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                 check_block(*c.body, ctx, scopes, retType);
             }
             if (stmt.defaultBlk) { auto guardD = scopes.push(); check_block(*stmt.defaultBlk, ctx, scopes, retType); }
-        } else if constexpr (std::is_same_v<T, ParallelStmt>) {
-            auto guardP = scopes.push(); check_block(stmt.body, ctx, scopes, retType);
+        } else if constexpr (std::is_same_v<T, std::shared_ptr<ParallelStmt>>) {
+            if (stmt) { auto guardP = scopes.push(); check_block(stmt->body, ctx, scopes, retType); }
         } else if constexpr (std::is_same_v<T, UnsafeStmt>) {
             auto guardU = scopes.push();
             check_block(*stmt.body, ctx, scopes, retType);
@@ -809,13 +876,59 @@ void TypeChecker::pass_check_program(const Program& program, TCResult& out) {
         DiagBuilder(out, Severity::Error, "No run target set (expected action main or run directive)", "TC111", "program").emit();
     }
 
+    // Walk a block recursively to check if any ReturnStmt has a value expression.
+    std::function<bool(const Block&)> block_has_value_return = [&](const Block& blk) -> bool {
+        for (const auto& s : blk.stmts) {
+            if (const auto* r = std::get_if<ReturnStmt>(&s)) {
+                if (r->value) return true;
+            } else if (const auto* ifst = std::get_if<IfStmt>(&s)) {
+                if (ifst->thenBlk && block_has_value_return(*ifst->thenBlk)) return true;
+                if (ifst->elseBlk && block_has_value_return(*ifst->elseBlk)) return true;
+            } else if (const auto* wh = std::get_if<WhileStmt>(&s)) {
+                if (block_has_value_return(*wh->body)) return true;
+            } else if (const auto* fi = std::get_if<ForInStmt>(&s)) {
+                if (block_has_value_return(*fi->body)) return true;
+            } else if (const auto* fo = std::get_if<ForStmt>(&s)) {
+                if (block_has_value_return(*fo->body)) return true;
+            } else if (const auto* tc = std::get_if<TryCatchStmt>(&s)) {
+                if (block_has_value_return(*tc->tryBlk)) return true;
+                if (block_has_value_return(*tc->catchBlk)) return true;
+            }
+        }
+        return false;
+    };
+
     ExprChecker expr(*this, out); StmtChecker stmt(*this, expr, out);
     for (auto& a : program.actions) {
         CheckContext ctx; ctx.program=&program; ctx.currentAction=&a;
         ScopeManager scopes; // base scope
         ctx.scopes = &scopes;
+        // Warn if the action has return-value statements but no declared return type.
+        if (a.returnType.empty() && block_has_value_return(a.body)) {
+            DiagBuilder(out, Severity::Error,
+                "Action '" + a.name + "' returns a value but has no declared return type",
+                "TC058", a.name)
+                .hint("Add a return type after the parameter list: `public action " + a.name + "(...): int { ... }`")
+                .emit();
+        }
         // seed params
-        for (auto& p : a.params) { VarInfo vi; vi.type={p.type.empty()?"unknown":p.type}; vi.assigned=true; scopes.declare(p.name, vi); }
+        for (auto& p : a.params) {
+            if (p.type.empty()) {
+                DiagBuilder(out, Severity::Error,
+                    "Parameter '" + p.name + "' in action '" + a.name + "' has no type annotation",
+                    "TC057", a.name)
+                    .hint("Add a type: `" + a.name + "(" + p.name + ": int)` or `" + a.name + "(int " + p.name + ")`")
+                    .emit();
+            }
+            VarInfo vi; vi.type={p.type.empty()?"unknown":p.type}; vi.assigned=true; scopes.declare(p.name, vi);
+        }
+        // Register globals with explicit type annotations so action bodies can reference them
+        for (auto& g : program.globals) {
+            if (!g.typeName.empty()) {
+                VarInfo gi; gi.type = {g.typeName}; gi.assigned = true; gi.used = true;
+                scopes.declare(g.name, gi);
+            }
+        }
         auto rf = stmt.check_block(a.body, ctx, scopes, a.returnType.empty()?"void":a.returnType);
         for (auto& frame : scopes.all()) for (auto& kv : frame) if (!kv.second.used) DiagBuilder(out, Severity::Warning, "Unused variable: " + kv.first, "TC120", a.name).emit();
         if (!returns_void(a) && rf != ReturnFlow::AlwaysReturn) DiagBuilder(out, Severity::Error, "Missing return in action declared to return " + a.returnType, "TC121", a.name).emit();
@@ -829,6 +942,9 @@ void TypeChecker::finalize_unused(const Program& program, TCResult& out) {
 }
 
 TCResult TypeChecker::check(const Program& program) {
+    // builtins_ must not leak across check() calls: a previous program's module
+    // imports would otherwise grant builtins (e.g. system.cmd) to this program.
+    builtins_.clear();
     init_builtins();
     register_imported_module_builtins(program);
     TCResult r;
@@ -857,6 +973,15 @@ void TypeChecker::register_imported_module_builtins(const Program& program) {
         add("network.debug.last", 0, 0, "string");
         add("network.debug.clear", 0, 0, "string");
         add("network.debug.log_tail", 0, 1, "string");
+        add("http_get_auth", 2, 2, "string");
+        add("http_post_auth", 4, 4, "string");
+    }
+    if (program_imports_module(&program, "builtin/websocket") || program_imports_module(&program, "builtin/ws")) {
+        add("ws_connect", 1, 1, "int");
+        add("ws_send", 2, 2, "bool");
+        add("ws_recv", 1, 1, "string");
+        add("ws_recv_timeout", 2, 2, "string");
+        add("ws_close", 1, 1, "void");
     }
     if (program_imports_module(&program, "builtin/regex")) {
         add("regex_match", 2, 2, "bool");
@@ -921,8 +1046,8 @@ void TypeChecker::register_imported_module_builtins(const Program& program) {
         add("perm_has", 1, 1, "bool"); add("perm_list", 0, 0, "string");
     }
     if (program_imports_module(&program, "builtin/system")) {
-        add("system.cmd", 1, 1, "int");
-        add("system.execute", 1, 1, "int");
+        add("system.cmd", 1, 2, "string");
+        add("system.execute", 1, 3, "int");
         add("system.output", 0, 0, "string");
         add("system.last_exit", 0, 0, "int");
         add("system.ip.flush", 0, 0, "string");
@@ -936,6 +1061,8 @@ void TypeChecker::register_imported_module_builtins(const Program& program) {
         add("read_text", 1, 1, "string"); add("write_text", 2, 2, "void"); add("append_text", 2, 2, "void");
         add("file_exists", 1, 1, "bool"); add("mkdirs", 1, 1, "void"); add("copy_file", 2, 2, "bool");
         add("move_file", 2, 2, "bool"); add("delete_file", 1, 1, "bool"); add("list_files", 1, 1, "unknown");
+        add("load_elan", 1, 1, "string"); add("load_elan_dir", 1, 1, "unknown");
+        add("call_action", 1, -1, "any");
         add("cwd", 0, 0, "string"); add("chdir", 1, 1, "bool");
         add("path_join", 1, -1, "string"); add("path_dirname", 1, 1, "string");
         add("path_basename", 1, 1, "string"); add("path_ext", 1, 1, "string");
@@ -952,26 +1079,42 @@ void TypeChecker::register_imported_module_builtins(const Program& program) {
 }
 
 void TypeChecker::init_builtins() {
-    if (!builtins_.empty()) return;
     auto add=[&](std::string n,int minP,int maxP,std::string rt){ builtins_[std::move(n)] = BuiltinInfo{minP,maxP,rt}; };
     add("now_ms",0,0,"int");
     add("env",1,1,"string");
+    add("dotenv_load",0,1,"int");
     add("rand_int",0,2,"int");
     add("uuid",0,0,"string");
     add("args_count",0,0,"int");
     add("args_get",1,1,"string");
     add("read_line",0,0,"string");
+    add("read_text",1,1,"string");
     add("input",0,1,"string");
     add("stderr_print",1,1,"void");
     add("exec",1,1,"int");
     add("spawn",1,1,"int");
     add("exit",1,1,"void");
     add("toint",1,1,"int");
+    add("toInt",1,1,"int");
     add("tostr",1,1,"string");
+    add("toString",1,1,"string");
     add("tofloat",1,1,"double");
     add("tobool",1,1,"bool");
+    add("__builtin_sizeof",1,1,"int");
+    add("__builtin_alignof",1,1,"int");
+    add("__builtin_typeof",1,1,"string");
+    add("__builtin_decltype",1,1,"string");
+    add("__builtin_offsetof",2,2,"int");
+    add("__builtin_is_base_of",2,2,"bool");
+    add("dynamic_cast",2,2,"unknown");
+    add("reinterpret_cast",2,2,"unknown");
+    add("bit_cast",2,2,"unknown");
     add("to_json",1,1,"string");
     add("from_json",1,1,"map<any,any>");
+    // Dynamic module loading (JS-style require) — always available
+    add("load_elan",1,1,"string");
+    add("load_elan_dir",1,1,"unknown");
+    add("call_action",1,-1,"any");
     add("string.len",1,1,"int");
     add("string.strip",1,1,"string");
     add("string.lstrip",1,1,"string");

@@ -1,0 +1,23 @@
+@erelang
+#include <builtin/threads> as th
+
+public action background_task {
+    sleep 1000ms;
+    print "background work complete";
+}
+
+public action main {
+    string tid = thread_run("background_task");
+    print "launched thread id: {tid}";
+    
+    print "waiting for thread to finish...";
+    thread_join(tid);
+    
+    string active = thread_count();
+    print "active threads remaining: {active}";
+    
+    thread_gc();
+    print "garbage collection complete";
+}
+
+run main;

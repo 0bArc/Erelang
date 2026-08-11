@@ -3,7 +3,7 @@
 // Pointer / reference demo
 public action main {
     int score = 7;
-    let score_ptr = &score;
+    pointer score_ptr = &score;
 
     print "score={score}";
     print "score_ptr={score_ptr}";

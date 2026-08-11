@@ -23,7 +23,8 @@ public action main {
   Array<int> nums = [1,2,3];
   Map<string, any> m = {"k": 9};
 
-  let c = new Counter();
+
+  Counter c = new Counter();
   c.init(10);
 
   try {

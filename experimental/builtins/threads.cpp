@@ -77,6 +77,12 @@ struct ThreadInfo {
 static std::unordered_map<int, std::unique_ptr<ThreadInfo>> g_threads; 
 static std::atomic<int> g_nextThread{1};
 static std::mutex g_threadMutex;
+// Upper bound on concurrently registered workers (policy system removed).
+static constexpr int kMaxWorkerThreads = 512;
+// Threads that were force-removed while still running are parked here and
+// joined by park_all() before run() returns, so no worker can outlive the
+// Program/Runtime it captured.
+static std::vector<std::thread> g_parkedThreads;
 
 namespace threadmgr {
     static inline std::string handle(int id) noexcept { return "thread:" + std::to_string(id); }
@@ -94,12 +100,50 @@ namespace threadmgr {
         return false;
     }
 
+    // Move a record's joinable native handle into g_parkedThreads so erasing
+    // the record cannot destroy a joinable std::thread (std::terminate).
+    // Caller must hold g_threadMutex. The parked threads are joined by
+    // park_all() before Runtime::run() returns.
+    static void retire_locked(std::unordered_map<int, std::unique_ptr<ThreadInfo>>::iterator it) {
+        ThreadInfo* ti = it->second.get();
+        if (ti && ti->th.joinable()) g_parkedThreads.push_back(std::move(ti->th));
+        g_threads.erase(it);
+    }
+
+    // Join every remaining worker (including parked force-removed ones) so no
+    // thread can outlive the Program/Runtime. Called by Runtime::run() at exit.
+    // Loops until the table is drained because a still-running worker can spawn
+    // new threads while we are joining its predecessors.
+    void park_all() noexcept {
+        for (;;) {
+            std::vector<std::thread> toJoin;
+            {
+                std::lock_guard<std::mutex> lg(g_threadMutex);
+                for (auto it = g_threads.begin(); it != g_threads.end(); ) {
+                    ThreadInfo* ti = it->second.get();
+                    if (ti && ti->th.joinable()) toJoin.push_back(std::move(ti->th));
+                    it = g_threads.erase(it);
+                }
+                for (auto& th : g_parkedThreads) if (th.joinable()) toJoin.push_back(std::move(th));
+                g_parkedThreads.clear();
+            }
+            if (toJoin.empty()) {
+                std::lock_guard<std::mutex> lg(g_threadMutex);
+                if (g_threads.empty()) break;  // fully drained
+                continue;
+            }
+            for (auto& th : toJoin) {
+                if (th.joinable()) { try { th.join(); } catch (...) {} }
+            }
+        }
+    }
+
     // Remove finished detached threads (they cannot be joined)
     void gc_detached() noexcept {
         std::lock_guard<std::mutex> lg(g_threadMutex);
         for (auto it = g_threads.begin(); it != g_threads.end(); ) {
             ThreadInfo* ti = it->second.get();
-            if (ti && ti->detached && (ti->state.load()==ThreadState::DetachedDone)) it = g_threads.erase(it); else ++it;
+            if (ti && ti->detached && (ti->state.load()==ThreadState::DetachedDone)) retire_locked(it); else ++it;
         }
     }
 
@@ -107,7 +151,7 @@ namespace threadmgr {
         std::lock_guard<std::mutex> lg(g_threadMutex);
         for (auto it = g_threads.begin(); it != g_threads.end(); ) {
             ThreadState s = it->second->state.load();
-            if (s == ThreadState::DetachedDone || s == ThreadState::Joined) it = g_threads.erase(it); else ++it;
+            if (s == ThreadState::DetachedDone || s == ThreadState::Joined) retire_locked(it); else ++it;
         }
     }
 
@@ -120,7 +164,8 @@ namespace threadmgr {
         if (!found) { err = "action_not_found"; return -1; }
         {
             std::scoped_lock lg(g_threadMutex);
-            if ((int)g_threads.size() >= PolicyManager::instance().policy().maxThreads) { err = "max_threads"; return -1; }
+            // Policy system removed: cap concurrent worker threads to avoid unbounded growth.
+            if ((int)g_threads.size() >= kMaxWorkerThreads) { err = "max_threads"; return -1; }
         }
     if (detachRequest && !PolicyManager::instance().is_allowed("thread_detach")) { err = "detach_not_allowed"; return -1; }
         int id = g_nextThread++;
@@ -135,7 +180,6 @@ namespace threadmgr {
                     // Thread naming disabled on MinGW to avoid SetThreadDescription symbol issues.
 #endif // _WIN32
                     if (rt && prog) {
-                        // Copy of program action name already stored; assuming Runtime outlives threads.
                         rt->run_single_action(*prog, raw->action);
                     }
                 } catch (...) { /* swallow */ }
@@ -151,9 +195,10 @@ namespace threadmgr {
             });
         } catch (...) {
             err = "spawn_failed"; return -1; }
-        if (detachRequest) {
-            try { raw->th.detach(); } catch (...) { err = "detach_failed"; return -1; }
-        }
+        // NOTE: the underlying std::thread is intentionally never detached here.
+        // The record stays joinable so park_all() can join every worker before
+        // Runtime::run() returns; a truly detached std::thread would outlive the
+        // Program and dereference a dangling pointer.
         {
             std::scoped_lock lg(g_threadMutex);
             g_threads[id] = std::move(ti);
@@ -251,16 +296,20 @@ namespace threadmgr {
     }
 
     void wait_all() {
-        std::vector<ThreadInfo*> toJoin;
+        std::vector<std::thread> toJoin;
         {
             std::lock_guard<std::mutex> lg(g_threadMutex);
-            for (auto & kv : g_threads) if (!kv.second->detached) toJoin.push_back(kv.second.get());
+            for (auto& kv : g_threads) {
+                ThreadInfo* ti = kv.second.get();
+                if (!ti->detached && ti->th.joinable()) {
+                    toJoin.push_back(std::move(ti->th));
+                    auto prev = ti->state.load();
+                    if (prev == ThreadState::Running || prev == ThreadState::Done) ti->state.store(ThreadState::Joined);
+                }
+            }
         }
-        for (auto* ti : toJoin) {
-            if (ti->th.joinable()) { try { ti->th.join(); } catch (...) {} }
-            auto prev = ti->state.load();
-            if (prev==ThreadState::Running) ti->state.store(ThreadState::Joined);
-            else if (prev==ThreadState::Done) ti->state.store(ThreadState::Joined);
+        for (auto& th : toJoin) {
+            if (th.joinable()) { try { th.join(); } catch (...) {} }
         }
     }
 
@@ -274,22 +323,34 @@ namespace threadmgr {
         ThreadInfo* ti = it->second.get();
         auto st = ti->state.load();
         if (st == ThreadState::Joining) return "error:joining";
-        if (!force) {
-            if (ti->detached) {
-                if (st != ThreadState::DetachedDone) return "error:still_running"; // wait until finished unless force
-            } else {
-                // attached
-                if (ti->th.joinable()) return "error:still_joinable"; // would std::terminate if destroyed
-            }
+        if (force) {
+            // Cannot kill a running worker; retire the record and let park_all()
+            // join the native handle before run() returns. This keeps the thread
+            // alive (no std::terminate) while guaranteeing it cannot outlive the
+            // Program/Runtime it captured.
+            retire_locked(it);
+            return "forced";
+        }
+        if (ti->detached) {
+            if (st != ThreadState::DetachedDone) return "error:still_running"; // wait until finished unless force
+        } else {
+            // attached
+            if (ti->th.joinable()) return "error:still_joinable"; // would std::terminate if destroyed
         }
         g_threads.erase(it);
-        return force ? "forced" : std::string();
+        return std::string();
     }
 }
 
+// Register the park hook once so Runtime::run() joins all workers at exit.
+namespace {
+struct ThreadParkHookRegistrar {
+    ThreadParkHookRegistrar() { Runtime::set_worker_park_hook(&threadmgr::park_all); }
+};
+} // namespace
+
 static std::string threads_dispatch(Runtime* rt, const std::string& name, const std::vector<std::string>& argv) {
     auto argS = [&](size_t i){ return i<argv.size()?argv[i]:std::string(); };
-
     if (name == "thread_run") {
         std::string err; bool detach = (argv.size() > 1 && argv[1] == "detach");
         std::string action = argS(0);

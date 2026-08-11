@@ -30,10 +30,23 @@ std::filesystem::path locate_executable_root(int argc, char** argv) {
     namespace fs = std::filesystem;
     fs::path exeDir;
 #ifdef _WIN32
-    wchar_t buffer[MAX_PATH];
-    const DWORD len = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
-    if (len > 0) {
-        exeDir = fs::path(std::wstring(buffer, len)).parent_path();
+    std::wstring modulePath;
+    {
+        DWORD size = MAX_PATH;
+        for (int attempt = 0; attempt < 16; ++attempt) {
+            std::wstring buffer(size, L'\0');
+            const DWORD n = GetModuleFileNameW(nullptr, &buffer[0], static_cast<DWORD>(buffer.size()));
+            if (n == 0) break;
+            if (n < buffer.size()) {
+                buffer.resize(n);
+                modulePath = std::move(buffer);
+                break;
+            }
+            size *= 2;
+        }
+    }
+    if (!modulePath.empty()) {
+        exeDir = fs::path(modulePath).parent_path();
     }
 #endif
     if (exeDir.empty()) {
@@ -59,11 +72,11 @@ int main(int argc, char** argv) {
     using namespace erelang;
     namespace fs = std::filesystem;
 
-    const fs::path exeDir = locate_executable_root(argc, argv);
+#ifdef _WIN32
+    SetConsoleOutputCP(CP_UTF8);
+#endif
 
-    if (argc >= 2) {
-        const std::string_view command{argv[1]};
-    }
+    const fs::path exeDir = locate_executable_root(argc, argv);
 
     if (argc < 2) {
         std::cerr << "Usage: obc <file> [more ...]\n"
@@ -277,8 +290,8 @@ int main(int argc, char** argv) {
                 suffix = ".eir";
             } else {
                 X64Codegen codegen;
-                artifact = codegen.emit_nasm_win64(module);
-                suffix = ".asm";
+                artifact = codegen.emit_gas_win64_demo(module);
+                suffix = ".s";
             }
 
             fs::path output;

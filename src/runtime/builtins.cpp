@@ -11,6 +11,7 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
 #include <random>
 #include <sstream>
@@ -41,7 +42,7 @@ std::string __erelang_builtin_binary_dispatch(const std::string& name, const std
 std::string __erelang_builtin_threads_dispatch(Runtime* rt, const std::string& name, const std::vector<std::string>& argv);
 std::string __erelang_builtin_monitor_dispatch(Runtime* rt, const std::string& name, const std::vector<std::string>& argv);
 
-std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<ExprPtr>& args, const Runtime::Env& env, bool allowCollectionHelpers) const {
+std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<ExprPtr>& args, const Runtime::Env& env, bool /*allowCollectionHelpers*/) const {
     // Local owning string for APIs expecting std::string
     std::string nameStr(name);
     auto warn_deprecated = [&](const char* builtin, const char* replacement) {
@@ -79,15 +80,6 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
     if (nameStr == "hashmap_keys") nameStr = "dict_keys";
     if (nameStr == "hashmap_values") nameStr = "dict_values";
     if (nameStr == "hashmap_merge") nameStr = "dict_merge";
-    static const std::unordered_set<std::string> blockedCollectionHelpers = {
-        "list_new", "list_push", "list_get", "list_len", "list_join", "list_clear", "list_remove_at",
-        "dict_new", "dict_set", "dict_get", "dict_has", "dict_keys", "dict_values", "dict_get_or",
-        "dict_remove", "dict_clear", "dict_size", "dict_merge", "dict_clone", "dict_items", "dict_entries",
-        "dict_set_path", "dict_get_path", "dict_has_path", "dict_remove_path"
-    };
-    if (!allowCollectionHelpers && blockedCollectionHelpers.count(nameStr) > 0) {
-        throw std::runtime_error("Collection helper removed in manual mode: " + nameStr);
-    }
     // Check both local and global vars for alias binding
     if (auto aliasIt = env.vars.find(nameStr); aliasIt != env.vars.end()) {
         const std::string& aliasTarget = aliasIt->second;
@@ -1142,6 +1134,20 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         std::sort(g_lists[id].begin(), g_lists[id].end());
         return std::string("list:") + std::to_string(id);
     }
+    if (nameStr == "load_elan") {
+        return load_elan_file(fsPath(0));
+    }
+    if (nameStr == "load_elan_dir") {
+        return load_elan_directory(fsPath(0));
+    }
+    if (nameStr == "call_action") {
+        std::vector<std::string> callArgs;
+        callArgs.reserve(args.size() > 0 ? args.size() - 1 : 0);
+        for (size_t i = 1; i < args.size(); ++i) {
+            callArgs.push_back(argS(i));
+        }
+        return call_action_by_name(argS(0), callArgs);
+    }
     if (nameStr == "cwd") {
         return std::filesystem::current_path().string();
     }
@@ -1810,6 +1816,58 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         return v ? std::string(v) : std::string();
 #endif
     }
+    if (nameStr == "dotenv_load") {
+        std::string filepath = argS(0);
+        if (filepath.empty()) {
+            filepath = ".env";
+        }
+        std::ifstream file(filepath);
+        if (!file.is_open()) {
+            return "false";
+        }
+        std::string line;
+        int loaded = 0;
+        while (std::getline(file, line)) {
+            // Trim leading whitespace
+            size_t start = 0;
+            while (start < line.size() && (line[start] == ' ' || line[start] == '\t' || line[start] == '\r')) {
+                ++start;
+            }
+            if (start >= line.size()) continue; // empty line
+            if (line[start] == '#') continue;   // comment
+            // Find '='
+            size_t eq = line.find('=', start);
+            if (eq == std::string::npos) continue;
+            std::string key = line.substr(start, eq - start);
+            // Trim trailing whitespace from key
+            while (!key.empty() && (key.back() == ' ' || key.back() == '\t')) {
+                key.pop_back();
+            }
+            if (key.empty()) continue;
+            std::string value = line.substr(eq + 1);
+            // Trim leading whitespace from value
+            size_t vstart = 0;
+            while (vstart < value.size() && (value[vstart] == ' ' || value[vstart] == '\t')) {
+                ++vstart;
+            }
+            value = value.substr(vstart);
+            // Trim trailing whitespace and \r from value
+            while (!value.empty() && (value.back() == ' ' || value.back() == '\t' || value.back() == '\r')) {
+                value.pop_back();
+            }
+            // Strip surrounding quotes if present
+            if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
+                value = value.substr(1, value.size() - 2);
+            }
+#ifdef _WIN32
+            _putenv_s(key.c_str(), value.c_str());
+#else
+            setenv(key.c_str(), value.c_str(), 1);
+#endif
+            ++loaded;
+        }
+        return std::to_string(loaded);
+    }
     // Unified external built-in module dispatch (evaluate args only once if present)
     std::vector<std::string> argv;
     if (!args.empty()) {
@@ -1864,6 +1922,11 @@ std::optional<std::string> dispatch_imported_builtin_modules(
     }
     if (program_imports_module(program, "builtin/binary")) {
         if (auto r = __erelang_builtin_binary_dispatch(name, argv); !r.empty()) {
+            return r;
+        }
+    }
+    if (program_imports_module(program, "builtin/websocket") || program_imports_module(program, "builtin/ws")) {
+        if (auto r = __erelang_builtin_websocket_dispatch(name, argv); !r.empty()) {
             return r;
         }
     }

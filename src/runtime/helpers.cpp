@@ -32,6 +32,23 @@ std::unordered_map<int, std::unordered_set<std::string>> g_sets;
 int g_nextQueueId = 1;
 std::unordered_map<int, std::deque<std::string>> g_queues;
 
+void reset_global_container_state() {
+    g_lists.clear();
+    g_dicts.clear();
+    g_ptrs.clear();
+    g_fileStreams.clear(); // destroys fstreams (flushes/closes files)
+    g_strBuffers.clear();
+    g_sets.clear();
+    g_queues.clear();
+    g_nextListId = 1;
+    g_nextDictId = 1;
+    g_nextPtrId = 1;
+    g_nextFileId = 1;
+    g_nextStrBufId = 1;
+    g_nextSetId = 1;
+    g_nextQueueId = 1;
+}
+
 std::string slurp_text(const fs::path& p) {
     std::ifstream in(p, std::ios::binary);
     std::ostringstream ss;
@@ -285,7 +302,7 @@ bool is_int_string(const std::string& s) {
 bool is_truthy(const std::string& v) {
     if (v == "true") return true;
     if (v == "false") return false;
-    return to_int(v) != 0 || !v.empty();
+    return to_int(v) != 0;
 }
 
 bool is_identifier_text(std::string_view text) {

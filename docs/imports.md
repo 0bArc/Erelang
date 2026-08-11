@@ -2,7 +2,7 @@
 
 ## Builtin modules
 
-Builtin modules have no `.elan` file on disk — they are built into the runtime.
+Builtin modules have no `.elan` file on disk: they are built into the runtime.
 
 Use the `#include` preprocessor form:
 
@@ -26,7 +26,7 @@ import "builtin/fs" as fs      // also works
 | Module | Alias | Doc |
 |--------|-------|-----|
 | `builtin/fs` | `fs` | [filesystem.md](filesystem.md) |
-| `builtin/path` | `path` | [filesystem.md](filesystem.md) — paths only |
+| `builtin/path` | `path` | [filesystem.md](filesystem.md): paths only |
 | `builtin/network` | `net` | [network.md](network.md) |
 | `builtin/math` | `math` | [math.md](math.md) |
 | `builtin/system` | `sys` | [process.md](process.md) |
@@ -46,7 +46,7 @@ Builtin functions are only registered when their module is imported. Calling `re
 
 ## Method syntax
 
-After `#include <builtin/fs> as fs`, call `fs.read(path)` instead of `read_text(path)`. The runtime resolves aliases at call time — see `src/runtime_imports.cpp` for the full map.
+After `#include <builtin/fs> as fs`, call `fs.read(path)` instead of `read_text(path)`. The runtime resolves aliases at call time: see `src/runtime/imports.cpp` for the full map.
 
 ## Local `.elan` modules
 
@@ -69,5 +69,5 @@ Paths are relative to the importing file. Unused included actions warn with `TC1
 ## Import resolution
 
 - Paths relative to the importing file
-- `builtin/*` resolves internally — no file load
+- `builtin/*` resolves internally: no file load
 - Imports are loaded recursively before the main program runs

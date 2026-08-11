@@ -19,22 +19,25 @@
 ## Features
 
 - **Interpreter runtime:** Actions, hooks, entities, globals, lists/dicts, plugin lifecycle.
-- **Modular runtime:** Split across six translation units instead of one monolithic `runtime.cpp`.
-- **Import-gated builtins:** Heavy I/O (network, fs, math, crypto, …) available only when a program imports the module.
+- **Modular runtime:** Split across focused translation units under `src/runtime/` instead of one monolithic `runtime.cpp`.
+- **Import-gated builtins:** Heavy I/O (network, fs, math, crypto, ...) available only when a program imports the module.
 - **Small core surface:** ~40 global builtins (time, env, args, strings, collections, plugin queries).
 - **CMake build:** Static lib `erelang`, CLI `obc`, runner `erelang.exe` (from `erelang_runner`).
 
 ## Runtime layout
 
+All runtime code lives under `src/runtime/`.
+
 | File | Role |
 |------|------|
-| `src/runtime.cpp` | Program entry, `run`, `run_single_action`, plugin hook dispatch |
-| `src/runtime_helpers.cpp` | Shared helpers, global list/dict/file handle state |
-| `src/runtime_eval.cpp` | Expression evaluation, string interpolation |
-| `src/runtime_actions.cpp` | Statement execution, action/hook/entity lookup |
-| `src/runtime_builtins.cpp` | `eval_builtin_call` + import-gated module dispatch |
-| `src/runtime_imports.cpp` | Import alias binding (`builtin/fs as fs` → `read_text`, …) |
-| `src/builtins/*.cpp` | Optional module implementations (math, network, data, …) |
+| `src/runtime/core.cpp` | Program entry, `run`, `run_single_action`, plugin hook dispatch |
+| `src/runtime/helpers.cpp` | Shared helpers, global list/dict/file handle state |
+| `src/runtime/eval.cpp` | Expression evaluation, string interpolation |
+| `src/runtime/actions.cpp` | Statement execution, action/hook/entity lookup |
+| `src/runtime/builtins.cpp` | `eval_builtin_call` + import-gated module dispatch |
+| `src/runtime/imports.cpp` | Import alias binding (`builtin/fs as fs` -> `read_text`, ...) |
+| `src/runtime/builtins/*.cpp` | Optional module implementations (math, network, data, ...) |
+| `src/runtime/features/*.cpp` | Runtime language features (serialization) |
 
 See [experimental/README.md](experimental/README.md) for the full import-gated module table.
 
@@ -65,14 +68,14 @@ cmake --build build --target erelang_runner -j 8
 
 Optional flags:
 
-- `-DERELANG_EXPERIMENTAL=ON` — thread and monitor builtins
-- `-DBUILD_SHARED_RUNTIME=OFF` — static runner only, no `erelang.dll`
+- `-DERELANG_EXPERIMENTAL=ON`: thread and monitor builtins
+- `-DBUILD_SHARED_RUNTIME=OFF`: static runner only, no `erelang.dll`
 
 Outputs (Debug):
 
-- `build/bin/Debug/erelang.exe` — main runner (alias `obs.exe` on Windows)
-- `build/bin/Debug/obc.exe` — compiler frontend
-- `build/lib/Debug/liberelang.a` — static runtime library
+- `build/bin/Debug/erelang.exe`: main runner (alias `obs.exe` on Windows)
+- `build/bin/Debug/obc.exe`: compiler frontend
+- `build/lib/Debug/liberelang.a`: static runtime library
 
 ### Run a program
 
@@ -95,25 +98,29 @@ run main;
 
 ## Documentation
 
-Full docs live under **[docs/](docs/README.md)** — topic guides (`filesystem.md`, `network.md`, `automation.md`, …) instead of one monolithic file.
+Full docs live under **[docs/](docs/README.md)**: topic guides (`filesystem.md`, `network.md`, `automation.md`, ...) instead of one monolithic file.
 
 ## Status
 
-**Alpha** — all doc examples validated and passing as of 2026-06-03.
+**Alpha**: all doc examples validated and passing as of 2026-08-11.
 
 Tested modules: core builtins, collections, strings, math, crypto, regex, binary, data, filesystem, process/system, low-level (file handles, strbuf), automation patterns.
 
+
 ## Roadmap
 
-- [x] Lexer, parser, AST
-- [x] Typechecker with diagnostics
-- [x] Interpreter runtime (modular split)
-- [x] Import-gated builtin modules
-- [x] Plugin manifest loading
-- [x] All doc examples validated (alpha)
-- [ ] Shrink core builtins further; move fs helpers fully behind `builtin/fs`
-- [ ] Advanced type system
-- [ ] VM / LLVM backend
+There is no plan to release a formal roadmap in the near future.
+
+That does not mean development has slowed down. A significant amount of work is currently focused on closing the gaps in the language and improving the overall consistency of Erelang.
+
+You can expect a large number of the items currently documented in [`docs/language-gaps.md`] to be implemented in the near future. These gaps represent areas that are already identified and actively considered, rather than a list of forgotten ideas.
+
+The goal is to continue expanding Erelang while keeping the language coherent and avoiding unnecessary features or temporary solutions. Existing language systems will also continue to be refined as missing functionality is implemented.
+
+There is still a lot of work ahead, but Erelang is actively evolving. The contents of [`docs/language-gaps.md`] should give you a good indication of the areas currently being worked toward.
+
+More updates and documentation will be provided as these improvements become stable and ready to use.
+
 
 ## Contributing
 

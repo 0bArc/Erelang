@@ -3,10 +3,10 @@
 enum Mode {
   Walk,
   Run,
-  Idle
+  Idle,
 }
 
-public action test_switch(mode) {
+public action test_switch(string mode) {
   switch mode {
     case Walk:
       print "walk";
@@ -20,7 +20,7 @@ public action test_switch(mode) {
 }
 
 public action test_loop() {
-  let i = 0;
+  int i = 0;
   while (i < 6) {
     i = i + 1;
     if (i == 2) {

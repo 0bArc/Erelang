@@ -22,7 +22,7 @@
 | `math.cos(a)` | cosine |
 | `math.tan(a)` | tangent |
 
-After importing, bare names (`add(1, 2)`) also work — builtins are registered for the whole program once imported.
+After importing, bare names (`add(1, 2)`) also work: builtins are registered for the whole program once imported.
 
 ## Example
 

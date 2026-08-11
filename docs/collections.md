@@ -1,6 +1,6 @@
 # Collections
 
-Runtime collections use **handles** (`list:N`, `dict:N`) returned by literal syntax. Use `[...]` for lists and `{...}` for dicts — these are the only supported forms.
+Runtime collections use **handles** (`list:N`, `dict:N`) returned by literal syntax. Use `[...]` for lists and `{...}` for dicts: these are the only supported forms.
 
 No import needed.
 
@@ -12,7 +12,7 @@ Create with a literal and iterate with `for`:
 @erelang
 
 public action main {
-    let nums = [10, 20, 30];
+    nums = [10, 20, 30];
 
     for (n : nums) {
         print "n={n}";
@@ -30,7 +30,7 @@ run main;
 @erelang
 
 public action main {
-    let cfg = {"host": "localhost", "port": "8080"};
+    cfg = {"host": "localhost", "port": "8080"};
 
     print "host={cfg.host}";
     print "port={cfg.port}";
@@ -47,7 +47,7 @@ run main;
 @erelang
 
 public action main {
-    let scores = {"alice": "95", "bob": "82", "carol": "77"};
+    scores = {"alice": "95", "bob": "82", "carol": "77"};
     for (name, score : scores) {
         print "{name}: {score}";
     }
@@ -65,8 +65,8 @@ run main;
 @erelang
 
 public action main {
-    let d = {"x": "1", "y": "2"};
-    let json = to_json(d);
+    d = {"x": "1", "y": "2"};
+    json = to_json(d);
     print json;
 }
 
@@ -81,6 +81,6 @@ run main;
 
 ## Related
 
-- [data.md](data.md) — persistent key/value stores
-- [filesystem.md](filesystem.md) — `list_files`
+- [data.md](data.md): persistent key/value stores
+- [filesystem.md](filesystem.md): `list_files`
 - [language.md](language.md)

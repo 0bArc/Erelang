@@ -23,7 +23,7 @@ Alias: `builtin/net` works identically.
 #include <builtin/fs> as fs
 
 public action main {
-    let html = net.get("https://example.com");
+    html = net.get("https://example.com");
     fs.write("page.html", html);
     print "Done";
 }
@@ -38,7 +38,7 @@ run main;
 #include <builtin/network> as net
 
 public action main {
-    let response = net.post("https://httpbin.org/post", "key=value");
+    response = net.post("https://httpbin.org/post", "key=value");
     print response;
 }
 
@@ -47,7 +47,7 @@ run main;
 
 ### HLS streaming
 
-`net.hls_download_best(m3u8Url, outPath)` — downloads the highest-bandwidth HLS variant to a file. Returns `"true"` / `"false"`.
+`net.hls_download_best(m3u8Url, outPath)`: downloads the highest-bandwidth HLS variant to a file. Returns `"true"` / `"false"`.
 
 ## Windows IP / DNS
 
@@ -66,7 +66,7 @@ Result format: `success=true\nexit_code=0\noutput=...`
 
 - HTTP/HTTPS only (Windows WinHTTP). No proxy config needed for most cases.
 - `net.get` returns empty string if the request fails.
-- `net.status` sends a HEAD request — useful for checking reachability without downloading the body.
+- `net.status` sends a HEAD request: useful for checking reachability without downloading the body.
 
 ## Related
 

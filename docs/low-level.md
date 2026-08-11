@@ -11,11 +11,11 @@ Requires `builtin/fs` import.
 #include <builtin/fs> as fs
 
 public action main {
-    let h = file_open("out.dat", "wb");
+    h = file_open("out.dat", "wb");
     file_write(h, "header\n");
     file_write(h, "body\n");
     file_seek(h, 0, "set");
-    let all = file_read(h);
+    all = file_read(h);
     file_close(h);
     print all;
 }
@@ -56,8 +56,8 @@ For building large strings piece by piece:
 @erelang
 
 public action main {
-    let b = strbuf_new();
-    let i = 0;
+    b = strbuf_new();
+    i = 0;
     while (i < 5) {
         strbuf_append(b, "line {i}\n");
         i = i + 1;
@@ -88,7 +88,7 @@ See [examples/test.elan](../examples/test.elan) for a pointer sample.
 
 ## Casts
 
-`reinterpret_cast<T>(x)`, `bit_cast<T>(x)`, `dynamic_cast<T>(x)` — for low-level type manipulation.
+`reinterpret_cast<T>(x)`, `bit_cast<T>(x)`, `dynamic_cast<T>(x)`: for low-level type manipulation.
 
 ## Related
 

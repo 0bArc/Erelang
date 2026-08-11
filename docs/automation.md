@@ -9,7 +9,7 @@ Erelang is good for glue work: transform files, run shell commands, download via
 #include <builtin/fs> as fs
 
 public action main {
-    let root = fs.cwd();
+    root = fs.cwd();
     print "cwd={root}";
 }
 
@@ -18,14 +18,14 @@ run main;
 
 ## Common patterns
 
-### Read → transform → write
+### Read -> transform -> write
 
 ```elan
 @erelang
 #include <builtin/fs> as fs
 
 public action main {
-    let text = fs.read("input.log");
+    text = fs.read("input.log");
     fs.write("output.log", text);
     print "done";
 }
@@ -40,11 +40,11 @@ run main;
 #include <builtin/fs> as fs
 
 public action main {
-    let files = fs.list("inbox");
-    let n = list_len(files);
-    let i = 0;
+    files = fs.list("inbox");
+    n = list_len(files);
+    i = 0;
     while (i < n) {
-        let f = list_get(files, i);
+        f = list_get(files, i);
         print f;
         i = i + 1;
     }
@@ -59,7 +59,7 @@ run main;
 @erelang
 
 public action main {
-    let code = exec("cmd /c dir /b examples");
+    code = exec("cmd /c dir /b examples");
     print "exit={code}";
 }
 
@@ -86,10 +86,13 @@ run main;
 @erelang
 
 public action main {
-    let profile = env("USERPROFILE");
+    profile = env("USERPROFILE");
     print "home={profile}";
-    let first_arg = args_get(0);
-    print "arg0={first_arg}";
+
+    if (args_count() > 0) {
+        first_arg = args_get(0);
+        print "arg0={first_arg}";
+    }
 }
 
 run main;
@@ -103,7 +106,7 @@ run main;
 #include <builtin/fs> as fs
 
 public action main {
-    let body = net.get("https://example.com");
+    body = net.get("https://example.com");
     fs.write("page.html", body);
     print "saved";
 }
@@ -118,10 +121,7 @@ run main;
 #include <builtin/fs> as fs
 
 public action main {
-    while (true) {
-        if (fs.exists("stop.flag") == "true") {
-            break;
-        }
+    while (fs.exists("stop.flag") != "true") {
         sleep 5000ms;
     }
     print "stopped";

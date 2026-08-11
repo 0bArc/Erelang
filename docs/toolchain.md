@@ -10,11 +10,11 @@
 
 ## Pipeline
 
-1. **Lexer** (`lexer.cpp`) — tokens, `#include <builtin/x>` → import node
-2. **Parser** (`parser.cpp`) — AST `Program`
-3. **Typechecker** (`typechecker.cpp`) — `TC***` diagnostics
-4. **Optimizer** (`optimizer.cpp`) — constant folding
-5. **Runtime** (`runtime*.cpp`, `builtins/*.cpp`) — interpretation
+1. **Lexer** (`lexer.cpp`): tokens, `#include <builtin/x>` -> import node
+2. **Parser** (`parser.cpp`): AST `Program`
+3. **Typechecker** (`typechecker.cpp`): `TC***` diagnostics
+4. **Optimizer** (`optimizer.cpp`): constant folding
+5. **Runtime** (`runtime*.cpp`, `builtins/*.cpp`): interpretation
 
 ## CLI
 
@@ -60,7 +60,7 @@ npm install
 npm run package
 ```
 
-This produces `erelang_language.vsix` — install it in VS Code via **Extensions → Install from VSIX**.
+This produces `erelang_language.vsix`: install it in VS Code via **Extensions -> Install from VSIX**.
 
 ## Source map (contributors)
 
@@ -68,10 +68,10 @@ This produces `erelang_language.vsix` — install it in VS Code via **Extensions
 |------|------|
 | AST types | `include/erelang/parser.hpp` |
 | Typechecker | `src/typechecker.cpp` |
-| Builtin dispatch | `src/runtime_builtins.cpp` |
-| Import aliases | `src/runtime_imports.cpp` |
-| Module impls | `src/builtins/*.cpp` |
-| C ABI | `include/erelang/cabi.h`, `src/cabi_exports.cpp` |
+| Builtin dispatch | `src/runtime/builtins.cpp` |
+| Import aliases | `src/runtime/imports.cpp` |
+| Module impls | `src/runtime/builtins/*.cpp` |
+| C ABI | `include/erelang/cabi.h`, `src/runtime/cabi_exports.cpp` |
 
 ## Related
 

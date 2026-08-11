@@ -1,6 +1,6 @@
 # Process and shell
 
-## Core — no import needed
+## Core: no import needed
 
 | Builtin | Args | Returns |
 |---------|------|---------|
@@ -12,7 +12,7 @@
 @erelang
 
 public action main {
-    let code = exec("cmd /c echo hello");
+    code = exec("cmd /c echo hello");
     print "exit={code}";
 }
 
@@ -32,7 +32,7 @@ public action main {
 run main;
 ```
 
-## `builtin/system` — capture output
+## `builtin/system`: capture output
 
 ```elan
 #include <builtin/system> as sys
@@ -51,8 +51,8 @@ run main;
 
 public action main {
     sys.execute("whoami");
-    let out = sys.output();
-    let code = sys.last_exit();
+    out = sys.output();
+    code = sys.last_exit();
     print "user={out}";
     print "exit={code}";
 }

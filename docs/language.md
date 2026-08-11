@@ -36,7 +36,7 @@ Declare functions either way:
 ## Variables
 
 ```elan
-let x = 2;
+x = 2;
 int y = 10;
 const PI = 3;
 ```
@@ -48,7 +48,7 @@ Runtime values are string-backed; numeric operators parse operands as numbers wh
 Double-quoted literals; `{name}` interpolation inside strings:
 
 ```elan
-let who = "Erelang";
+who = "Erelang";
 print "Hi {who}";
 ```
 
@@ -122,7 +122,7 @@ entity Counter {
 }
 
 public action main {
-    let c = new Counter();
+    c = new Counter();
     c.init(10);
     print c.bump(5);
 }

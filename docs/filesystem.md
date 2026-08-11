@@ -9,7 +9,7 @@
 
 ## High-level API
 
-Whole-file helpers — best for scripts.
+Whole-file helpers: best for scripts.
 
 | Alias | Builtin | Args | Returns |
 |-------|---------|------|---------|
@@ -34,7 +34,7 @@ Whole-file helpers — best for scripts.
 #include <builtin/fs> as fs
 
 public action main {
-    let body = fs.read("config.txt");
+    body = fs.read("config.txt");
     print body;
 }
 
@@ -64,12 +64,12 @@ run main;
 #include <builtin/path> as path
 
 public action main {
-    let cfg = path.join("config", "app.ini");
+    cfg = path.join("config", "app.ini");
     if (!fs.exists(cfg)) {
         stderr_print "missing config";
         exit(1);
     }
-    let body = fs.read(cfg);
+    body = fs.read(cfg);
     fs.write(path.join("config", "app.ini.bak"), body);
     print "backup created";
 }
@@ -79,14 +79,14 @@ run main;
 
 ### List a directory
 
-`fs.list` returns a list handle — iterate with `list_get` or `for`:
+`fs.list` returns a list handle: iterate with `list_get` or `for`:
 
 ```elan
 @erelang
 #include <builtin/fs> as fs
 
 public action main {
-    let files = fs.list("examples");
+    files = fs.list("examples");
     for (f : files) {
         print f;
     }
@@ -101,7 +101,7 @@ Available via `fs` or `path` import:
 
 | Alias | Builtin | Notes |
 |-------|---------|-------|
-| `path.join(a, b, …)` | `path_join` | variadic |
+| `path.join(a, b, ...)` | `path_join` | variadic |
 | `path.parent(p)` / `path.dirname(p)` | `path_dirname` | |
 | `path.name(p)` / `path.basename(p)` | `path_basename` | |
 | `path.ext(p)` | `path_ext` | includes dot, e.g. `.elan` |
@@ -112,7 +112,7 @@ Available via `fs` or `path` import:
 #include <builtin/path> as path
 
 public action main {
-    let p = path.join("examples", "program.elan");
+    p = path.join("examples", "program.elan");
     print "dir={path.dirname(p)}";
     print "name={path.name(p)}";
     print "ext={path.ext(p)}";
@@ -137,7 +137,7 @@ For reading/writing in chunks without loading the whole file:
 #include <builtin/fs> as fs
 
 public action main {
-    let h = file_open("out.bin", "wb");
+    h = file_open("out.bin", "wb");
     file_write(h, "chunk1");
     file_write(h, "chunk2");
     file_flush(h);

@@ -910,6 +910,272 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 env.vars["_"] = std::string("dict:") + std::to_string(cloneId);
                 return;
             }
+            // Set handle dispatch (handle prefix "set:")
+            {
+            if (handle.rfind("set:", 0) == 0 && methodName == "add") {
+                int id = to_int(handle.substr(4));
+                if (!mc.args.empty()) {
+                    std::string v = eval_string(*mc.args[0], env);
+                    env.vars["_"] = g_sets[id].insert(v).second ? "true" : "false";
+                }
+                return;
+            }
+            if (handle.rfind("set:", 0) == 0 && methodName == "has") {
+                int id = to_int(handle.substr(4));
+                std::string v = mc.args.empty() ? std::string() : eval_string(*mc.args[0], env);
+                env.vars["_"] = g_sets[id].count(v) ? "true" : "false";
+                return;
+            }
+            if (handle.rfind("set:", 0) == 0 && methodName == "remove") {
+                int id = to_int(handle.substr(4));
+                std::string v = mc.args.empty() ? std::string() : eval_string(*mc.args[0], env);
+                env.vars["_"] = g_sets[id].erase(v) ? "true" : "false";
+                return;
+            }
+            if (handle.rfind("set:", 0) == 0 && methodName == "size") {
+                int id = to_int(handle.substr(4));
+                env.vars["_"] = std::to_string(static_cast<int>(g_sets[id].size()));
+                return;
+            }
+            if (handle.rfind("set:", 0) == 0 && methodName == "values") {
+                int id = to_int(handle.substr(4));
+                int lid = g_nextListId++;
+                g_lists[lid] = {};
+                for (const auto& v : g_sets[id]) g_lists[lid].push_back(v);
+                env.vars["_"] = std::string("list:") + std::to_string(lid);
+                return;
+            }
+            if (handle.rfind("set:", 0) == 0 && methodName == "union") {
+                int id = to_int(handle.substr(4));
+                if (!mc.args.empty()) {
+                    std::string otherHandle = eval_string(*mc.args[0], env);
+                    if (otherHandle.rfind("set:", 0) == 0) {
+                        int srcId = to_int(otherHandle.substr(4));
+                        int resultId = g_nextSetId++;
+                        g_sets[resultId] = g_sets[id];
+                        for (const auto& v : g_sets[srcId]) g_sets[resultId].insert(v);
+                        env.vars["_"] = std::string("set:") + std::to_string(resultId);
+                    }
+                }
+                return;
+            }
+            if (handle.rfind("set:", 0) == 0 && methodName == "intersect") {
+                int id = to_int(handle.substr(4));
+                if (!mc.args.empty()) {
+                    std::string otherHandle = eval_string(*mc.args[0], env);
+                    if (otherHandle.rfind("set:", 0) == 0) {
+                        int srcId = to_int(otherHandle.substr(4));
+                        int resultId = g_nextSetId++;
+                        for (const auto& v : g_sets[id]) {
+                            if (g_sets[srcId].count(v)) g_sets[resultId].insert(v);
+                        }
+                        env.vars["_"] = std::string("set:") + std::to_string(resultId);
+                    }
+                }
+                return;
+            }
+            if (handle.rfind("set:", 0) == 0 && methodName == "diff") {
+                int id = to_int(handle.substr(4));
+                if (!mc.args.empty()) {
+                    std::string otherHandle = eval_string(*mc.args[0], env);
+                    if (otherHandle.rfind("set:", 0) == 0) {
+                        int srcId = to_int(otherHandle.substr(4));
+                        int resultId = g_nextSetId++;
+                        for (const auto& v : g_sets[id]) {
+                            if (!g_sets[srcId].count(v)) g_sets[resultId].insert(v);
+                        }
+                        env.vars["_"] = std::string("set:") + std::to_string(resultId);
+                    }
+                }
+                return;
+            }
+            }
+            // Queue handle dispatch (handle prefix "queue:")
+            {
+            if (handle.rfind("queue:", 0) == 0 && methodName == "push") {
+                int id = to_int(handle.substr(6));
+                if (!mc.args.empty()) {
+                    g_queues[id].push_back(eval_string(*mc.args[0], env));
+                }
+                return;
+            }
+            if (handle.rfind("queue:", 0) == 0 && methodName == "pop") {
+                int id = to_int(handle.substr(6));
+                auto& q = g_queues[id];
+                if (!q.empty()) {
+                    env.vars["_"] = q.front();
+                    q.pop_front();
+                } else {
+                    env.vars["_"] = std::string();
+                }
+                return;
+            }
+            if (handle.rfind("queue:", 0) == 0 && methodName == "peek") {
+                int id = to_int(handle.substr(6));
+                auto& q = g_queues[id];
+                env.vars["_"] = q.empty() ? std::string() : q.front();
+                return;
+            }
+            if (handle.rfind("queue:", 0) == 0 && (methodName == "len" || methodName == "size")) {
+                int id = to_int(handle.substr(6));
+                env.vars["_"] = std::to_string(static_cast<int>(g_queues[id].size()));
+                return;
+            }
+            if (handle.rfind("queue:", 0) == 0 && methodName == "clear") {
+                int id = to_int(handle.substr(6));
+                g_queues[id].clear();
+                return;
+            }
+            }
+            // StrBuf handle dispatch (handle prefix "strbuf:")
+            {
+            if (handle.rfind("strbuf:", 0) == 0 && methodName == "append") {
+                int id = to_int(handle.substr(7));
+                if (!mc.args.empty()) {
+                    g_strBuffers[id] += eval_string(*mc.args[0], env);
+                }
+                return;
+            }
+            if (handle.rfind("strbuf:", 0) == 0 && methodName == "clear") {
+                int id = to_int(handle.substr(7));
+                g_strBuffers[id].clear();
+                return;
+            }
+            if (handle.rfind("strbuf:", 0) == 0 && (methodName == "len" || methodName == "size")) {
+                int id = to_int(handle.substr(7));
+                env.vars["_"] = std::to_string(static_cast<int>(g_strBuffers[id].size()));
+                return;
+            }
+            if (handle.rfind("strbuf:", 0) == 0 && methodName == "to_string") {
+                int id = to_int(handle.substr(7));
+                env.vars["_"] = g_strBuffers[id];
+                return;
+            }
+            if (handle.rfind("strbuf:", 0) == 0 && methodName == "free") {
+                int id = to_int(handle.substr(7));
+                g_strBuffers.erase(id);
+                return;
+            }
+            if (handle.rfind("strbuf:", 0) == 0 && methodName == "reserve") {
+                int id = to_int(handle.substr(7));
+                if (!mc.args.empty()) {
+                    size_t cap = static_cast<size_t>(to_int(eval_string(*mc.args[0], env)));
+                    g_strBuffers[id].reserve(cap);
+                }
+                return;
+            }
+            }
+            // Ptr handle dispatch (handle prefix "ptr:")
+            {
+            if (handle.rfind("ptr:", 0) == 0 && methodName == "get") {
+                int id = to_int(handle.substr(4));
+                auto it = g_ptrs.find(id);
+                env.vars["_"] = (it != g_ptrs.end()) ? it->second : std::string();
+                return;
+            }
+            if (handle.rfind("ptr:", 0) == 0 && methodName == "set") {
+                int id = to_int(handle.substr(4));
+                if (!mc.args.empty()) {
+                    g_ptrs[id] = eval_string(*mc.args[0], env);
+                }
+                return;
+            }
+            if (handle.rfind("ptr:", 0) == 0 && methodName == "valid") {
+                int id = to_int(handle.substr(4));
+                env.vars["_"] = g_ptrs.count(id) ? "true" : "false";
+                return;
+            }
+            if (handle.rfind("ptr:", 0) == 0 && methodName == "free") {
+                int id = to_int(handle.substr(4));
+                g_ptrs.erase(id);
+                return;
+            }
+            }
+            // File handle dispatch (handle prefix "file:")
+            {
+            if (handle.rfind("file:", 0) == 0 && methodName == "read") {
+                int id = to_int(handle.substr(5));
+                auto fit = g_fileStreams.find(id);
+                if (fit != g_fileStreams.end() && fit->second && fit->second->is_open()) {
+                    if (mc.args.empty()) {
+                        std::ostringstream ss;
+                        ss << fit->second->rdbuf();
+                        env.vars["_"] = ss.str();
+                    } else {
+                        int count = to_int(eval_string(*mc.args[0], env));
+                        std::string buf(static_cast<size_t>(count), '\0');
+                        fit->second->read(&buf[0], count);
+                        buf.resize(static_cast<size_t>(fit->second->gcount()));
+                        env.vars["_"] = buf;
+                    }
+                } else {
+                    env.vars["_"] = std::string();
+                }
+                return;
+            }
+            if (handle.rfind("file:", 0) == 0 && methodName == "write") {
+                int id = to_int(handle.substr(5));
+                if (!mc.args.empty()) {
+                    auto fit = g_fileStreams.find(id);
+                    if (fit != g_fileStreams.end() && fit->second && fit->second->is_open()) {
+                        std::string data = eval_string(*mc.args[0], env);
+                        fit->second->write(data.data(), static_cast<std::streamsize>(data.size()));
+                        env.vars["_"] = std::to_string(static_cast<int>(data.size()));
+                    }
+                }
+                return;
+            }
+            if (handle.rfind("file:", 0) == 0 && methodName == "seek") {
+                int id = to_int(handle.substr(5));
+                if (!mc.args.empty()) {
+                    auto fit = g_fileStreams.find(id);
+                    if (fit != g_fileStreams.end() && fit->second && fit->second->is_open()) {
+                        int64_t off = to_int(eval_string(*mc.args[0], env));
+                        std::ios::seekdir dir = std::ios::beg;
+                        if (mc.args.size() >= 2) {
+                            std::string whence = eval_string(*mc.args[1], env);
+                            if (whence == "cur" || whence == "current") dir = std::ios::cur;
+                            else if (whence == "end") dir = std::ios::end;
+                        }
+                        fit->second->seekg(static_cast<std::streamoff>(off), dir);
+                        fit->second->seekp(static_cast<std::streamoff>(off), dir);
+                        env.vars["_"] = "true";
+                    }
+                }
+                return;
+            }
+            if (handle.rfind("file:", 0) == 0 && methodName == "tell") {
+                int id = to_int(handle.substr(5));
+                auto fit = g_fileStreams.find(id);
+                if (fit != g_fileStreams.end() && fit->second && fit->second->is_open()) {
+                    env.vars["_"] = std::to_string(static_cast<int64_t>(fit->second->tellg()));
+                } else {
+                    env.vars["_"] = "0";
+                }
+                return;
+            }
+            if (handle.rfind("file:", 0) == 0 && methodName == "flush") {
+                int id = to_int(handle.substr(5));
+                auto fit = g_fileStreams.find(id);
+                if (fit != g_fileStreams.end() && fit->second && fit->second->is_open()) {
+                    fit->second->flush();
+                    env.vars["_"] = "true";
+                } else {
+                    env.vars["_"] = "false";
+                }
+                return;
+            }
+            if (handle.rfind("file:", 0) == 0 && methodName == "close") {
+                int id = to_int(handle.substr(5));
+                auto fit = g_fileStreams.find(id);
+                if (fit != g_fileStreams.end() && fit->second && fit->second->is_open()) {
+                    fit->second->close();
+                }
+                g_fileStreams.erase(id);
+                env.vars["_"] = "true";
+                return;
+            }
+            }
             if (handle.rfind("struct:", 0) == 0) {
                 const std::string structName = handle.substr(7);
                 const StructDecl* sd = find_struct_decl(program, structName);

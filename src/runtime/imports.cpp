@@ -111,10 +111,31 @@ std::optional<std::string> resolve_builtin_module_method(
         if (path_is(normalizedPath, {"builtin/regex"})) {
             if (methodName == "match") return std::string("regex_match");
             if (methodName == "find") return std::string("regex_find");
+            if (methodName == "find_all") return std::string("regex_find_all");
             if (methodName == "replace") return std::string("regex_replace");
+            if (methodName == "split") return std::string("regex_split");
+            if (methodName == "capture") return std::string("regex_capture");
+            if (methodName == "group") return std::string("regex_group");
+            if (methodName == "compile") return std::string("regex_compile");
+            if (methodName == "free") return std::string("regex_free");
             if (methodName == "regex_match" || methodName == "regex_find" || methodName == "regex_replace") {
                 return methodName;
             }
+        }
+
+        if (path_is(normalizedPath, {"builtin/performance", "builtin/perf"})) {
+            if (methodName == "profile.begin") return std::string("perf.profile.begin");
+            if (methodName == "profile.end") return std::string("perf.profile.end");
+            if (methodName == "profile.duration") return std::string("perf.profile.duration");
+            if (methodName == "profile.calls") return std::string("perf.profile.calls");
+            if (methodName == "profile.report") return std::string("perf.profile.report");
+            if (methodName == "mem.usage") return std::string("perf.mem.usage");
+            if (methodName == "mem.peak") return std::string("perf.mem.peak");
+            if (methodName == "gc.collect") return std::string("perf.gc.collect");
+            if (methodName == "gc.threshold") return std::string("perf.gc.threshold");
+            if (methodName == "gc.pause") return std::string("perf.gc.pause");
+            if (methodName == "gc.resume") return std::string("perf.gc.resume");
+            if (methodName.rfind("perf.", 0) == 0) return methodName;
         }
 
         if (path_is(normalizedPath, {"builtin/crypto"})) {
@@ -146,18 +167,43 @@ std::optional<std::string> resolve_builtin_module_method(
             if (methodName.rfind("bin_", 0) == 0) {
                 return methodName;
             }
+            // modular aliases
+            if (methodName == "new") return std::string("bin_new");
+            if (methodName == "from_hex") return std::string("bin_from_hex");
+            if (methodName == "len") return std::string("bin_len");
+            if (methodName == "to_hex") return std::string("bin_hex");
+            if (methodName == "push_u8") return std::string("bin_push_u8");
+            if (methodName == "get_u8") return std::string("bin_get_u8");
         }
 
         if (path_is(normalizedPath, {"builtin/threads"})) {
             if (methodName.rfind("thread_", 0) == 0) {
                 return methodName;
             }
+            // modular aliases
+            if (methodName == "spawn") return std::string("thread_run");
+            if (methodName == "spawn_detached") return std::string("thread_run");
+            if (methodName == "sleep") return std::string("thread_sleep");
+            if (methodName == "result") return std::string("thread_result");
+            if (methodName == "join") return std::string("thread_join");
+            if (methodName == "kill") return std::string("thread_purge");
+            if (methodName == "active") return std::string("thread_count");
+            if (methodName == "wait_all") return std::string("thread_wait_all");
+            if (methodName == "done") return std::string("thread_done");
+            if (methodName == "list") return std::string("thread_list");
         }
 
         if (path_is(normalizedPath, {"builtin/monitor"})) {
             if (methodName.rfind("monitor_", 0) == 0) {
                 return methodName;
             }
+            // modular aliases
+            if (methodName == "add") return std::string("monitor_add");
+            if (methodName == "remove") return std::string("monitor_remove");
+            if (methodName == "list") return std::string("monitor_list");
+            if (methodName == "info") return std::string("monitor_info");
+            if (methodName == "last_change") return std::string("monitor_last_change");
+            if (methodName == "set_interval") return std::string("monitor_set_interval");
         }
 
         if (path_is(normalizedPath, {"builtin/math"})) {
@@ -182,6 +228,14 @@ std::optional<std::string> resolve_builtin_module_method(
             if (methodName.rfind("data_", 0) == 0) {
                 return methodName;
             }
+            // modular aliases
+            if (methodName == "new") return std::string("data_new");
+            if (methodName == "set") return std::string("data_set");
+            if (methodName == "get") return std::string("data_get");
+            if (methodName == "has") return std::string("data_has");
+            if (methodName == "keys") return std::string("data_keys");
+            if (methodName == "save") return std::string("data_save");
+            if (methodName == "load") return std::string("data_load");
         }
 
         if (path_is(normalizedPath, {"builtin/perm"})) {
@@ -196,6 +250,15 @@ std::optional<std::string> resolve_builtin_module_method(
             if (methodName == "last_exit") return std::string("system.last_exit");
             if (methodName == "cmd")     return std::string("system.cmd");
             if (methodName.rfind("system.", 0) == 0) return methodName;
+        }
+        if (path_is(normalizedPath, {"builtin/process", "builtin/proc"})) {
+            if (methodName == "execute") return std::string("system.execute");
+            if (methodName == "shell") return std::string("system.cmd");
+            if (methodName == "spawn") return std::string("system.execute");
+            if (methodName == "output") return std::string("system.output");
+            if (methodName == "exit_code") return std::string("system.last_exit");
+            if (methodName == "opts") return {};
+            if (methodName == "kill" || methodName == "alive" || methodName == "wait") return {};
         }
     }
 
@@ -256,8 +319,33 @@ void bind_builtin_module_aliases(const Program& program, std::unordered_map<std:
         if (path_is(normalizedPath, {"builtin/regex"})) {
             bind_alias(alias, "match", "regex_match");
             bind_alias(alias, "find", "regex_find");
+            bind_alias(alias, "find_all", "regex_find_all");
             bind_alias(alias, "replace", "regex_replace");
+            bind_alias(alias, "split", "regex_split");
+            bind_alias(alias, "capture", "regex_capture");
+            bind_alias(alias, "group", "regex_group");
+            bind_alias(alias, "compile", "regex_compile");
+            bind_alias(alias, "free", "regex_free");
+            bind_alias(alias, "test", "regex_match");
             bind_same(alias, {"regex_match", "regex_find", "regex_replace"});
+        }
+
+        if (path_is(normalizedPath, {"builtin/performance", "builtin/perf"})) {
+            bind_alias(alias, "profile.begin", "perf.profile.begin");
+            bind_alias(alias, "profile.end", "perf.profile.end");
+            bind_alias(alias, "profile.duration", "perf.profile.duration");
+            bind_alias(alias, "profile.calls", "perf.profile.calls");
+            bind_alias(alias, "profile.report", "perf.profile.report");
+            bind_alias(alias, "mem.usage", "perf.mem.usage");
+            bind_alias(alias, "mem.peak", "perf.mem.peak");
+            bind_alias(alias, "gc.collect", "perf.gc.collect");
+            bind_alias(alias, "gc.threshold", "perf.gc.threshold");
+            bind_alias(alias, "gc.pause", "perf.gc.pause");
+            bind_alias(alias, "gc.resume", "perf.gc.resume");
+            bind_same(alias, {"perf.profile.begin", "perf.profile.end", "perf.profile.duration",
+                              "perf.profile.calls", "perf.profile.report", "perf.mem.usage",
+                              "perf.mem.peak", "perf.gc.collect", "perf.gc.threshold",
+                              "perf.gc.pause", "perf.gc.resume"});
         }
 
         if (path_is(normalizedPath, {"builtin/crypto"})) {
@@ -289,18 +377,50 @@ void bind_builtin_module_aliases(const Program& program, std::unordered_map<std:
         }
 
         if (path_is(normalizedPath, {"builtin/binary"})) {
+            bind_alias(alias, "new", "bin_new");
+            bind_alias(alias, "from_hex", "bin_from_hex");
+            bind_alias(alias, "len", "bin_len");
+            bind_alias(alias, "to_hex", "bin_hex");
+            bind_alias(alias, "push_u8", "bin_push_u8");
+            bind_alias(alias, "get_u8", "bin_get_u8");
+            // keep old flat names working
             bind_same(alias, {"bin_new", "bin_from_hex", "bin_len", "bin_hex", "bin_push_u8", "bin_get_u8"});
         }
 
         if (path_is(normalizedPath, {"builtin/threads"})) {
+            bind_alias(alias, "spawn", "thread_run");
+            bind_alias(alias, "spawn_detached", "thread_run");
+            bind_alias(alias, "sleep", "thread_sleep");
+            bind_alias(alias, "result", "thread_result");
+            bind_alias(alias, "join", "thread_join");
+            bind_alias(alias, "join_timeout", "thread_join_timeout");
+            bind_alias(alias, "kill", "thread_purge");
+            bind_alias(alias, "active", "thread_count");
+            bind_alias(alias, "wait_all", "thread_wait_all");
+            bind_alias(alias, "done", "thread_done");
+            bind_alias(alias, "list", "thread_list");
+            bind_alias(alias, "yield", "thread_yield");
+            bind_alias(alias, "gc", "thread_gc");
+            // pool control
+            bind_alias(alias, "pool.max", "thread_pool_max");
+            bind_alias(alias, "pool.stop", "thread_pool_stop");
+            // keep old flat names working
             bind_same(alias, {
                 "thread_run", "thread_join", "thread_join_timeout", "thread_done", "thread_list",
                 "thread_wait_all", "thread_count", "thread_yield", "thread_gc", "thread_gc_all",
                 "thread_purge", "thread_remove", "thread_state",
+                "thread_sleep", "thread_result",
             });
         }
 
         if (path_is(normalizedPath, {"builtin/monitor"})) {
+            bind_alias(alias, "add", "monitor_add");
+            bind_alias(alias, "remove", "monitor_remove");
+            bind_alias(alias, "list", "monitor_list");
+            bind_alias(alias, "info", "monitor_info");
+            bind_alias(alias, "last_change", "monitor_last_change");
+            bind_alias(alias, "set_interval", "monitor_set_interval");
+            // keep old flat names working
             bind_same(alias, {
                 "monitor_add", "monitor_remove", "monitor_list", "monitor_info",
                 "monitor_last_change", "monitor_set_interval",
@@ -317,9 +437,15 @@ void bind_builtin_module_aliases(const Program& program, std::unordered_map<std:
         }
 
         if (path_is(normalizedPath, {"builtin/data"})) {
-            bind_same(alias, {
-                "data_new", "data_set", "data_get", "data_has", "data_keys", "data_save", "data_load",
-            });
+            bind_alias(alias, "new", "data_new");
+            bind_alias(alias, "set", "data_set");
+            bind_alias(alias, "get", "data_get");
+            bind_alias(alias, "has", "data_has");
+            bind_alias(alias, "keys", "data_keys");
+            bind_alias(alias, "save", "data_save");
+            bind_alias(alias, "load", "data_load");
+            // keep old flat names working
+            bind_same(alias, {"data_new", "data_set", "data_get", "data_has", "data_keys", "data_save", "data_load"});
         }
 
         if (path_is(normalizedPath, {"builtin/perm"})) {
@@ -340,6 +466,17 @@ void bind_builtin_module_aliases(const Program& program, std::unordered_map<std:
             bind_alias(alias, "output",    "system.output");
             bind_alias(alias, "last_exit", "system.last_exit");
             bind_alias(alias, "cmd",       "system.cmd");
+        }
+        if (path_is(normalizedPath, {"builtin/process", "builtin/proc"})) {
+            bind_alias(alias, "execute",   "system.execute");
+            bind_alias(alias, "shell",     "system.cmd");
+            bind_alias(alias, "spawn",     "system.execute");
+            bind_alias(alias, "output",    "system.output");
+            bind_alias(alias, "exit_code", "system.last_exit");
+            bind_alias(alias, "opts",      "sys_opts");
+            bind_alias(alias, "kill",      "sys_kill");
+            bind_alias(alias, "wait",      "sys_wait");
+            bind_alias(alias, "alive",     "sys_alive");
         }
     }
 }

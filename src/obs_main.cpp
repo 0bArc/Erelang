@@ -112,6 +112,10 @@ static void print_help() {
                  "  By default, --compile emits a self-contained executable (no erelang.dll required).\n"
                  "  Use --dynamic for a tiny launcher that depends on erelang.dll.\n"
                  "  Use --dynamic --bundle-runtime to copy erelang.dll next to the output.\n"
+                 "  --lto enables link-time optimization for smaller/faster output.\n"
+                 "  --strip removes debug symbols from the compiled executable.\n"
+                 "  --minify strips comments/whitespace from embedded sources.\n"
+                 "  --gc-sections drops unused function sections at link time.\n"
                  "  --make-debug builds a debugger exe from examples/lib/debugger.elan.\n"
                  "  --debug when running loads the debug driver and prefers debug_main.\n";
 }
@@ -807,6 +811,10 @@ struct CompileOptions {
     bool preferStatic{false};
     bool preferDynamic{false};
     bool bundleRuntime{false};
+    bool lto{false};
+    bool strip{false};
+    bool minify{false};
+    bool gcSections{false};
 };
 
 struct MakeDebugOptions {
@@ -891,6 +899,14 @@ struct Command {
                 cmd.compile.preferDynamic = true;
             } else if (token == "--bundle-runtime") {
                 cmd.compile.bundleRuntime = true;
+            } else if (token == "--lto") {
+                cmd.compile.lto = true;
+            } else if (token == "--strip") {
+                cmd.compile.strip = true;
+            } else if (token == "--minify") {
+                cmd.compile.minify = true;
+            } else if (token == "--gc-sections") {
+                cmd.compile.gcSections = true;
             }
         }
         if (!cmd.compile.preferStatic && !cmd.compile.preferDynamic) {
@@ -1628,11 +1644,19 @@ int main(int argc, char** argv) {
         bool preferStatic = false;
         bool preferDynamic = false;
         bool bundleRuntime = false;
+        bool lto = false;
+        bool strip = false;
+        bool minify = false;
+        bool gcSections = false;
         for (size_t i=2; i<args.size(); ++i) {
             if (args[i] == "--output" && i+1 < args.size()) { output = args[i+1]; ++i; }
             else if (args[i] == "--static") { preferStatic = true; }
             else if (args[i] == "--dynamic") { preferDynamic = true; }
             else if (args[i] == "--bundle-runtime") { bundleRuntime = true; }
+            else if (args[i] == "--lto") { lto = true; }
+            else if (args[i] == "--strip") { strip = true; }
+            else if (args[i] == "--minify") { minify = true; }
+            else if (args[i] == "--gc-sections") { gcSections = true; }
         }
         // Default to a self-contained executable unless --dynamic is explicitly requested.
         if (!preferStatic && !preferDynamic) preferStatic = true;

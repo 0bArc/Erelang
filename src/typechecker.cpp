@@ -15,7 +15,10 @@ std::string merge_inferred_type(const std::string& left, const std::string& righ
     if (left.empty() || left == "unknown") return right;
     if (right.empty() || right == "unknown") return left;
     if (left == right) return left;
-    return "any";
+    // Strict: conflicting types produce "unknown" (which triggers an error downstream)
+    if (left == "any") return right;
+    if (right == "any") return left;
+    return "unknown";
 }
 
 bool parse_array_type(const std::string& typeName, std::string& elementType) {
@@ -50,8 +53,10 @@ bool parse_map_type(const std::string& typeName, std::string& keyType, std::stri
 }
 
 bool generic_type_compatible(const std::string& expected, const std::string& actual) {
-    if (expected == "any" || expected == "unknown") return true;
-    if (actual == "any" || actual == "unknown") return true;
+    // "any" is always compatible (explicitly opted-in by programmer)
+    if (expected == "any" || actual == "any") return true;
+    // "unknown" means type inference failure — never silently compatible
+    if (expected == "unknown" || actual == "unknown") return false;
     return expected == actual;
 }
 
@@ -239,12 +244,25 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
                     if ((TypeChecker::is_string(lt) && TypeChecker::is_int(rt)) || (TypeChecker::is_int(lt) && TypeChecker::is_string(rt))) {
                         DiagBuilder(result_, Severity::Error, "Illegal '+' operands", "TC011", ctx.actionName()).emit();
                     }
+                    DiagBuilder(result_, Severity::Error, "Invalid '+' operand types: " + lt.name + " + " + rt.name, "TC011", ctx.actionName())
+                        .hint("'+' requires int+int or string+string operands").emit();
                     inferred={"unknown"};
                     break;
                 case BinOp::Sub: case BinOp::Mul: case BinOp::Div: case BinOp::Mod: case BinOp::Pow:
-                    inferred = {"int"}; break;
-                case BinOp::And: case BinOp::Or: inferred={"bool"}; break;
-                default: inferred={"bool"}; break; // comparisons
+                    if (TypeChecker::is_int(lt) && TypeChecker::is_int(rt)) { inferred = {"int"}; break; }
+                    DiagBuilder(result_, Severity::Error, "Invalid arithmetic operand types: " + lt.name + " " + rt.name, "TC013", ctx.actionName())
+                        .hint("Arithmetic operators require int operands").emit();
+                    inferred = {"unknown"};
+                    break;
+                case BinOp::And: case BinOp::Or:
+                    if (TypeChecker::is_bool(lt) && TypeChecker::is_bool(rt)) { inferred={"bool"}; break; }
+                    DiagBuilder(result_, Severity::Error, "Invalid logical operand types: " + lt.name + " " + rt.name, "TC014", ctx.actionName())
+                        .hint("'&&' and '||' require bool operands").emit();
+                    inferred = {"unknown"};
+                    break;
+                case BinOp::EQ: case BinOp::NE: case BinOp::LT: case BinOp::LE: case BinOp::GT: case BinOp::GE:
+                    inferred={"bool"}; break;
+                default: inferred={"bool"}; break;
             }
         } else if constexpr (std::is_same_v<T, TernaryExpr>) {
             auto ct = check(node.cond, ctx);
@@ -583,7 +601,7 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                 if (decl == "auto") {
                     expected = vi.type.name;
                 } else if (decl == "any") {
-                    expected = "unknown";
+                    expected = "any";
                 } else if (decl == "int") {
                     expected = "int";
                 } else if (decl == "u8" || decl == "u16" || decl == "u32" || decl == "u64" ||
@@ -657,7 +675,8 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                         .emit();
                 }
                 auto is_compatible = [&](const std::string& exp, const std::string& actual) {
-                    if (exp == "unknown" || actual == "unknown") return true;
+                    if (exp == "any" || actual == "any") return true;
+                    if (exp == "unknown" || actual == "unknown") return false;
                     if (exp == actual) return true;
                     if (exp == "pointer" && actual == "pointer") return true;
                     if (collection_type_compatible(exp, actual)) return true;
@@ -683,7 +702,7 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
             } else {
                 auto t = stmt.value ? expr_.check(*stmt.value, ctx) : TypeInfo{"void"};
                 const bool compatible =
-                    t.name == "unknown" || t.name == retType ||
+                    t.name == "any" || t.name == retType ||
                     (retType == "int" && t.name == "bool");
                 if (!compatible) {
                     DiagBuilder(result_, Severity::Error,
@@ -709,7 +728,8 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                     if (v->isConst) DiagBuilder(result_, Severity::Error, "Cannot assign to const variable: " + stmt.varOrField, "TC051", ctx.actionName()).emit();
                     auto valT = expr_.check(stmt.value, ctx);
                     auto assign_compatible = [&](const std::string& target, const std::string& source) {
-                        if (target == "unknown" || source == "unknown") return true;
+                        if (target == "any" || source == "any") return true;
+                        if (target == "unknown" || source == "unknown") return false;
                         if (target == source) return true;
                         if (collection_type_compatible(target, source)) return true;
                         if (target.rfind("struct:", 0) == 0 && source.rfind("dict:", 0) == 0) return true;

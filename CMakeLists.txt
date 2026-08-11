@@ -85,6 +85,7 @@ add_library(erelang STATIC
   src/runtime/builtins/regex.cpp
   src/runtime/builtins/perm.cpp
   src/runtime/builtins/binary.cpp
+  src/runtime/builtins/performance.cpp
   src/runtime/features/serialization.cpp
   src/typechecker.cpp
   src/optimizer.cpp
@@ -246,6 +247,7 @@ elseif (BUILD_SHARED_RUNTIME)
     src/runtime/builtins/regex.cpp
     src/runtime/builtins/perm.cpp
     src/runtime/builtins/binary.cpp
+    src/runtime/builtins/performance.cpp
     src/runtime/features/serialization.cpp
     src/typechecker.cpp
     src/optimizer.cpp

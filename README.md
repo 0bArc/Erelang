@@ -18,10 +18,13 @@
 
 ## Features
 
-- **Interpreter runtime:** Actions, hooks, entities, globals, lists/dicts, plugin lifecycle.
-- **Modular runtime:** Split across focused translation units under `src/runtime/` instead of one monolithic `runtime.cpp`.
-- **Import-gated builtins:** Heavy I/O (network, fs, math, crypto, ...) available only when a program imports the module.
-- **Small core surface:** ~40 global builtins (time, env, args, strings, collections, plugin queries).
+- **Modular runtime:** Actions, hooks, entities, globals, lists, dicts, and plugin lifecycle across focused translation units under `src/runtime/`.
+- **Import-gated modules:** Network, filesystem, math, crypto, threads, websocket, and more are only linked when a program imports them. See [docs/](docs/README.md) for the full list.
+- **Semantic builtin API:** Organized by ownership. `fs.read()`, `net.get()`, `thread.spawn()`, `proc.execute()`, `data.set()`, `bin.push_u8()`. Type constructors like `int()`, `float()`, `string()`, `bool()` are always available without import.
+- **Debug and performance:** Debug module with leveled logging, assertions, timers, and breakpoints (`debug.log`, `debug.assert`, `debug.timer_start`). Performance profiling API (`perf.profile.begin`, `perf.mem.usage`, `perf.gc.collect`).
+- **Compiler directives:** `@inline`, `@noinline`, `@hot`, `@cold` for fine-grained optimization control.
+- **Compile flags:** `erelang --compile app.elan --strip --minify --lto --gc-sections` for sub-1MB static executables.
+- **Strict type checking:** Type mismatches are compile-time hard errors. `any` is opt-in only; no silent type fallback.
 - **CMake build:** Static lib `erelang`, CLI `obc`, runner `erelang.exe` (from `erelang_runner`).
 
 ## Runtime layout
@@ -31,23 +34,42 @@ All runtime code lives under `src/runtime/`.
 | File | Role |
 |------|------|
 | `src/runtime/core.cpp` | Program entry, `run`, `run_single_action`, plugin hook dispatch |
-| `src/runtime/helpers.cpp` | Shared helpers, global list/dict/file handle state |
+| `src/runtime/helpers.cpp` | Shared helpers, global container state (list/dict/file/set/queue) |
 | `src/runtime/eval.cpp` | Expression evaluation, string interpolation |
-| `src/runtime/actions.cpp` | Statement execution, action/hook/entity lookup |
-| `src/runtime/builtins.cpp` | `eval_builtin_call` + import-gated module dispatch |
-| `src/runtime/imports.cpp` | Import alias binding (`builtin/fs as fs` -> `read_text`, ...) |
-| `src/runtime/builtins/*.cpp` | Optional module implementations (math, network, data, ...) |
+| `src/runtime/actions.cpp` | Statement execution, handle-type method dispatch |
+| `src/runtime/builtins.cpp` | `eval_builtin_call`, type constructors, debug module, import-gated dispatch |
+| `src/runtime/imports.cpp` | Import alias binding (`builtin/fs as fs` maps `fs.read` to `read_text`) |
+| `src/runtime/builtins/*.cpp` | Module implementations: math, network, data, regex, crypto, binary, system, websocket, performance |
 | `src/runtime/features/*.cpp` | Runtime language features (serialization) |
-
-See [experimental/README.md](experimental/README.md) for the full import-gated module table.
 
 ### Core vs imported builtins
 
-**Core (no import):** `now_ms`, `env`, `rand_int`, `uuid`, `args_*`, `read_line`, `input`, `exec`/`spawn`/`exit`, conversions, basic `string.*`, `list_*`, `dict_*`, `plugin_core*`, `language_name`/`language_version`.
+**Core (no import, always available):**
 
-**Import required:** `builtin/network`, `builtin/fs`, `builtin/math`, `builtin/data`, `builtin/perm`, `builtin/system`, `builtin/regex`, `builtin/crypto`, `builtin/binary`, and (with `-DERELANG_EXPERIMENTAL=ON`) `builtin/threads`, `builtin/monitor`.
+`print`, `time.now_ms`, `time.now_iso`, `time.uuid`, `time.rand_int`, `env.get`, `env.load_dotenv`, `int()`, `float()`, `string()`, `bool()`, `int.is()`, `float.is()`, `string.is()`, `char.is_digit`, `char.is_space`, `char.is_alpha`, `lang.name`, `lang.version`, `lang.about`, `lang.limitations`, `json.encode`, `json.decode`, `plugin.core`, `plugin.core_files`, `plugin.core_keys`, `io.read_line`, `io.stdin`, `io.stderr`, `io.prompt`, `io.input`, `color.red`, `color.green`, `color.yellow`, `color.blue`, `color.magenta`, `color.cyan`, `color.bold`, `color.reset`, `list.*`, `dict.*`, `set.*`, `queue.*`, `file.*`, `ptr.*`, `strbuf.*`
 
-**Removed from core:** machine identity helpers (`machine_guid`, `hwid`, `volume_serial`, `username`, `computer_name`), Win32 GUI builtins, low-level ptr/malloc, tables/sets/queues, duplicate file-handle APIs.
+**Import required:**
+
+| Module | Import path | Example alias |
+|--------|------------|---------------|
+| Filesystem | `builtin/fs` | `fs.read`, `fs.write`, `fs.exists` |
+| Path utilities | `builtin/path` | `path.join`, `path.parent`, `path.name` |
+| Network | `builtin/network` | `net.get`, `net.post`, `net.download` |
+| Math | `builtin/math` | `math.sin`, `math.sqrt`, `math.abs` |
+| Data | `builtin/data` | `data.new`, `data.set`, `data.get` |
+| Regex | `builtin/regex` | `re.match`, `re.find`, `re.replace` |
+| Crypto | `builtin/crypto` | `crypto.hash`, `crypto.random_bytes` |
+| Binary | `builtin/binary` | `bin.new`, `bin.push_u8`, `bin.get_u8` |
+| Process | `builtin/process` | `proc.execute`, `proc.output`, `proc.exit_code` |
+| System (deprecated) | `builtin/system` | `system.execute`, `system.cmd` |
+| WebSocket | `builtin/websocket` | `ws.connect`, `ws.send`, `ws.recv` |
+| Permissions | `builtin/perm` | `perm.grant`, `perm.revoke` |
+| Debug | `builtin/debug` | `debug.log`, `debug.assert`, `debug.timer_start` |
+| Performance | `builtin/performance` | `perf.profile.begin`, `perf.mem.usage` |
+| Threads* | `builtin/threads` | `thread.spawn`, `thread.join`, `thread.sleep` |
+| Monitor* | `builtin/monitor` | `monitor.add`, `monitor.list` |
+
+\* Requires `-DERELANG_EXPERIMENTAL=ON` at build time.
 
 ## Getting Started
 
@@ -83,14 +105,16 @@ Outputs (Debug):
 ./build/bin/Debug/erelang.exe examples/program.elan
 ```
 
-Example with an imported module:
+Example with imported modules:
 
 ```elan
 @erelang
 #include <builtin/math> as math
+#include <builtin/debug> as debug
 
 public action main {
-    print math.add(2, 3);
+    int result = math.add(2, 3);
+    debug.log("computed: " + string(result));
 }
 
 run main;
@@ -98,29 +122,17 @@ run main;
 
 ## Documentation
 
-Full docs live under **[docs/](docs/README.md)**: topic guides (`filesystem.md`, `network.md`, `automation.md`, ...) instead of one monolithic file.
+Full docs live under **[docs/](docs/README.md)**. Topic guides cover each builtin module (`filesystem.md`, `network.md`, `process.md`, `regex.md`, `threads.md`, etc.) plus language fundamentals (`language.md`, `imports.md`, `diagnostics.md`).
 
 ## Status
 
-**Alpha**: all doc examples validated and passing as of 2026-08-11.
+**Alpha.** All doc examples validated and passing as of 2026-08-11.
 
-Tested modules: core builtins, collections, strings, math, crypto, regex, binary, data, filesystem, process/system, low-level (file handles, strbuf), automation patterns.
-
+Tested modules: core builtins, collections, strings, math, crypto, regex, binary, data, filesystem, process, debug, performance, websocket, and automation patterns.
 
 ## Roadmap
 
-There is no plan to release a formal roadmap in the near future.
-
-That does not mean development has slowed down. A significant amount of work is currently focused on closing the gaps in the language and improving the overall consistency of Erelang.
-
-You can expect a large number of the items currently documented in [`docs/language-gaps.md`] to be implemented in the near future. These gaps represent areas that are already identified and actively considered, rather than a list of forgotten ideas.
-
-The goal is to continue expanding Erelang while keeping the language coherent and avoiding unnecessary features or temporary solutions. Existing language systems will also continue to be refined as missing functionality is implemented.
-
-There is still a lot of work ahead, but Erelang is actively evolving. The contents of [`docs/language-gaps.md`] should give you a good indication of the areas currently being worked toward.
-
-More updates and documentation will be provided as these improvements become stable and ready to use.
-
+Active development is focused on closing language gaps and improving consistency. See [`docs/language-gaps.md`] for the current list of identified areas being worked toward. Updates and documentation are provided as improvements stabilize.
 
 ## Contributing
 

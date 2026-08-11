@@ -351,45 +351,46 @@ struct ThreadParkHookRegistrar {
 
 static std::string threads_dispatch(Runtime* rt, const std::string& name, const std::vector<std::string>& argv) {
     auto argS = [&](size_t i){ return i<argv.size()?argv[i]:std::string(); };
-    if (name == "thread_run") {
+    if (name == "thread_run" || name == "thread.spawn" || name == "thread.spawn_detached") {
         std::string err; bool detach = (argv.size() > 1 && argv[1] == "detach");
+        if (name == "thread.spawn_detached") detach = true;
         std::string action = argS(0);
         int id = threadmgr::create(rt, rt?rt->currentProgram():nullptr, action, detach, err);
         if (id < 0) return std::string("error:") + err;
         return threadmgr::handle(id);
     }
-    if (name == "thread_join") {
+    if (name == "thread_join" || name == "thread.join") {
         int id; if (!threadmgr::parse_handle(argS(0), id)) return "error:invalid_handle";
         std::string err; if (!threadmgr::join(id, err)) return std::string("error:") + err; return "true";
     }
-    if (name == "thread_join_timeout") {
+    if (name == "thread_join_timeout" || name == "thread.join_timeout") {
         int id; if (!threadmgr::parse_handle(argS(0), id)) return "error:invalid_handle";
         uint64_t ms = 0; if (argv.size()>1) { try { ms = std::stoull(argv[1]); } catch (...) { return "error:bad_timeout"; } }
         if (ms == 0) return "error:bad_timeout";
         std::string err; if (!threadmgr::join_timeout(id, ms, err)) return std::string("error:") + err; return "true";
     }
-    if (name == "thread_done") {
+    if (name == "thread_done" || name == "thread.done") {
         int id; if (!threadmgr::parse_handle(argS(0), id)) return "error:invalid_handle";
         bool exists=false, detached=false; bool done = threadmgr::is_done(id, exists, detached);
         if (!exists) return "error:invalid_handle"; return done?"true":"false";
     }
-    if (name == "thread_list") {
+    if (name == "thread_list" || name == "thread.list") {
         std::lock_guard<std::mutex> lg(g_threadMutex);
         int listId = g_nextListId++; g_lists[listId] = {};
         for (auto & kv : g_threads) g_lists[listId].push_back(threadmgr::handle(kv.first));
         return std::string("list:") + std::to_string(listId);
     }
-    if (name == "thread_wait_all") { threadmgr::wait_all(); return {}; }
-    if (name == "thread_count") { return std::to_string(threadmgr::count()); }
-    if (name == "thread_yield") { std::this_thread::yield(); return {}; }
-    if (name == "thread_gc" || name == "thread_purge") { threadmgr::gc_detached(); return {}; }
+    if (name == "thread_wait_all" || name == "thread.wait_all") { threadmgr::wait_all(); return {}; }
+    if (name == "thread_count" || name == "thread.active") { return std::to_string(threadmgr::count()); }
+    if (name == "thread_yield" || name == "thread.yield") { std::this_thread::yield(); return {}; }
+    if (name == "thread_gc" || name == "thread_purge" || name == "thread.kill") { threadmgr::gc_detached(); return {}; }
     if (name == "thread_gc_all") { threadmgr::gc_all(); return {}; }
-    if (name == "thread_remove") {
+    if (name == "thread_remove" || name == "thread.remove") {
         int id; if (!threadmgr::parse_handle(argS(0), id)) return "error:invalid_handle";
         bool force = (argv.size()>1 && (argv[1]=="force" || argv[1]=="kill"));
         return threadmgr::remove(id, force);
     }
-    if (name == "thread_state") {
+    if (name == "thread_state" || name == "thread.state") {
         int id; if (!threadmgr::parse_handle(argS(0), id)) return "error:invalid_handle";
         std::lock_guard<std::mutex> lg(g_threadMutex);
         auto it = g_threads.find(id); if (it==g_threads.end()) return "error:invalid_handle";
@@ -405,6 +406,12 @@ static std::string threads_dispatch(Runtime* rt, const std::string& name, const 
         }
         return std::string("state:") + s;
     }
+    // pool control stubs
+    if (name == "thread.pool.max" || name == "thread.pool.stop") {
+        // Pool control is a no-op at runtime; typechecker validates
+        return {};
+    }
+    // thread.sleep and thread.result are handled separately in builtins.cpp
     return {}; // unknown builtin name
 }
 

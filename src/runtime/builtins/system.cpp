@@ -338,7 +338,7 @@ std::string __erelang_builtin_system_dispatch(const std::string& name, const std
         return i < argv.size() ? argv[i] : std::string();
     };
 
-    if (name == "system.cmd") {
+    if (name == "system.cmd" || name == "proc.shell" || name == "sys.cmd") {
         std::wstring command = widen(argS(0));
         if (command.empty()) {
             return {};
@@ -359,7 +359,7 @@ std::string __erelang_builtin_system_dispatch(const std::string& name, const std
         return result.output;
     }
 
-    if (name == "system.execute") {
+    if (name == "system.execute" || name == "proc.execute" || name == "sys.execute" || name == "proc.spawn") {
         std::wstring target = widen(argS(0));
         if (target.empty()) {
             return {};
@@ -381,16 +381,31 @@ std::string __erelang_builtin_system_dispatch(const std::string& name, const std
         return std::to_string(static_cast<long long>(result.exitCode));
     }
 
-    if (name == "system.output") {
+    if (name == "system.output" || name == "proc.output" || name == "sys.output") {
         auto& state = system_state();
         std::scoped_lock lock(state.mutex);
         return state.lastOutput;
     }
 
-    if (name == "system.last_exit" || name == "system.last_exit_code") {
+    if (name == "system.last_exit" || name == "system.last_exit_code" || name == "proc.exit_code" || name == "sys.last_exit") {
         auto& state = system_state();
         std::scoped_lock lock(state.mutex);
         return std::to_string(static_cast<long long>(state.lastExitCode));
+    }
+
+    // Process protection stubs
+    if (name == "sys_opts") {
+        // Returns an empty options handle string
+        return std::string("opts:0");
+    }
+    if (name == "sys_kill" || name == "proc.kill") {
+        return {}; // stub — process handle tracking not implemented yet
+    }
+    if (name == "sys_wait" || name == "proc.wait") {
+        return {}; // stub
+    }
+    if (name == "sys_alive" || name == "proc.alive") {
+        return "false"; // stub
     }
 
     if (name == "system.ip.flush") {

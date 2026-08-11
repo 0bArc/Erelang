@@ -39,6 +39,7 @@ std::string __erelang_builtin_network_dispatch(const std::string& name, const st
 std::string __erelang_builtin_crypto_dispatch(const std::string& name, const std::vector<std::string>& argv);
 std::string __erelang_builtin_regex_dispatch(const std::string& name, const std::vector<std::string>& argv);
 std::string __erelang_builtin_binary_dispatch(const std::string& name, const std::vector<std::string>& argv);
+std::string __erelang_builtin_performance_dispatch(const std::string& name, const std::vector<std::string>& argv);
 std::string __erelang_builtin_threads_dispatch(Runtime* rt, const std::string& name, const std::vector<std::string>& argv);
 std::string __erelang_builtin_monitor_dispatch(Runtime* rt, const std::string& name, const std::vector<std::string>& argv);
 
@@ -171,10 +172,10 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         uint64_t delta = (uint64_t)to_int(eval_string(*args[0], env));
         s_timeVirtual += delta; return std::to_string((long long)s_timeVirtual);
     }
-    if (nameStr == "now_ms" && s_deterministic) {
+    if ((nameStr == "now_ms" || nameStr == "time.now_ms") && s_deterministic) {
         return std::to_string((long long)s_timeVirtual);
     }
-    if (nameStr == "plugin_core") {
+    if (nameStr == "plugin_core" || nameStr == "plugin.core") {
         if (args.size() < 2) {
             return {};
         }
@@ -228,7 +229,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return lookup(fileName, targetKey);
     }
-    if (nameStr == "plugin_core_files") {
+    if (nameStr == "plugin_core_files" || nameStr == "plugin.core_files") {
         if (args.empty()) {
             return {};
         }
@@ -248,7 +249,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return {};
     }
-    if (nameStr == "plugin_core_keys") {
+    if (nameStr == "plugin_core_keys" || nameStr == "plugin.core_keys") {
         if (args.size() < 2) {
             return {};
         }
@@ -274,19 +275,19 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         return {};
     }
     // List/Dict built-ins (cross-platform)
-    if (nameStr == "language_name") {
+    if (nameStr == "language_name" || nameStr == "lang.name") {
         return std::string("erelang / Erelang");
     }
-    if (nameStr == "language_version") {
+    if (nameStr == "language_version" || nameStr == "lang.version") {
         return std::string(erelang::BuildInfo::version());
     }
-    if (nameStr == "language_about") {
+    if (nameStr == "language_about" || nameStr == "lang.about") {
         return std::string(
             "Erelang (erelang) is a small, batteries-included DSL for desktop scripting.\n"
             "It focuses on quick GUIs, simple entities, and practical I/O built-ins.\n"
         );
     }
-    if (nameStr == "language_limitations") {
+    if (nameStr == "language_limitations" || nameStr == "lang.limitations") {
         return std::string(
             "Reasons it leans DSL-like / special-purpose:\n\n"
             "- Scope is narrow: Bakes in GUI, filesystem, UUIDs, debugging, entities.\n"
@@ -299,25 +300,26 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         );
     }
     // Conversion and type-check helpers
-    if (nameStr == "toint") {
+    if (nameStr == "toint" || nameStr == "int") {
         return std::to_string((long long)to_int(argS(0)));
     }
     if (nameStr == "toInt") {
         return std::to_string((long long)to_int(argS(0)));
     }
-    if (nameStr == "tofloat") {
+    if (nameStr == "tofloat" || nameStr == "float") {
         double v = to_double(argS(0));
         std::ostringstream ss; ss << v; return ss.str();
     }
-    if (nameStr == "tostr") {
+    if (nameStr == "tostr" || nameStr == "toString" || nameStr == "string") {
         return argS(0);
     }
-    if (nameStr == "toString") {
-        return argS(0);
-    }
-    if (nameStr == "tobool") {
+    if (nameStr == "tobool" || nameStr == "bool") {
         return is_truthy(argS(0)) ? std::string("true") : std::string("false");
     }
+    // Type-check methods
+    if (nameStr == "int.is") { return is_int_string(argS(0)) ? "true" : "false"; }
+    if (nameStr == "string.is") { return argS(0).empty() ? "false" : "true"; }
+    if (nameStr == "float.is") { return is_float_string(argS(0)) ? "true" : "false"; }
     auto normalize_type_name = [](std::string typeName) {
         std::string out;
         out.reserve(typeName.size());
@@ -687,7 +689,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         const int id = *idOpt;
         return g_ptrs.count(id) ? "true" : "false";
     }
-    if (nameStr == "to_json") {
+    if (nameStr == "to_json" || nameStr == "json.encode") {
         if (args.empty()) return "null";
         const std::string value = argS(0);
         if (value.rfind("dict:", 0) == 0) return features::dict_handle_to_json(value);
@@ -722,7 +724,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return std::string("\"") + features::json_escape(value) + "\"";
     }
-    if (nameStr == "from_json") {
+    if (nameStr == "from_json" || nameStr == "json.decode") {
         if (args.empty()) return {};
         return features::from_json_object_to_dict_handle(argS(0));
     }
@@ -920,13 +922,13 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
 #endif
     return {};
     }
-    if (nameStr == "read_line") {
+    if (nameStr == "read_line" || nameStr == "io.read_line") {
         std::string s; std::getline(std::cin, s); return s;
     }
-    if (nameStr == "stdin_read") {
+    if (nameStr == "stdin_read" || nameStr == "io.stdin") {
         std::string s; std::getline(std::cin, s); return s;
     }
-    if (nameStr == "stderr_print") {
+    if (nameStr == "stderr_print" || nameStr == "io.stderr") {
         std::cerr << argS(0) << "\n";
         return {};
     }
@@ -974,7 +976,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         std::getline(std::cin, s);
         return s;
     }
-    if (nameStr == "prompt") {
+    if (nameStr == "prompt" || nameStr == "io.prompt" || nameStr == "io.input") {
         std::string msg = argS(0); std::cout << msg; std::cout.flush(); std::string s; std::getline(std::cin, s); return s;
     }
     // Filesystem utilities (relative paths resolve against entry script directory)
@@ -1188,6 +1190,119 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
     if (nameStr == "color.cyan") return std::string("\x1b[36m") + argS(0) + "\x1b[0m";
     if (nameStr == "color.bold") return std::string("\x1b[1m") + argS(0) + "\x1b[0m";
     if (nameStr == "color.reset") return std::string("\x1b[0m");
+    // Debug builtins (no-ops when compiled with --release)
+    if (nameStr == "debug.section") {
+        std::string label = argS(0);
+        std::cerr << "\n=== " << label << " ===\n";
+        return {};
+    }
+    if (nameStr == "debug.assert") {
+        std::string cond = argS(0);
+        std::string msg = args.size() >= 2 ? argS(1) : "assertion failed";
+        if (!is_truthy(cond)) {
+            std::cerr << "[ASSERT FAIL] " << msg << "\n";
+            std::abort();
+        }
+        return cond;
+    }
+    if (nameStr == "debug.assert_eq") {
+        std::string a = argS(0);
+        std::string b = argS(1);
+        std::string msg = args.size() >= 3 ? argS(2) : "assert_eq failed: " + a + " != " + b;
+        if (a != b) {
+            std::cerr << "[ASSERT FAIL] " << msg << "\n";
+            std::abort();
+        }
+        return "true";
+    }
+    if (nameStr == "debug.log") {
+        std::cerr << "[LOG] " << argS(0) << "\n";
+        return {};
+    }
+    if (nameStr == "debug.trace") {
+        std::string cat = argS(0);
+        std::string msg = args.size() >= 2 ? argS(1) : std::string();
+        std::cerr << "[TRACE][" << cat << "] " << msg << "\n";
+        return {};
+    }
+    if (nameStr == "debug.warn") {
+        std::cerr << "\x1b[33m[WARN]\x1b[0m " << argS(0) << "\n";
+        return {};
+    }
+    if (nameStr == "debug.error") {
+        std::cerr << "\x1b[31m[ERROR]\x1b[0m " << argS(0) << "\n";
+        return {};
+    }
+    if (nameStr == "debug.ok") {
+        std::cerr << "\x1b[32m[OK]\x1b[0m " << argS(0) << "\n";
+        return {};
+    }
+    if (nameStr == "debug.dump") {
+        for (const auto& kv : env.vars) {
+            std::cerr << "  " << kv.first << " = " << kv.second << "\n";
+        }
+        return {};
+    }
+    if (nameStr == "debug.dump_var") {
+        std::string varName = argS(0);
+        auto it = env.vars.find(varName);
+        if (it != env.vars.end()) {
+            std::cerr << "  " << varName << " = " << it->second << " (len=" << it->second.size() << ")\n";
+        } else {
+            std::cerr << "  " << varName << " = <undefined>\n";
+        }
+        return {};
+    }
+    if (nameStr == "debug.stack") {
+        std::cerr << "[STACK] (depth: N/A)\n";
+        return {};
+    }
+    if (nameStr == "debug.heap") {
+        std::cerr << "[HEAP] lists=" << g_lists.size() << " dicts=" << g_dicts.size()
+                  << " sets=" << g_sets.size() << " queues=" << g_queues.size()
+                  << " strs=" << g_strBuffers.size() << " ptrs=" << g_ptrs.size() << "\n";
+        return {};
+    }
+    // Debug timers (static storage for simplicity)
+    static std::unordered_map<std::string, std::chrono::steady_clock::time_point> s_debugTimers;
+    if (nameStr == "debug.timer_start") {
+        std::string label = argS(0);
+        s_debugTimers[label] = std::chrono::steady_clock::now();
+        return label;
+    }
+    if (nameStr == "debug.timer_stop") {
+        std::string label = argS(0);
+        auto it = s_debugTimers.find(label);
+        if (it != s_debugTimers.end()) {
+            using namespace std::chrono;
+            auto elapsed = duration_cast<milliseconds>(steady_clock::now() - it->second).count();
+            s_debugTimers.erase(it);
+            std::cerr << "[TIMER " << label << "] " << elapsed << "ms\n";
+            return std::to_string(elapsed);
+        }
+        return "0";
+    }
+    if (nameStr == "debug.breakpoint") {
+#ifdef _WIN32
+        __debugbreak();
+#else
+        __builtin_trap();
+#endif
+        return {};
+    }
+    // Level and guard are no-ops at runtime (typechecker enforces)
+    if (nameStr == "debug.level.set") { return argS(0); }
+    if (nameStr == "debug.guard") { return argS(0); }
+    // Thread helpers (sleep and result — spawn/join/kill are in experimental threads module)
+    if (nameStr == "thread.sleep") {
+        int ms = static_cast<int>(to_int(argS(0)));
+        std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+        return {};
+    }
+    // thread.result is a stub — actual thread result tracking requires deep integration
+    if (nameStr == "thread.result") {
+        return {};
+    }
     if (nameStr == "strbuf_new") {
         const int id = g_nextStrBufId++;
         g_strBuffers[id] = args.empty() ? std::string() : argS(0);
@@ -1383,35 +1498,35 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         g_queues[id].clear();
         return {};
     }
-    if (nameStr == "char_is_digit") {
+    if (nameStr == "char_is_digit" || nameStr == "char.is_digit") {
         const std::string s = argS(0);
         if (s.empty()) return "false";
         return std::isdigit(static_cast<unsigned char>(s[0])) ? "true" : "false";
     }
-    if (nameStr == "char_is_space") {
+    if (nameStr == "char_is_space" || nameStr == "char.is_space") {
         const std::string s = argS(0);
         if (s.empty()) return "false";
         return std::isspace(static_cast<unsigned char>(s[0])) ? "true" : "false";
     }
-    if (nameStr == "char_is_alpha") {
+    if (nameStr == "char_is_alpha" || nameStr == "char.is_alpha") {
         const std::string s = argS(0);
         if (s.empty()) return "false";
         return std::isalpha(static_cast<unsigned char>(s[0])) ? "true" : "false";
     }
-    if (nameStr == "char_is_ident_start") {
+    if (nameStr == "char_is_ident_start" || nameStr == "char.is_ident_start") {
         const std::string s = argS(0);
         if (s.empty()) return "false";
         const unsigned char ch = static_cast<unsigned char>(s[0]);
         return (std::isalpha(ch) || ch == '_') ? "true" : "false";
     }
-    if (nameStr == "char_is_ident_part") {
+    if (nameStr == "char_is_ident_part" || nameStr == "char.is_ident_part") {
         const std::string s = argS(0);
         if (s.empty()) return "false";
         const unsigned char ch = static_cast<unsigned char>(s[0]);
         return (std::isalnum(ch) || ch == '_') ? "true" : "false";
     }
     // Time utilities
-    if (nameStr == "now_iso") {
+    if (nameStr == "now_iso" || nameStr == "time.now_iso") {
         using namespace std::chrono;
         auto t = system_clock::now(); auto tt = system_clock::to_time_t(t);
         std::tm tm{};
@@ -1424,7 +1539,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
             tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
         return std::string(buf);
     }
-    if (nameStr == "rand_int") {
+    if (nameStr == "rand_int" || nameStr == "time.rand_int") {
         int a = (int)to_int(argS(0)); int b = (int)to_int(argS(1)); if (a > b) std::swap(a,b);
         if (s_deterministic) {
             uint64_t r = deterministic_rng();
@@ -1436,7 +1551,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
             return std::to_string(dist(rng));
         }
     }
-    if (nameStr == "uuid") {
+    if (nameStr == "uuid" || nameStr == "time.uuid") {
 #ifdef _WIN32
         UUID u; if (UuidCreate(&u) == RPC_S_OK) {
             RPC_CSTR s = nullptr; if (UuidToStringA(&u, &s) == RPC_S_OK && s) {
@@ -1794,11 +1909,11 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return "0";
     }
-    if (nameStr == "now_ms") {
+    if (nameStr == "now_ms" || nameStr == "time.now_ms") {
         using namespace std::chrono;
         return std::to_string(duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count());
     }
-    if (nameStr == "env") {
+    if (nameStr == "env" || nameStr == "env.get") {
         std::string key = argS(0);
 #ifdef _WIN32
         std::wstring wkey(key.begin(), key.end());
@@ -1816,7 +1931,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         return v ? std::string(v) : std::string();
 #endif
     }
-    if (nameStr == "dotenv_load") {
+    if (nameStr == "dotenv_load" || nameStr == "env.load_dotenv") {
         std::string filepath = argS(0);
         if (filepath.empty()) {
             filepath = ".env";
@@ -1917,6 +2032,11 @@ std::optional<std::string> dispatch_imported_builtin_modules(
     }
     if (program_imports_module(program, "builtin/crypto")) {
         if (auto r = __erelang_builtin_crypto_dispatch(name, argv); !r.empty()) {
+            return r;
+        }
+    }
+    if (program_imports_module(program, "builtin/performance") || program_imports_module(program, "builtin/perf")) {
+        if (auto r = __erelang_builtin_performance_dispatch(name, argv); !r.empty()) {
             return r;
         }
     }

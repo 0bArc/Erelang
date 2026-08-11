@@ -1,0 +1,53 @@
+@erelang
+
+action hex_test {
+    int a = 0x1e;
+    int b = 0xdead;
+    print "hex1e={a}";
+    print "hexdead={b}";
+    int c = 10;
+    print "octal_ok={c}";
+}
+
+action ternary_method {
+    int x = 5;
+    string y = x > 3 ? "big" : "small";
+    print "ternary={y}";
+    string s = "hello";
+    string n = x > 3 ? s : "x";
+    print "ternary_string={n}";
+}
+
+action div_test {
+    try {
+        int z = 10 / 0;
+        print "div={z}";
+    } catch (ex) {
+        print "div_error={ex}";
+    }
+}
+
+action for_in_break {
+    Array<string> items = ["a", "b", "c", "d"];
+    for (string item : items) {
+        if (item == "b") { break; }
+        print "iter={item}";
+    }
+    print "after_break";
+}
+
+action str_cmp {
+    string a = "abc";
+    string b = "abd";
+    if (a < b) { print "lex_lt=true"; } else { print "lex_lt=false"; }
+}
+
+action main {
+    hex_test();
+    ternary_method();
+    div_test();
+    for_in_break();
+    str_cmp();
+}
+
+run main;

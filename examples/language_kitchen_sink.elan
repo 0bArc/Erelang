@@ -1,0 +1,64 @@
+@erelang
+
+// Import syntax examples:
+//   Single import:   import "plugins/discord/api" as api
+//   Named imports:   import {api, slash, gateway} from "plugins/discord"
+
+public entity Player {
+    public field name: str;
+    public field hp: int;
+}
+
+struct Vec2 {
+    x: int;
+    y: int;
+}
+
+public action print_array(Array<any> values) {
+    for (any v : values) {
+        print "value={v}";
+    }
+}
+
+public action print_dict(Map<string,any> d) {
+    for (string k, any v : d) {
+        print k + " -> " + toString(v);
+    }
+}
+
+public action main {
+    print "=== Arrays ===";
+    Array<int> nums = [2,4,6,8];
+    print_array(nums);
+
+    print "=== Dictionaries (Map-like) ===";
+    Map<string, any> stats = {
+        "gold": 120,
+        "zone": "forest",
+        "alive": true
+    };
+    print_dict(stats);
+
+    print "=== Struct values ===";
+    Vec2 pos = {"x": 3, "y": 4};
+    print "x={pos.x}, y={pos.y}";
+
+    print "=== Entity values ===";
+    Player p = new Player();
+    p.name = "Astra";
+    p.hp = 100;
+    print "Player {p.name} has {p.hp} hp";
+
+    print "=== Condition + loop ===";
+    int i = 0;
+    while (i < 3) {
+        if (i == 1) {
+            print "middle";
+        } else {
+            print "i={i}";
+        }
+        i = i + 1;
+    }
+}
+
+run main;

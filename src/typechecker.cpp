@@ -1,6 +1,9 @@
 #include "erelang/typechecker.hpp"
+#include "erelang/runtime_imports.hpp"
 #include <algorithm>
 #include <cctype>
+#include <functional>
+#include <sstream>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -77,69 +80,114 @@ bool collection_type_compatible(const std::string& expected, const std::string& 
 }
 
 std::optional<std::string> resolve_builtin_module_alias_call(const Program* program, const std::string& callName) {
-    if (!program) return std::nullopt;
-
+    if (!program) {
+        return std::nullopt;
+    }
     const auto dotPos = callName.find('.');
     if (dotPos == std::string::npos || dotPos == 0 || dotPos + 1 >= callName.size()) {
         return std::nullopt;
     }
-
     const std::string alias = callName.substr(0, dotPos);
-    std::string method = callName.substr(dotPos + 1);
-    std::transform(method.begin(), method.end(), method.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+    const std::string method = callName.substr(dotPos + 1);
+    return resolve_builtin_module_method(*program, alias, method);
+}
 
-    auto is_fs_module = [](std::string path) {
-        for (auto& ch : path) if (ch == '\\') ch = '/';
-        std::transform(path.begin(), path.end(), path.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
-        return path == "builtin/fs" || path == "builtin/erefs";
-    };
-
-    auto is_path_module = [](std::string path) {
-        for (auto& ch : path) if (ch == '\\') ch = '/';
-        std::transform(path.begin(), path.end(), path.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
-        return path == "builtin/path" || path == "builtin/erepath";
-    };
-
-    auto map_method = [&](bool isFs, bool isPath) -> std::optional<std::string> {
-        if (isFs) {
-            if (method == "read") return std::string{"read_text"};
-            if (method == "write") return std::string{"write_text"};
-            if (method == "append") return std::string{"append_text"};
-            if (method == "exists") return std::string{"file_exists"};
-            if (method == "mkdir") return std::string{"mkdirs"};
-            if (method == "copy") return std::string{"copy_file"};
-            if (method == "move") return std::string{"move_file"};
-            if (method == "remove") return std::string{"delete_file"};
-            if (method == "list") return std::string{"list_files"};
-            if (method == "cwd") return std::string{"cwd"};
-            if (method == "chdir") return std::string{"chdir"};
-            if (method == "join") return std::string{"path_join"};
-            if (method == "parent" || method == "dirname") return std::string{"path_dirname"};
-            if (method == "name" || method == "basename") return std::string{"path_basename"};
-            if (method == "ext") return std::string{"path_ext"};
-        }
-        if (isPath) {
-            if (method == "join") return std::string{"path_join"};
-            if (method == "parent" || method == "dirname") return std::string{"path_dirname"};
-            if (method == "name" || method == "basename") return std::string{"path_basename"};
-            if (method == "ext") return std::string{"path_ext"};
-            if (method == "exists") return std::string{"file_exists"};
-        }
-        return std::nullopt;
-    };
-
-    for (const auto& imp : program->imports) {
-        if (!imp.alias || *imp.alias != alias || imp.path.empty()) continue;
-        const bool isFs = is_fs_module(imp.path);
-        const bool isPath = is_path_module(imp.path);
-        if (!isFs && !isPath) continue;
-        if (auto mapped = map_method(isFs, isPath)) return mapped;
+std::optional<std::string> hint_for_unknown_call(const std::string& name) {
+    auto starts = [&](const char* prefix) { return name.rfind(prefix, 0) == 0; };
+    if (starts("file_") || name == "fopen" || name == "fread" || name == "fwrite" ||
+        name == "fclose" || name == "fseek" || name == "ftell" || name == "fflush") {
+        return "Filesystem builtin — add `#include <builtin/fs> as fs`, then `fs." + name + "(...)` or `" + name + "` after include";
     }
-
+    if (starts("regex_")) {
+        return "Regex builtin — add `#include <builtin/regex> as regex`";
+    }
+    if (starts("sha") || starts("hash_") || name == "md5" || starts("aes_")) {
+        return "Crypto builtin — add `#include <builtin/crypto> as crypto`";
+    }
+    if (starts("thread_") || name == "spawn_thread") {
+        return "Threads builtin — add `#include <builtin/threads> as threads`";
+    }
+    if (starts("net_") || name == "http_get" || name == "http_post") {
+        return "Network builtin — add `#include <builtin/network> as net`";
+    }
     return std::nullopt;
 }
 
+std::string format_param_range(int minP, int maxP) {
+    if (maxP < 0) return std::to_string(minP) + "+ args";
+    if (minP == maxP) return std::to_string(minP) + " arg" + (minP == 1 ? "" : "s");
+    return std::to_string(minP) + ".." + std::to_string(maxP) + " args";
+}
+
+void emit_unknown_call(TCResult& result, const std::string& name, const std::string& ctx) {
+    DiagBuilder b(result, Severity::Error, "Unknown action or builtin: " + name, "TC001", ctx);
+    if (auto hint = hint_for_unknown_call(name)) {
+        b.hint(*hint);
+    } else {
+        b.hint("Check spelling, add `#include <...>` for builtins, or declare `extern action " + name + "(...)`");
+    }
+    b.emit();
+}
+
+std::string infer_switch_case_type(const std::string& literal) {
+    if (literal.empty()) return "unknown";
+    if (literal.front() == '"' && literal.back() == '"') return "string";
+    if (literal == "true" || literal == "false") return "bool";
+    bool numeric = true;
+    bool hasDot = false;
+    for (size_t i = 0; i < literal.size(); ++i) {
+        const char c = literal[i];
+        if (i == 0 && c == '-') continue;
+        if (c == '.') { hasDot = hasDot || (i > 0); if (hasDot && literal.find('.', i + 1) != std::string::npos) { numeric = false; break; } continue; }
+        if (!std::isdigit(static_cast<unsigned char>(c))) { numeric = false; break; }
+    }
+    if (numeric) return hasDot ? "double" : "int";
+    return "unknown";
+}
+
+// Mark variables referenced inside a string literal's `{...}` interpolation
+// as used so TC120 does not report false positives. Interpolated expressions
+// are evaluated at runtime (Runtime::parse_interpolation_expr); here we
+// extract word tokens that resolve to a declared identifier and mark them.
+void mark_interpolation_uses(const std::string& text, CheckContext& ctx) {
+    if (!ctx.scopes) return;
+    std::size_t i = 0;
+    const std::size_t n = text.size();
+    while (i < n) {
+        const std::size_t open = text.find('{', i);
+        if (open == std::string::npos) break;
+        const std::size_t close = text.find('}', open + 1);
+        if (close == std::string::npos) break;
+        std::size_t j = open + 1;
+        while (j < close) {
+            const unsigned char c = static_cast<unsigned char>(text[j]);
+            if (std::isalpha(c) || c == '_') {
+                const std::size_t start = j;
+                while (j < close &&
+                       (std::isalnum(static_cast<unsigned char>(text[j])) || text[j] == '_')) {
+                    ++j;
+                }
+                const std::string word = text.substr(start, j - start);
+                if (VarInfo* v = ctx.scopes->lookup(word)) v->used = true;
+            } else {
+                ++j;
+            }
+        }
+        i = close + 1;
+    }
+}
+
 } // namespace
+
+std::string format_diagnostic(const Diagnostic& d) {
+    std::ostringstream oss;
+    const char* tag = d.severity == Severity::Warning ? "[warn] "
+                    : (d.severity == Severity::Note ? "[hint] " : "[error] ");
+    oss << tag << d.code << ": " << d.message;
+    if (!d.context.empty()) oss << " (" << d.context << ")";
+    if (d.line >= 0) oss << " at " << d.line << ":" << d.col;
+    return oss.str();
+}
 
 // ================= ExprChecker =================
 TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
@@ -150,13 +198,35 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
         using T = std::decay_t<decltype(node)>;
         if constexpr (std::is_same_v<T, ExprNumber>) inferred = {node.isFloatLiteral ? "double" : "int"};
         else if constexpr (std::is_same_v<T, ExprBool>) inferred = {"bool"};
-        else if constexpr (std::is_same_v<T, ExprString>) inferred = {"string"};
+        else if constexpr (std::is_same_v<T, ExprString>) {
+            inferred = {"string"};
+            mark_interpolation_uses(node.v, ctx);
+        }
         else if constexpr (std::is_same_v<T, ExprNull>) inferred = {"pointer"};
         else if constexpr (std::is_same_v<T, ExprIdent>) {
             if (ctx.scopes) {
                 if (auto* v = ctx.scopes->lookup(node.name)) { v->used = true; inferred = v->type; }
                 else {
-                    DiagBuilder(result_, Severity::Error, "Use before declaration: " + node.name, "TC010", ctx.actionName()).emit();
+                    bool resolvedEnum = false;
+                    if (ctx.program) {
+                        for (const auto& en : ctx.program->enums) {
+                            for (const auto& member : en.members) {
+                                if (node.name == member ||
+                                    node.name == en.name + "::" + member ||
+                                    node.name == en.name + "." + member) {
+                                    inferred = {"enum:" + en.name};
+                                    resolvedEnum = true;
+                                    break;
+                                }
+                            }
+                            if (resolvedEnum) break;
+                        }
+                    }
+                    if (!resolvedEnum) {
+                        DiagBuilder(result_, Severity::Error, "Use before declaration: " + node.name, "TC010", ctx.actionName())
+                            .hint("Add `" + node.name + " = ...;` above this line, or import the symbol")
+                            .emit();
+                    }
                 }
             }
         } else if constexpr (std::is_same_v<T, BinaryExpr>) {
@@ -190,7 +260,10 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
         } else if constexpr (std::is_same_v<T, UnaryExpr>) {
             if (node.op == UnOp::AddressOf) inferred = {"pointer"};
             else if (node.op == UnOp::Deref) inferred = {"unknown"};
-            else inferred = check(node.expr, ctx);
+            else if (node.op == UnOp::Not) {
+                check(node.expr, ctx);
+                inferred = {"bool"};
+            } else inferred = check(node.expr, ctx);
         } else if constexpr (std::is_same_v<T, NewExpr>) {
             inferred = TypeInfo{"entity:" + node.typeName};
         } else if constexpr (std::is_same_v<T, MemberExpr>) {
@@ -214,46 +287,54 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
                     }
                 }
             }
-        } else if constexpr (std::is_same_v<T, FunctionCallExpr>) {
-            if (node.collectionLiteral && node.name == "list_new") {
-                std::string elementType = "unknown";
-                for (const auto& arg : node.args) {
-                    elementType = merge_inferred_type(elementType, check(arg, ctx).name);
-                }
-                if (elementType.empty() || elementType == "unknown") elementType = "any";
-                inferred = {"array<" + elementType + ">"};
-                return;
-            }
-            if (node.collectionLiteral && node.name == "dict_new") {
-                std::string valueType = "unknown";
-                for (std::size_t i = 0; i < node.args.size(); ++i) {
-                    const auto argType = check(node.args[i], ctx).name;
-                    if (i % 2 == 1) {
-                        valueType = merge_inferred_type(valueType, argType);
-                    }
-                }
-                if (valueType.empty() || valueType == "unknown") valueType = "any";
-                inferred = {"map<string," + valueType + ">"};
-                return;
-            }
-            static const std::unordered_set<std::string> removedCollectionBuiltins = {
-                "list_new", "list_push", "list_get", "list_len", "list_join", "list_clear", "list_remove_at",
-                "dict_new", "dict_set", "dict_get", "dict_has", "dict_keys", "dict_values", "dict_get_or",
-                "dict_remove", "dict_clear", "dict_size", "dict_merge", "dict_clone", "dict_items", "dict_entries",
-                "dict_set_path", "dict_get_path", "dict_has_path", "dict_remove_path",
-                "hashmap_new", "hashmap_set", "hashmap_put", "hashmap_get", "hashmap_has", "hashmap_contains",
-                "hashmap_get_or", "hashmap_get_or_default", "hashmap_remove", "hashmap_clear", "hashmap_size",
-                "hashmap_keys", "hashmap_values", "hashmap_merge"
-            };
-            if (removedCollectionBuiltins.count(node.name) > 0) {
-                for (const auto& arg : node.args) {
-                    check(arg, ctx);
-                }
+        } else if constexpr (std::is_same_v<T, IndexExpr>) {
+            (void)check(node.object, ctx);
+            (void)check(node.index, ctx);
+            inferred = {"unknown"};
+        } else if constexpr (std::is_same_v<T, ListLiteralExpr>) {
+            if (node.elements.empty()) {
                 DiagBuilder(result_, Severity::Error,
-                    "Collection helper removed in manual mode: " + node.name,
-                    "TC141", ctx.actionName()).emit();
-                inferred = {"unknown"};
+                    "Empty array literal `[]` is not allowed — provide at least one element or use a typed declaration with a default value",
+                    "TC055", ctx.actionName())
+                    .hint("Example: `Array<string> items = [\"first\"];` — empty collections must be initialized with values")
+                    .emit();
+                inferred = {"array<any>"};
                 return;
+            }
+            std::string elementType = "unknown";
+            for (const auto& elem : node.elements) {
+                elementType = merge_inferred_type(elementType, check(elem, ctx).name);
+            }
+            if (elementType.empty() || elementType == "unknown") elementType = "any";
+            inferred = {"array<" + elementType + ">"};
+            return;
+        } else if constexpr (std::is_same_v<T, DictLiteralExpr>) {
+            if (node.entries.empty()) {
+                DiagBuilder(result_, Severity::Error,
+                    "Empty map literal `{}` is not allowed — provide at least one key-value pair",
+                    "TC056", ctx.actionName())
+                    .hint("Example: `Map<string,string> config = {\"key\": \"value\"};`")
+                    .emit();
+                inferred = {"map<string,any>"};
+                return;
+            }
+            std::string valueType = "unknown";
+            for (std::size_t i = 0; i < node.entries.size(); ++i) {
+                const auto entryType = check(node.entries[i], ctx).name;
+                if (i % 2 == 1) {
+                    valueType = merge_inferred_type(valueType, entryType);
+                }
+            }
+            if (valueType.empty() || valueType == "unknown") valueType = "any";
+            inferred = {"map<string," + valueType + ">"};
+            return;
+        } else if constexpr (std::is_same_v<T, FunctionCallExpr>) {
+
+            // Walk arguments so identifiers inside them are marked used (TC120)
+            // and argument expressions are type-checked. The collection-literal
+            // and removed-builtin branches above handle their own args.
+            for (const auto& arg : node.args) {
+                (void)check(arg, ctx);
             }
 
             // action or builtin
@@ -275,6 +356,15 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
             const Action* resolved = resolve_action(node.name);
             auto aIt = resolved ? tc_.actions_.find(resolved->name) : tc_.actions_.end();
             if (aIt != tc_.actions_.end()) {
+                tc_.actionUsage_[aIt->second->name].referenced = true;
+                if (aIt->second->params.size() != node.args.size()) {
+                    DiagBuilder(result_, Severity::Error,
+                        "Param count mismatch calling action " + node.name + ": got " + std::to_string(node.args.size()) +
+                        ", expected " + std::to_string(aIt->second->params.size()),
+                        "TC020", ctx.actionName())
+                        .hint("Declare params in `action " + node.name + "(...)` or pass the correct number of arguments")
+                        .emit();
+                }
                 inferred = { aIt->second->returnType.empty()?"void":aIt->second->returnType };
             } else {
                 std::string builtinLookup = node.name;
@@ -282,7 +372,28 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
                     builtinLookup = *mapped;
                 }
                 auto bIt = tc_.builtins_.find(builtinLookup);
-                inferred = bIt==tc_.builtins_.end()?TypeInfo{"unknown"}:TypeInfo{bIt->second.returnType};
+                if (bIt == tc_.builtins_.end()) {
+                    // Unknown calls in expression position must surface as TC001
+                    // instead of silently inferring "unknown". Dotted/qualified
+                    // names resolve at runtime (entity/struct methods), so only
+                    // flag plain identifiers.
+                    if (node.name.find('.') == std::string::npos &&
+                        node.name.find("::") == std::string::npos) {
+                        emit_unknown_call(result_, node.name, ctx.actionName());
+                    }
+                    inferred = {"unknown"};
+                } else {
+                    auto& bi = bIt->second;
+                    if ((int)node.args.size() < bi.minParams || (bi.maxParams >= 0 && (int)node.args.size() > bi.maxParams)) {
+                        DiagBuilder(result_, Severity::Error,
+                            "Param count mismatch calling builtin " + node.name + ": got " + std::to_string(node.args.size()) +
+                            ", expected " + format_param_range(bi.minParams, bi.maxParams),
+                            "TC021", ctx.actionName())
+                            .hint("Builtin signature: " + node.name + "(" + format_param_range(bi.minParams, bi.maxParams) + ")")
+                            .emit();
+                    }
+                    inferred = { bIt->second.returnType };
+                }
             }
         }
     }, e->node);
@@ -292,8 +403,23 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
 
 TypeInfo ExprChecker::require_bool(const ExprPtr& e, CheckContext& ctx, const std::string& code, const std::string& msg) {
     auto t = check(e, ctx);
-    if (!TypeChecker::is_bool(t)) {
+    if (!TypeChecker::is_bool_condition_type(t)) {
         DiagBuilder(result_, Severity::Error, msg, code, ctx.actionName()).emit();
+    }
+    if (e && std::holds_alternative<BinaryExpr>(e->node)) {
+        const auto& b = std::get<BinaryExpr>(e->node);
+        if (b.op == BinOp::EQ || b.op == BinOp::NE) {
+            auto is_string_bool_lit = [](const ExprPtr& side) -> bool {
+                if (!side || !std::holds_alternative<ExprString>(side->node)) return false;
+                const auto& lit = std::get<ExprString>(side->node).v;
+                return lit == "true" || lit == "false";
+            };
+            if (is_string_bool_lit(b.left) || is_string_bool_lit(b.right)) {
+                DiagBuilder(result_, Severity::Warning,
+                    "Compare bool to false/true, not string \"true\"/\"false\"",
+                    "TC063", ctx.actionName()).emit();
+            }
+        }
     }
     return t;
 }
@@ -305,6 +431,8 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
         using T = std::decay_t<decltype(stmt)>;
         if constexpr (std::is_same_v<T, PrintStmt>) {
             expr_.check(stmt.value, ctx);
+        } else if constexpr (std::is_same_v<T, ImportStmt>) {
+            // Imports are recorded on Program during parse; no per-stmt check needed.
         } else if constexpr (std::is_same_v<T, ActionCallStmt>) {
             auto resolve_action_name = [&](const std::string& name) -> std::string {
                 if (tc_.actions_.count(name)) return name;
@@ -324,25 +452,17 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
             auto it = resolvedName.empty() ? tc_.actions_.end() : tc_.actions_.find(resolvedName);
             if (it != tc_.actions_.end()) {
                 tc_.actionUsage_[it->second->name].referenced = true;
-                if (it->second->params.size() != stmt.args.size()) DiagBuilder(result_, Severity::Error, "Param count mismatch calling action " + stmt.name, "TC020", ctx.actionName()).emit();
+                if (it->second->params.size() != stmt.args.size()) {
+                    DiagBuilder(result_, Severity::Error,
+                        "Param count mismatch calling action " + stmt.name + ": got " + std::to_string(stmt.args.size()) +
+                        ", expected " + std::to_string(it->second->params.size()),
+                        "TC020", ctx.actionName())
+                        .hint("Declare params in `action " + stmt.name + "(...)` or pass the correct number of arguments")
+                        .emit();
+                }
             } else if (tc_.externActions_.count(stmt.name)) {
                 // extern action declared: allow unresolved runtime binding
             } else {
-                static const std::unordered_set<std::string> removedCollectionBuiltins = {
-                    "list_new", "list_push", "list_get", "list_len", "list_join", "list_clear", "list_remove_at",
-                    "dict_new", "dict_set", "dict_get", "dict_has", "dict_keys", "dict_values", "dict_get_or",
-                    "dict_remove", "dict_clear", "dict_size", "dict_merge", "dict_clone", "dict_items", "dict_entries",
-                    "dict_set_path", "dict_get_path", "dict_has_path", "dict_remove_path",
-                    "hashmap_new", "hashmap_set", "hashmap_put", "hashmap_get", "hashmap_has", "hashmap_contains",
-                    "hashmap_get_or", "hashmap_get_or_default", "hashmap_remove", "hashmap_clear", "hashmap_size",
-                    "hashmap_keys", "hashmap_values", "hashmap_merge"
-                };
-                const bool removedCollectionBuiltin = removedCollectionBuiltins.count(stmt.name) > 0;
-                if (removedCollectionBuiltin) {
-                    DiagBuilder(result_, Severity::Error,
-                        "Collection helper removed in manual mode: " + stmt.name,
-                        "TC141", ctx.actionName()).emit();
-                }
                 bool externResolved = false;
                 if (stmt.name.find("::") == std::string::npos) {
                     const std::string suffix = "::" + stmt.name;
@@ -359,17 +479,24 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                     }
                     externResolved = !foundExtern.empty();
                 }
-                if (!externResolved && !removedCollectionBuiltin) {
+                if (!externResolved) {
                     std::string builtinLookup = stmt.name;
                     if (auto mapped = resolve_builtin_module_alias_call(ctx.program, stmt.name)) {
                         builtinLookup = *mapped;
                     }
                     auto bIt = tc_.builtins_.find(builtinLookup);
                     if (bIt == tc_.builtins_.end()) {
-                        DiagBuilder(result_, Severity::Error, "Unknown action: " + stmt.name, "TC001", ctx.actionName()).emit();
+                        emit_unknown_call(result_, stmt.name, ctx.actionName());
                     } else {
                         auto& bi = bIt->second;
-                        if ((int)stmt.args.size() < bi.minParams || (bi.maxParams>=0 && (int)stmt.args.size() > bi.maxParams)) DiagBuilder(result_, Severity::Error, "Param count mismatch calling builtin " + stmt.name, "TC021", ctx.actionName()).emit();
+                        if ((int)stmt.args.size() < bi.minParams || (bi.maxParams>=0 && (int)stmt.args.size() > bi.maxParams)) {
+                            DiagBuilder(result_, Severity::Error,
+                                "Param count mismatch calling builtin " + stmt.name + ": got " + std::to_string(stmt.args.size()) +
+                                ", expected " + format_param_range(bi.minParams, bi.maxParams),
+                                "TC021", ctx.actionName())
+                                .hint("Builtin signature: " + stmt.name + "(" + format_param_range(bi.minParams, bi.maxParams) + ")")
+                                .emit();
+                        }
                     }
                 }
             }
@@ -381,11 +508,16 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
             if (auto mapped = resolve_builtin_module_alias_call(ctx.program, callName)) {
                 auto it = tc_.builtins_.find(*mapped);
                 if (it == tc_.builtins_.end()) {
-                    DiagBuilder(result_, Severity::Error, "Unknown builtin action: " + callName, "TC001", ctx.actionName()).emit();
+                    emit_unknown_call(result_, callName, ctx.actionName());
                 } else {
                     const auto& bi = it->second;
                     if ((int)stmt.args.size() < bi.minParams || (bi.maxParams >= 0 && (int)stmt.args.size() > bi.maxParams)) {
-                        DiagBuilder(result_, Severity::Error, "Param count mismatch calling builtin " + callName, "TC021", ctx.actionName()).emit();
+                        DiagBuilder(result_, Severity::Error,
+                            "Param count mismatch calling builtin " + callName + ": got " + std::to_string(stmt.args.size()) +
+                            ", expected " + format_param_range(bi.minParams, bi.maxParams),
+                            "TC021", ctx.actionName())
+                            .hint("Call as `" + stmt.objectName + "." + stmt.method + "(...)` with " + format_param_range(bi.minParams, bi.maxParams))
+                            .emit();
                     }
                 }
                 return;
@@ -401,17 +533,30 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
 
                     auto actionIt = tc_.actions_.find(stmt.method);
                     if (actionIt == tc_.actions_.end()) {
-                        DiagBuilder(result_, Severity::Error, "Unknown imported action: " + callName, "TC001", ctx.actionName()).emit();
+                        DiagBuilder(result_, Severity::Error, "Unknown imported action: " + callName, "TC001", ctx.actionName())
+                            .hint("Module `" + stmt.objectName + "` has no exported action `" + stmt.method + "` — check import path and `public action` visibility")
+                            .emit();
                     } else if (actionIt->second->params.size() != stmt.args.size()) {
-                        DiagBuilder(result_, Severity::Error, "Param count mismatch calling action " + callName, "TC020", ctx.actionName()).emit();
+                        DiagBuilder(result_, Severity::Error,
+                            "Param count mismatch calling action " + callName + ": got " + std::to_string(stmt.args.size()) +
+                            ", expected " + std::to_string(actionIt->second->params.size()),
+                            "TC020", ctx.actionName()).emit();
                     }
                     return;
                 }
             }
 
-            DiagBuilder(result_, Severity::Error,
-                "Method syntax disabled in manual mode: " + callName,
-                "TC141", ctx.actionName()).emit();
+            // Allow method syntax in manual mode:
+            // defer exact receiver/member validation to runtime for now.
+            if (ctx.scopes) {
+                if (!ctx.scopes->lookup(stmt.objectName)) {
+                    DiagBuilder(result_, Severity::Error,
+                        "Use before declaration: " + stmt.objectName,
+                        "TC010", ctx.actionName())
+                        .hint("Declare `" + stmt.objectName + " = ...;` before use, or check import alias spelling")
+                        .emit();
+                }
+            }
         } else if constexpr (std::is_same_v<T, LetStmt>) {
             if (scopes.lookup(stmt.name)) DiagBuilder(result_, Severity::Error, "Variable redeclaration: " + stmt.name, "TC030", ctx.actionName()).emit();
             VarInfo vi; vi.type = expr_.check(stmt.value, ctx); vi.isConst = stmt.isConst; vi.assigned=true;
@@ -449,6 +594,8 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                     expected = "double";
                 } else if (decl == "bool") {
                     expected = "bool";
+                } else if (decl == "pointer") {
+                    expected = "pointer";
                 } else if (decl == "string" || decl == "str" || decl == "char") {
                     expected = "string";
                 } else if (decl == "array") {
@@ -499,11 +646,15 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                     }
                     if (!matchedType) {
                         known = false;
-                        DiagBuilder(result_, Severity::Error, "Unknown declared type: " + stmt.declaredType, "TC041", ctx.actionName()).emit();
+                        DiagBuilder(result_, Severity::Error, "Unknown declared type: " + stmt.declaredType, "TC041", ctx.actionName())
+                            .hint("Known primitives: int, string, bool, double, void, pointer, array<T>, map<K,V>, struct:Name, enum:Name")
+                            .emit();
                     }
                 } else {
                     known = false;
-                    DiagBuilder(result_, Severity::Error, "Unknown declared type: " + stmt.declaredType, "TC041", ctx.actionName()).emit();
+                    DiagBuilder(result_, Severity::Error, "Unknown declared type: " + stmt.declaredType, "TC041", ctx.actionName())
+                        .hint("Known primitives: int, string, bool, double, void, pointer, array<T>, map<K,V>, struct:Name, enum:Name")
+                        .emit();
                 }
                 auto is_compatible = [&](const std::string& exp, const std::string& actual) {
                     if (exp == "unknown" || actual == "unknown") return true;
@@ -531,14 +682,30 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                 if (stmt.value) expr_.check(*stmt.value, ctx);
             } else {
                 auto t = stmt.value ? expr_.check(*stmt.value, ctx) : TypeInfo{"void"};
-                if (t.name != "unknown" && t.name != retType) DiagBuilder(result_, Severity::Error, "Return type mismatch: expected " + retType + " got " + t.name, "TC040", ctx.actionName()).emit();
+                const bool compatible =
+                    t.name == "unknown" || t.name == retType ||
+                    (retType == "int" && t.name == "bool");
+                if (!compatible) {
+                    DiagBuilder(result_, Severity::Error,
+                        "Return type mismatch: expected " + retType + ", got " + t.name,
+                        "TC040", ctx.actionName())
+                        .hint("Change return expression type or declare action return type as `" + t.name + "`")
+                        .emit();
+                }
             }
             flow = ReturnFlow::AlwaysReturn;
         } else if constexpr (std::is_same_v<T, SetStmt>) {
             if (!stmt.isMember) {
                 auto* v = scopes.lookup(stmt.varOrField);
-                if (!v) DiagBuilder(result_, Severity::Error, "Assign to undeclared variable: " + stmt.varOrField, "TC050", ctx.actionName()).emit();
-                else {
+                if (!v) {
+                    DiagBuilder(result_, Severity::Error,
+                        "Variable '" + stmt.varOrField + "' must be declared with an explicit type before use",
+                        "TC053", ctx.actionName())
+                        .hint("Use a typed declaration: `int " + stmt.varOrField + " = ...;` or `string " + stmt.varOrField + " = ...;`")
+                        .emit();
+                    VarInfo vi; vi.type = expr_.check(stmt.value, ctx); vi.isConst = false; vi.assigned = true;
+                    scopes.declare(stmt.varOrField, vi);
+                } else {
                     if (v->isConst) DiagBuilder(result_, Severity::Error, "Cannot assign to const variable: " + stmt.varOrField, "TC051", ctx.actionName()).emit();
                     auto valT = expr_.check(stmt.value, ctx);
                     auto assign_compatible = [&](const std::string& target, const std::string& source) {
@@ -550,7 +717,13 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                         return false;
                     };
                     if (v->type.name == "unknown") v->type = valT;
-                    else if (!assign_compatible(v->type.name, valT.name)) DiagBuilder(result_, Severity::Error, "Assignment type mismatch on " + stmt.varOrField, "TC052", ctx.actionName()).emit();
+                    else if (!assign_compatible(v->type.name, valT.name)) {
+                        DiagBuilder(result_, Severity::Error,
+                            "Assignment type mismatch on " + stmt.varOrField + ": variable is " + v->type.name + ", value is " + valT.name,
+                            "TC052", ctx.actionName())
+                            .hint("Cast/coerce with toint/tostr/tobool, or redeclare with typed form: `" + valT.name + " " + stmt.varOrField + " = ...;`")
+                            .emit();
+                    }
                     v->assigned = true;
                 }
             } else {
@@ -590,7 +763,14 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
             check_block(*stmt.body, inner, scopes, retType);
         } else if constexpr (std::is_same_v<T, ForInStmt>) {
             auto guard = scopes.push();
-            VarInfo vi; vi.assigned=true; scopes.declare(stmt.var, vi);
+            if (stmt.varType.empty()) {
+                DiagBuilder(result_, Severity::Error,
+                    "Loop variable '" + stmt.var + "' must have an explicit type annotation",
+                    "TC054", ctx.actionName())
+                    .hint("Add a type before the variable name — e.g. `for (string item : items)` or `for (int n : nums)`")
+                    .emit();
+            }
+            VarInfo vi; vi.type = {stmt.varType.empty() ? "unknown" : stmt.varType}; vi.assigned=true; scopes.declare(stmt.var, vi);
             if (stmt.valueVar) {
                 VarInfo vv; vv.assigned=true; scopes.declare(*stmt.valueVar, vv);
             }
@@ -609,11 +789,22 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                 check_block(*stmt.catchBlk, ctx, scopes, retType);
             }
         } else if constexpr (std::is_same_v<T, SwitchStmt>) {
-            expr_.check(stmt.selector, ctx);
-            for (auto& c : stmt.cases) { auto guardC = scopes.push(); check_block(*c.body, ctx, scopes, retType); }
+            const auto selT = expr_.check(stmt.selector, ctx);
+            for (auto& c : stmt.cases) {
+                const std::string caseT = infer_switch_case_type(c.value);
+                if (selT.name != "unknown" && caseT != "unknown" && selT.name != caseT) {
+                    DiagBuilder(result_, Severity::Warning,
+                        "Switch case `" + c.value + "` type (" + caseT + ") may not match selector (" + selT.name + ")",
+                        "TC064", ctx.actionName())
+                        .hint("Use case labels with the same type as `switch` expression, or cast selector")
+                        .emit();
+                }
+                auto guardC = scopes.push();
+                check_block(*c.body, ctx, scopes, retType);
+            }
             if (stmt.defaultBlk) { auto guardD = scopes.push(); check_block(*stmt.defaultBlk, ctx, scopes, retType); }
-        } else if constexpr (std::is_same_v<T, ParallelStmt>) {
-            auto guardP = scopes.push(); check_block(stmt.body, ctx, scopes, retType);
+        } else if constexpr (std::is_same_v<T, std::shared_ptr<ParallelStmt>>) {
+            if (stmt) { auto guardP = scopes.push(); check_block(stmt->body, ctx, scopes, retType); }
         } else if constexpr (std::is_same_v<T, UnsafeStmt>) {
             auto guardU = scopes.push();
             check_block(*stmt.body, ctx, scopes, retType);
@@ -685,13 +876,59 @@ void TypeChecker::pass_check_program(const Program& program, TCResult& out) {
         DiagBuilder(out, Severity::Error, "No run target set (expected action main or run directive)", "TC111", "program").emit();
     }
 
+    // Walk a block recursively to check if any ReturnStmt has a value expression.
+    std::function<bool(const Block&)> block_has_value_return = [&](const Block& blk) -> bool {
+        for (const auto& s : blk.stmts) {
+            if (const auto* r = std::get_if<ReturnStmt>(&s)) {
+                if (r->value) return true;
+            } else if (const auto* ifst = std::get_if<IfStmt>(&s)) {
+                if (ifst->thenBlk && block_has_value_return(*ifst->thenBlk)) return true;
+                if (ifst->elseBlk && block_has_value_return(*ifst->elseBlk)) return true;
+            } else if (const auto* wh = std::get_if<WhileStmt>(&s)) {
+                if (block_has_value_return(*wh->body)) return true;
+            } else if (const auto* fi = std::get_if<ForInStmt>(&s)) {
+                if (block_has_value_return(*fi->body)) return true;
+            } else if (const auto* fo = std::get_if<ForStmt>(&s)) {
+                if (block_has_value_return(*fo->body)) return true;
+            } else if (const auto* tc = std::get_if<TryCatchStmt>(&s)) {
+                if (block_has_value_return(*tc->tryBlk)) return true;
+                if (block_has_value_return(*tc->catchBlk)) return true;
+            }
+        }
+        return false;
+    };
+
     ExprChecker expr(*this, out); StmtChecker stmt(*this, expr, out);
     for (auto& a : program.actions) {
         CheckContext ctx; ctx.program=&program; ctx.currentAction=&a;
         ScopeManager scopes; // base scope
         ctx.scopes = &scopes;
+        // Warn if the action has return-value statements but no declared return type.
+        if (a.returnType.empty() && block_has_value_return(a.body)) {
+            DiagBuilder(out, Severity::Error,
+                "Action '" + a.name + "' returns a value but has no declared return type",
+                "TC058", a.name)
+                .hint("Add a return type after the parameter list: `public action " + a.name + "(...): int { ... }`")
+                .emit();
+        }
         // seed params
-        for (auto& p : a.params) { VarInfo vi; vi.type={p.type.empty()?"unknown":p.type}; vi.assigned=true; scopes.declare(p.name, vi); }
+        for (auto& p : a.params) {
+            if (p.type.empty()) {
+                DiagBuilder(out, Severity::Error,
+                    "Parameter '" + p.name + "' in action '" + a.name + "' has no type annotation",
+                    "TC057", a.name)
+                    .hint("Add a type: `" + a.name + "(" + p.name + ": int)` or `" + a.name + "(int " + p.name + ")`")
+                    .emit();
+            }
+            VarInfo vi; vi.type={p.type.empty()?"unknown":p.type}; vi.assigned=true; scopes.declare(p.name, vi);
+        }
+        // Register globals with explicit type annotations so action bodies can reference them
+        for (auto& g : program.globals) {
+            if (!g.typeName.empty()) {
+                VarInfo gi; gi.type = {g.typeName}; gi.assigned = true; gi.used = true;
+                scopes.declare(g.name, gi);
+            }
+        }
         auto rf = stmt.check_block(a.body, ctx, scopes, a.returnType.empty()?"void":a.returnType);
         for (auto& frame : scopes.all()) for (auto& kv : frame) if (!kv.second.used) DiagBuilder(out, Severity::Warning, "Unused variable: " + kv.first, "TC120", a.name).emit();
         if (!returns_void(a) && rf != ReturnFlow::AlwaysReturn) DiagBuilder(out, Severity::Error, "Missing return in action declared to return " + a.returnType, "TC121", a.name).emit();
@@ -705,159 +942,220 @@ void TypeChecker::finalize_unused(const Program& program, TCResult& out) {
 }
 
 TCResult TypeChecker::check(const Program& program) {
-    TCResult r; pass_collect(program); pass_check_program(program, r); finalize_unused(program, r); return r;
+    // builtins_ must not leak across check() calls: a previous program's module
+    // imports would otherwise grant builtins (e.g. system.cmd) to this program.
+    builtins_.clear();
+    init_builtins();
+    register_imported_module_builtins(program);
+    TCResult r;
+    pass_collect(program);
+    pass_check_program(program, r);
+    finalize_unused(program, r);
+    return r;
+}
+
+void TypeChecker::register_imported_module_builtins(const Program& program) {
+    auto add = [&](std::string n, int minP, int maxP, std::string rt) {
+        builtins_[std::move(n)] = BuiltinInfo{minP, maxP, std::move(rt)};
+    };
+    if (program_imports_module(&program, "builtin/network") || program_imports_module(&program, "builtin/net")) {
+        add("http_get", 1, 1, "string");
+        add("http_download", 2, 2, "bool");
+        add("hls_download_best", 2, 2, "bool");
+        add("url_encode", 1, 1, "string");
+        add("network.ip.flush", 0, 0, "string");
+        add("network.ip.release", 0, 1, "string");
+        add("network.ip.renew", 0, 1, "string");
+        add("network.ip.registerdns", 0, 0, "string");
+        add("network.debug.enable", 0, 1, "string");
+        add("network.debug.disable", 0, 0, "string");
+        add("network.debug.status", 0, 0, "string");
+        add("network.debug.last", 0, 0, "string");
+        add("network.debug.clear", 0, 0, "string");
+        add("network.debug.log_tail", 0, 1, "string");
+        add("http_get_auth", 2, 2, "string");
+        add("http_post_auth", 4, 4, "string");
+    }
+    if (program_imports_module(&program, "builtin/websocket") || program_imports_module(&program, "builtin/ws")) {
+        add("ws_connect", 1, 1, "int");
+        add("ws_send", 2, 2, "bool");
+        add("ws_recv", 1, 1, "string");
+        add("ws_recv_timeout", 2, 2, "string");
+        add("ws_close", 1, 1, "void");
+    }
+    if (program_imports_module(&program, "builtin/regex")) {
+        add("regex_match", 2, 2, "bool");
+        add("regex_find", 2, 2, "string");
+        add("regex_replace", 3, 3, "string");
+    }
+    if (program_imports_module(&program, "builtin/crypto")) {
+        add("hash_fnv1a", 1, 1, "string");
+        add("random_bytes", 1, 1, "string");
+    }
+    if (program_imports_module(&program, "builtin/binary")) {
+        add("bin_new", 0, 0, "string");
+        add("bin_push_u8", 2, 2, "void");
+        add("bin_len", 1, 1, "int");
+        add("bin_hex", 1, 1, "string");
+        add("bin_from_hex", 1, 1, "string");
+        add("bin_get_u8", 2, 2, "int");
+    }
+    if (program_imports_module(&program, "builtin/threads")) {
+        add("thread_run", 1, 2, "string");
+        add("thread_join", 1, 1, "bool");
+        add("thread_join_timeout", 2, 2, "bool");
+        add("thread_done", 1, 1, "bool");
+        add("thread_list", 0, 0, "string");
+        add("thread_wait_all", 0, 0, "void");
+        add("thread_count", 0, 0, "int");
+        add("thread_yield", 0, 0, "void");
+        add("thread_gc", 0, 0, "void");
+        add("thread_gc_all", 0, 0, "void");
+        add("thread_purge", 0, 0, "void");
+        add("thread_remove", 1, 2, "string");
+        add("thread_state", 1, 1, "string");
+    }
+    if (program_imports_module(&program, "builtin/monitor")) {
+        add("monitor_add", 1, 2, "string");
+        add("monitor_remove", 1, 1, "void");
+        add("monitor_list", 0, 0, "string");
+        add("monitor_info", 1, 1, "string");
+        add("monitor_last_change", 1, 1, "string");
+        add("monitor_set_interval", 2, 2, "void");
+    }
+    if (program_imports_module(&program, "builtin/math")) {
+        add("add", 2, 2, "int"); add("sub", 2, 2, "int"); add("mul", 2, 2, "int"); add("div", 2, 2, "int"); add("mod", 2, 2, "int");
+        add("min", 2, 2, "int"); add("max", 2, 2, "int"); add("abs", 1, 1, "int");
+        add("sin", 1, 1, "int"); add("cos", 1, 1, "int"); add("tan", 1, 1, "int");
+        add("sqrt", 1, 1, "int"); add("pow", 2, 2, "int");
+        add("collatz_len", 1, 1, "int"); add("collatz_sweep", 1, 1, "int");
+        add("collatz_best_n", 0, 0, "int"); add("collatz_best_steps", 0, 0, "int");
+        add("collatz_total_steps", 0, 0, "int"); add("collatz_avg_steps", 0, 0, "int");
+    }
+    if (program_imports_module(&program, "builtin/data")) {
+        add("data_new", 0, 0, "string");
+        add("data_set", 3, 3, "void");
+        add("data_get", 2, 2, "string");
+        add("data_has", 2, 2, "bool");
+        add("data_keys", 1, 1, "string");
+        add("data_save", 2, 2, "void");
+        add("data_load", 1, 1, "string");
+    }
+    if (program_imports_module(&program, "builtin/perm")) {
+        add("perm_grant", 1, 1, "void"); add("perm_revoke", 1, 1, "void");
+        add("perm_has", 1, 1, "bool"); add("perm_list", 0, 0, "string");
+    }
+    if (program_imports_module(&program, "builtin/system")) {
+        add("system.cmd", 1, 2, "string");
+        add("system.execute", 1, 3, "int");
+        add("system.output", 0, 0, "string");
+        add("system.last_exit", 0, 0, "int");
+        add("system.ip.flush", 0, 0, "string");
+    }
+    if (program_imports_module(&program, "builtin/path") || program_imports_module(&program, "builtin/erepath")) {
+        add("path_join", 1, -1, "string"); add("path_dirname", 1, 1, "string");
+        add("path_basename", 1, 1, "string"); add("path_ext", 1, 1, "string");
+        add("file_exists", 1, 1, "bool");
+    }
+    if (program_imports_module(&program, "builtin/fs") || program_imports_module(&program, "builtin/erefs")) {
+        add("read_text", 1, 1, "string"); add("write_text", 2, 2, "void"); add("append_text", 2, 2, "void");
+        add("file_exists", 1, 1, "bool"); add("mkdirs", 1, 1, "void"); add("copy_file", 2, 2, "bool");
+        add("move_file", 2, 2, "bool"); add("delete_file", 1, 1, "bool"); add("list_files", 1, 1, "unknown");
+        add("load_elan", 1, 1, "string"); add("load_elan_dir", 1, 1, "unknown");
+        add("call_action", 1, -1, "any");
+        add("cwd", 0, 0, "string"); add("chdir", 1, 1, "bool");
+        add("path_join", 1, -1, "string"); add("path_dirname", 1, 1, "string");
+        add("path_basename", 1, 1, "string"); add("path_ext", 1, 1, "string");
+        add("file_mtime", 1, 1, "int"); add("file_size", 1, 1, "int");
+        add("file_open", 2, 2, "string"); add("file_close", 1, 1, "bool");
+        add("file_read", 1, 2, "string"); add("file_write", 2, 2, "string");
+        add("file_seek", 2, 3, "bool"); add("file_tell", 1, 1, "int");
+        add("file_flush", 1, 1, "bool");
+        add("fopen", 2, 2, "string"); add("fclose", 1, 1, "bool");
+        add("fread", 1, 2, "string"); add("fwrite", 2, 2, "string");
+        add("fseek", 2, 3, "bool"); add("ftell", 1, 1, "int");
+        add("fflush", 1, 1, "bool");
+    }
 }
 
 void TypeChecker::init_builtins() {
-    if (!builtins_.empty()) return;
     auto add=[&](std::string n,int minP,int maxP,std::string rt){ builtins_[std::move(n)] = BuiltinInfo{minP,maxP,rt}; };
-    // Core/time/env
-    add("now_ms",0,0,"int"); add("now_iso",0,0,"string");
-    add("env",1,1,"string"); add("username",0,0,"string"); add("machine_guid",0,0,"string"); add("computer_name",0,0,"string"); add("volume_serial",0,0,"string"); add("hwid",0,0,"string"); add("rand_int",0,2,"int"); add("uuid",0,0,"string");
-    add("args_count",0,0,"int"); add("args_get",1,1,"string");
-    add("os.args",0,0,"array<any>"); add("os.args_count",0,0,"int"); add("os.args_get",1,1,"string");
-    add("exec",1,1,"int"); add("run_file",1,1,"void"); add("run_bat",1,1,"void"); add("read_line",0,0,"string"); add("input",0,1,"string"); add("prompt",1,1,"string");
-    add("os.exec",1,1,"int"); add("spawn",1,1,"int"); add("os.spawn",1,1,"int"); add("exit",1,1,"void"); add("stdin_read",0,0,"string");
+    add("now_ms",0,0,"int");
+    add("env",1,1,"string");
+    add("dotenv_load",0,1,"int");
+    add("rand_int",0,2,"int");
+    add("uuid",0,0,"string");
+    add("args_count",0,0,"int");
+    add("args_get",1,1,"string");
+    add("read_line",0,0,"string");
+    add("read_text",1,1,"string");
+    add("input",0,1,"string");
     add("stderr_print",1,1,"void");
-    add("option_none",0,0,"unknown"); add("option_some",1,1,"unknown"); add("option_is_some",1,1,"bool"); add("option_unwrap_or",2,2,"unknown");
-    add("option.none",0,0,"unknown"); add("option.some",1,1,"unknown"); add("option.is_some",1,1,"bool"); add("option.unwrap_or",2,2,"unknown");
-    add("result_ok",1,1,"unknown"); add("result_err",1,1,"unknown"); add("result_is_ok",1,1,"bool"); add("result_unwrap_or",2,2,"unknown");
-    add("result.ok",1,1,"unknown"); add("result.err",1,1,"unknown"); add("result.is_ok",1,1,"bool"); add("result.unwrap_or",2,2,"unknown");
-    add("toint",1,1,"int"); add("toInt",1,1,"int"); add("tostr",1,1,"string"); add("toString",1,1,"string"); add("tofloat",1,1,"double"); add("tobool",1,1,"bool");
-    add("dynamic_cast",2,2,"unknown");
-    add("reinterpret_cast",2,2,"pointer");
-    add("bit_cast",2,2,"unknown");
-    add("bitcast",2,2,"unknown");
+    add("exec",1,1,"int");
+    add("spawn",1,1,"int");
+    add("exit",1,1,"void");
+    add("toint",1,1,"int");
+    add("toInt",1,1,"int");
+    add("tostr",1,1,"string");
+    add("toString",1,1,"string");
+    add("tofloat",1,1,"double");
+    add("tobool",1,1,"bool");
     add("__builtin_sizeof",1,1,"int");
     add("__builtin_alignof",1,1,"int");
     add("__builtin_typeof",1,1,"string");
     add("__builtin_decltype",1,1,"string");
     add("__builtin_offsetof",2,2,"int");
     add("__builtin_is_base_of",2,2,"bool");
-    add("ptr_new",1,1,"pointer");
-    add("ptr_get",1,1,"string");
-    add("ptr_set",2,2,"void");
-    add("ptr_free",1,1,"void");
-    add("ptr_valid",1,1,"bool");
-    add("malloc",1,1,"pointer");
-    add("realloc",2,2,"pointer");
-    add("memcpy",2,3,"void");
-    add("memset",2,3,"void");
-    add("free",1,1,"void");
-    add("make_unique",1,1,"pointer");
-    add("make_shared",1,1,"pointer");
-    add("unique_reset",1,1,"void");
-    add("shared_reset",1,1,"void");
-    add("to_json",1,1,"string"); add("from_json",1,1,"map<any,any>");
-    add("string.lstrip",1,1,"string"); add("string.rstrip",1,1,"string"); add("string.strip",1,1,"string"); add("string.lower",1,1,"string"); add("string.upper",1,1,"string");
-    add("string.starts_with",2,2,"bool"); add("string.ends_with",2,2,"bool"); add("string.find",2,2,"int"); add("string.substr",2,3,"string"); add("string.len",1,1,"int");
-    // Filesystem
-    add("read_text",1,1,"string"); add("write_text",2,2,"void"); add("append_text",2,2,"void"); add("file_exists",1,1,"bool"); add("mkdirs",1,1,"void"); add("copy_file",2,2,"bool"); add("move_file",2,2,"bool"); add("delete_file",1,1,"bool");
-    add("file_size",1,1,"int");
-    add("list_files",1,1,"unknown"); add("cwd",0,0,"string"); add("chdir",1,1,"bool");
-    add("path_join",1,-1,"string"); add("path_dirname",1,1,"string"); add("path_basename",1,1,"string"); add("path_ext",1,1,"string");
-    add("file_mtime",1,1,"int");
-    add("file_open",2,2,"string"); add("file_close",1,1,"bool"); add("file_read",1,2,"string");
-    add("file_write",2,2,"int"); add("file_seek",2,3,"bool"); add("file_tell",1,1,"int"); add("file_flush",1,1,"bool");
-    add("fopen",2,2,"string"); add("fclose",1,1,"bool"); add("fread",1,2,"string");
-    add("fwrite",2,2,"int"); add("fseek",2,3,"bool"); add("ftell",1,1,"int"); add("fflush",1,1,"bool");
-    add("strbuf_new",0,1,"string"); add("strbuf_append",2,2,"void"); add("strbuf_clear",1,1,"void");
-    add("strbuf_len",1,1,"int"); add("strbuf_to_string",1,1,"string"); add("strbuf_free",1,1,"void"); add("strbuf_reserve",2,2,"void");
-    add("string_buffer_new",0,1,"string"); add("string_buffer_append",2,2,"void"); add("string_buffer_clear",1,1,"void");
-    add("string_buffer_len",1,1,"int"); add("string_buffer_to_string",1,1,"string"); add("string_buffer_free",1,1,"void"); add("string_buffer_reserve",2,2,"void");
-    add("color.red",1,1,"string"); add("color.green",1,1,"string"); add("color.yellow",1,1,"string"); add("color.blue",1,1,"string");
-    add("color.magenta",1,1,"string"); add("color.cyan",1,1,"string"); add("color.bold",1,1,"string"); add("color.reset",0,0,"string");
-    // Collections
-    add("set_new",0,-1,"unknown"); add("set_add",2,2,"bool"); add("set_has",2,2,"bool"); add("set_remove",2,2,"bool"); add("set_size",1,1,"int"); add("set_values",1,1,"array<any>");
-    add("set_union",2,2,"unknown"); add("set_intersect",2,2,"unknown"); add("set_diff",2,2,"unknown");
-    add("queue_new",0,-1,"unknown"); add("queue_push",2,2,"void"); add("queue_pop",1,1,"unknown"); add("queue_peek",1,1,"unknown"); add("queue_len",1,1,"int"); add("queue_clear",1,1,"void");
-    add("table_new",0,0,"unknown"); add("table_put",4,4,"void"); add("table_get",3,4,"unknown"); add("table_has",3,3,"bool");
-    add("table_remove",3,3,"bool"); add("table_rows",1,1,"unknown"); add("table_columns",1,1,"unknown"); add("table_row_keys",2,2,"unknown");
-    add("table_clear_row",2,2,"void"); add("table_count_row",2,2,"int");
-    // Network
-    add("http_get",1,1,"string"); add("http_download",2,2,"bool"); add("hls_download_best",2,2,"bool"); add("url_encode",1,1,"string");
-    add("network.ip.flush",0,0,"string"); add("network.ip.release",0,1,"string"); add("network.ip.renew",0,1,"string"); add("network.ip.registerdns",0,0,"string");
-    add("network.debug.enable",0,1,"string"); add("network.debug.disable",0,0,"string");
-    add("network.debug.status",0,0,"string"); add("network.debug.last",0,0,"string");
-    add("network.debug.clear",0,0,"string"); add("network.debug.log_tail",0,1,"string");
-    add("char_is_digit",1,1,"bool"); add("char_is_space",1,1,"bool"); add("char_is_alpha",1,1,"bool"); add("char_is_ident_start",1,1,"bool"); add("char_is_ident_part",1,1,"bool");
-    // Language info
-    add("language_name",0,0,"string"); add("language_version",0,0,"string"); add("language_about",0,0,"string"); add("language_limitations",0,0,"string");
-    // GUI / windowing (Windows only semantics, but we still typecheck symbol existence)
-    add("win_window_create",3,3,"string"); // title,w,h -> "win:<id>"
-    add("win_button_create",7,7,"void");   // handle,id,text,x,y,w,h
-    add("win_checkbox_create",7,7,"void");
-    add("win_radiobutton_create",7,8,"void"); // optional groupStart
-    add("win_slider_create",9,9,"void");
-    add("win_label_create",6,6,"void");
-    add("win_textbox_create",6,6,"void");
-    add("win_set_title",2,2,"void");
-    add("win_move",3,3,"void");
-    add("win_resize",3,3,"void");
-    add("win_set_text",3,3,"void");
-    add("win_get_text",2,2,"string");
-    add("win_get_check",2,2,"bool");
-    add("win_set_check",3,3,"void");
-    add("win_get_slider",2,2,"int");
-    add("win_set_slider",3,3,"void");
-    add("win_on",3,3,"void");
-    add("win_show",1,1,"void");
-    add("win_close",1,1,"void");
-    add("win_set_scale",2,2,"void");
-    add("win_auto_scale",1,1,"void");
-    // win_message_box(handle,title,message[,iconKind])
-    add("win_message_box",3,4,"void");
-    add("win_loop",1,1,"void");
-        add("ui_window_create",3,8,"string");
-        add("ui_label",2,4,"void");
-        add("ui_button",3,6,"void");
-        add("ui_checkbox",3,7,"void");
-        add("ui_radio",3,8,"void");
-        add("ui_slider",5,8,"void");
-        add("ui_textbox",2,6,"void");
-        add("ui_same_line",1,1,"void");
-        add("ui_newline",1,1,"void");
-        add("ui_spacer",1,3,"void");
-        add("ui_separator",1,3,"void");
-        add("ui_load",1,4,"string");
-
-    // Data store builtins
-    add("data_new",0,0,"string");          // returns handle data:<id>
-    add("data_set",3,3,"void");            // handle,key,value
-    add("data_get",2,2,"string");          // handle,key -> value or empty
-    add("data_has",2,2,"bool");            // handle,key -> bool
-    add("data_keys",1,1,"string");         // comma separated keys (temporary design)
-    add("data_save",2,2,"void");           // handle,path
-    add("data_load",1,1,"string");         // path -> new handle
-
-    // Math / numeric helpers
-    add("add",2,2,"int"); add("sub",2,2,"int"); add("mul",2,2,"int"); add("div",2,2,"int"); add("mod",2,2,"int");
-    add("min",2,2,"int"); add("max",2,2,"int"); add("abs",1,1,"int");
-    add("sin",1,1,"int"); add("cos",1,1,"int"); add("tan",1,1,"int"); // currently return numeric string; treat as int
-    add("sqrt",1,1,"int"); add("pow",2,2,"int");
-    add("collatz_len",1,1,"int"); add("collatz_sweep",1,1,"int"); add("collatz_best_n",0,0,"int"); add("collatz_best_steps",0,0,"int"); add("collatz_total_steps",0,0,"int"); add("collatz_avg_steps",0,0,"int");
-
-    // Crypto
-    add("hash_fnv1a",1,1,"string"); add("random_bytes",1,1,"string");
-
-    // Regex
-    add("regex_match",2,2,"bool"); add("regex_find",2,2,"string"); add("regex_replace",3,3,"string");
-
-    // Binary buffers
-    add("bin_new",0,0,"string"); add("bin_push_u8",2,2,"void"); add("bin_len",1,1,"int"); add("bin_hex",1,1,"string"); add("bin_from_hex",1,1,"string"); add("bin_get_u8",2,2,"int");
-
-    // Permissions
-    add("perm_grant",1,1,"void"); add("perm_revoke",1,1,"void"); add("perm_has",1,1,"bool"); add("perm_list",0,0,"string");
-
-    // Threads
-    add("thread_run",1,2,"string"); add("thread_join",1,1,"bool"); add("thread_join_timeout",2,2,"bool"); add("thread_done",1,1,"bool");
-    add("thread_list",0,0,"string"); add("thread_wait_all",0,0,"void"); add("thread_count",0,0,"int"); add("thread_yield",0,0,"void");
-    add("thread_gc",0,0,"void"); add("thread_gc_all",0,0,"void"); add("thread_purge",0,0,"void"); add("thread_remove",1,2,"string"); add("thread_state",1,1,"string");
-
-    // Monitor
-    add("monitor_add",1,2,"string"); add("monitor_remove",1,1,"void"); add("monitor_list",0,0,"string"); add("monitor_info",1,1,"string");
-    add("monitor_last_change",1,1,"string"); add("monitor_set_interval",2,2,"void");
-        add("plugin_core",2,2,"string"); add("plugin_core_files",1,1,"string"); add("plugin_core_keys",2,2,"string");
+    add("dynamic_cast",2,2,"unknown");
+    add("reinterpret_cast",2,2,"unknown");
+    add("bit_cast",2,2,"unknown");
+    add("to_json",1,1,"string");
+    add("from_json",1,1,"map<any,any>");
+    // Dynamic module loading (JS-style require) — always available
+    add("load_elan",1,1,"string");
+    add("load_elan_dir",1,1,"unknown");
+    add("call_action",1,-1,"any");
+    add("string.len",1,1,"int");
+    add("string.strip",1,1,"string");
+    add("string.lstrip",1,1,"string");
+    add("string.rstrip",1,1,"string");
+    add("string.lower",1,1,"string");
+    add("string.upper",1,1,"string");
+    add("string.find",2,2,"int");
+    add("string.substr",2,3,"string");
+    add("string.starts_with",2,2,"bool");
+    add("string.ends_with",2,2,"bool");
+    add("string.replace",3,3,"string");
+    add("string.split",2,2,"unknown");
+    add("now_iso",0,0,"string");
+    add("is_int",1,1,"bool");
+    add("is_float",1,1,"bool");
+    add("char_is_digit",1,1,"bool");
+    add("char_is_alpha",1,1,"bool");
+    add("char_is_space",1,1,"bool");
+    add("strbuf_new",0,1,"string");
+    add("strbuf_append",2,2,"void");
+    add("strbuf_to_string",1,1,"string");
+    add("strbuf_len",1,1,"int");
+    add("strbuf_clear",1,1,"void");
+    add("strbuf_reserve",2,2,"void");
+    add("strbuf_free",1,1,"void");
+    add("list_new",0,-1,"unknown");
+    add("list_push",2,2,"void");
+    add("list_get",2,2,"string");
+    add("list_len",1,1,"int");
+    add("list_join",2,2,"string");
+    add("dict_new",0,0,"unknown");
+    add("dict_set",3,3,"void");
+    add("dict_get",2,2,"string");
+    add("dict_has",2,2,"bool");
+    add("dict_keys",1,1,"unknown");
+    add("dict_size",1,1,"int");
+    add("language_name",0,0,"string");
+    add("language_version",0,0,"string");
+    add("plugin_core",2,2,"string");
+    add("plugin_core_files",1,1,"string");
+    add("plugin_core_keys",2,2,"string");
 }
 
 } // namespace erelang

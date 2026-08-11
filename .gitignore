@@ -1,6 +1,10 @@
 # Build directories and CMake artifacts
 /build/
+/build_fix/
+/build_tmp/
+/build_p1/
 /build-*/
+.cache/
 CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
@@ -11,6 +15,7 @@ compile_commands.json
 _deps/
 build/_deps/
 
+tmp/
 # Binary outputs
 *.exe
 *.dll

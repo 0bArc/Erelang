@@ -1,0 +1,15 @@
+@erelang
+
+action sys_cmd_test {
+    import "builtin/system" as sys;
+    string out = sys.cmd("echo cmd_hello");
+    print "cmd_out={out}";
+    string out2 = sys.cmd("echo {out}");
+    print "cmd_out2_len={len(out2)}";
+}
+
+action main {
+    sys_cmd_test();
+}
+
+run main;

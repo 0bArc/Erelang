@@ -1,7 +1,0 @@
-@erelang
-
-public action main {
-  print "Hello from self-host bootstrap"
-}
-
-run main

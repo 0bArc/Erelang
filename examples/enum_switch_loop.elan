@@ -1,0 +1,43 @@
+@erelang
+
+enum Mode {
+  Walk,
+  Run,
+  Idle,
+}
+
+public action test_switch(string mode) {
+  switch mode {
+    case Walk:
+      print "walk";
+      break;
+    case Run:
+      print "run";
+      break;
+    default:
+      print "default";
+  }
+}
+
+public action test_loop() {
+  int i = 0;
+  while (i < 6) {
+    i = i + 1;
+    if (i == 2) {
+      continue;
+    }
+    if (i == 5) {
+      break;
+    }
+    print "i={i}";
+  }
+}
+
+public action main {
+  test_switch(Mode::Walk);
+  test_switch(Mode.Run);
+  test_switch("other");
+  test_loop();
+}
+
+run main;

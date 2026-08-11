@@ -1,3 +1,0 @@
-public action module_ping {
-    print("module ok")
-}

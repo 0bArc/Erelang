@@ -1,0 +1,138 @@
+@erelang
+#include <builtin/fs> as fs
+#include <builtin/system> as sys
+#include <builtin/math> as math
+
+// testfile.elan
+// Exercises the language features needed to build a CLI tool:
+//   - command-line argument parsing (args_count / args_get)
+//   - running subprocesses and capturing output (sys.cmd)
+//   - file I/O (fs.read / fs.write / fs.exists)
+//   - string formatting, conditionals, loops
+//   - exit codes
+//
+// Run with (from the repo root):
+//   erelang examples/testfile.elan greet --name World
+//   erelang examples/testfile.elan run --script hello
+//   erelang examples/testfile.elan math 2 3
+//   erelang examples/testfile.elan write --file out.txt --content "hello"
+//   erelang examples/testfile.elan read --file out.txt
+//   erelang examples/testfile.elan help
+
+action print_usage {
+    print "usage: testfile.elan <command> [options]";
+    print "";
+    print "commands:";
+    print "  greet [--name <name>]       print a greeting";
+    print "  run [--script <name>]       run an external command";
+    print "  math <a> <b>                add two numbers";
+    print "  write [--file <f>] [--content <c>]   write a file";
+    print "  read [--file <f>]           read a file";
+    print "  help                        show this help";
+}
+
+action cmd_greet {
+    string name = "world";
+    int i = 0;
+    int n = args_count();
+    while (i < n) {
+        string arg = args_get(i);
+        if (arg == "--name") {
+            if (i + 1 < n) { name = args_get(i + 1); }
+        }
+        i = i + 1;
+    }
+    print "hello, {name}!";
+}
+
+action cmd_run {
+    string script = "echo no-script-given";
+    int i = 0;
+    int n = args_count();
+    while (i < n) {
+        string arg = args_get(i);
+        if (arg == "--script") {
+            if (i + 1 < n) { script = args_get(i + 1); }
+        }
+        i = i + 1;
+    }
+    print "executing: {script}";
+    string out = sys.cmd(script);
+    print "exit_code={sys.last_exit()}";
+    print "output:";
+    print "{out}";
+    if (string.len(out) > 0) {
+        print "captured {string.len(out)} bytes";
+    }
+}
+
+action cmd_math {
+    if (args_count() < 3) {
+        print "math requires two numeric arguments";
+        exit(2);
+    }
+    int x = math.add(args_get(1), args_get(2));
+    print "math.add({args_get(1)}, {args_get(2)}) = {x}";
+}
+
+action cmd_write {
+    string file = "out.txt";
+    string content = "written by testfile.elan";
+    int i = 0;
+    int n = args_count();
+    while (i < n) {
+        string arg = args_get(i);
+        if (arg == "--file") {
+            if (i + 1 < n) { file = args_get(i + 1); }
+        } else if (arg == "--content") {
+            if (i + 1 < n) { content = args_get(i + 1); }
+        }
+        i = i + 1;
+    }
+    fs.write(file, content);
+    print "wrote {string.len(content)} bytes to {file}";
+    if (fs.exists(file)) {
+        print "file exists: yes";
+    }
+}
+
+action cmd_read {
+    string file = "out.txt";
+    int i = 0;
+    int n = args_count();
+    while (i < n) {
+        string arg = args_get(i);
+        if (arg == "--file") {
+            if (i + 1 < n) { file = args_get(i + 1); }
+        }
+        i = i + 1;
+    }
+    if (!fs.exists(file)) {
+        print "file not found: {file}";
+        exit(3);
+    }
+    string content = fs.read(file);
+    print "read {string.len(content)} bytes:";
+    print "{content}";
+}
+
+action main {
+    if (args_count() == 0) {
+        print_usage();
+        exit(1);
+    }
+    string cmd = args_get(0);
+    if (cmd == "greet") { cmd_greet(); }
+    else if (cmd == "run") { cmd_run(); }
+    else if (cmd == "math") { cmd_math(); }
+    else if (cmd == "write") { cmd_write(); }
+    else if (cmd == "read") { cmd_read(); }
+    else if (cmd == "help") { print_usage(); }
+    else {
+        print "unknown command: {cmd}";
+        print_usage();
+        exit(1);
+    }
+}
+
+run main;

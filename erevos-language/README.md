@@ -15,8 +15,9 @@ Features:
 
 Install (local dev):
 1. `npm install`
-2. `npm run watch`
-3. Press F5 to launch Extension Development Host
+2. `npm run build:icon` (writes `erelang.ico` + `icons/` for `.elan` file icons)
+3. `npm run watch`
+4. Press F5 to launch Extension Development Host
 
 Settings:
 - `erelang.autoSuggestIdentifiers`: keep identifier autosuggest responsive while typing/deleting without forcing popup reopen on Enter.

@@ -73,56 +73,29 @@ endif()
 find_program(_npx NAMES npx npx.cmd)
 find_program(_vsce NAMES vsce vsce.cmd)
 
-if(_npx)
-  _run_or_handle(
-    LABEL "npx vsce package"
-    WORKING_DIRECTORY "${_ext_dir}"
-    COMMAND "${_npx}" vsce package --allow-missing-repository
-  )
-  if(_OB_FAILED)
-    return()
-  endif()
-elseif(_vsce)
-  _run_or_handle(
-    LABEL "vsce package"
-    WORKING_DIRECTORY "${_ext_dir}"
-    COMMAND "${_vsce}" package --allow-missing-repository
-  )
-  if(_OB_FAILED)
-    return()
-  endif()
-else()
-  if(BEST_EFFORT)
-    message(WARNING "npx/vsce not found; skipping VSIX packaging")
-    return()
-  endif()
-  message(FATAL_ERROR "npx or vsce not found; cannot package extension")
+_run_or_handle(
+  LABEL "npm run package"
+  WORKING_DIRECTORY "${_ext_dir}"
+  COMMAND "${_npm}" run package
+)
+if(_OB_FAILED)
+  return()
 endif()
 
-file(GLOB _vsix_files "${_ext_dir}/*.vsix")
-if(NOT _vsix_files)
+set(_stable_vsix "${_ext_dir}/erelang_language.vsix")
+if(NOT EXISTS "${_stable_vsix}")
   if(BEST_EFFORT)
     message(WARNING "No VSIX produced; skipping install")
     return()
   endif()
-  message(FATAL_ERROR "No VSIX produced")
+  message(FATAL_ERROR "No VSIX produced at ${_stable_vsix}")
 endif()
 
-list(SORT _vsix_files)
-list(REVERSE _vsix_files)
-list(GET _vsix_files 0 _latest_vsix)
-set(_stable_vsix "${_ext_dir}/erelang_language.vsix")
-
-execute_process(
-  COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${_latest_vsix}" "${_stable_vsix}"
-  RESULT_VARIABLE _copy_rc
-)
-if(NOT _copy_rc EQUAL 0)
-  if(BEST_EFFORT)
-    message(WARNING "Failed to copy stable VSIX alias")
-  else()
-    message(FATAL_ERROR "Failed to copy stable VSIX alias")
-  endif()
+if(WIN32)
+  execute_process(
+    COMMAND "cmd" /c "del /q erelang-language-*.vsix 2>nul"
+    WORKING_DIRECTORY "${_ext_dir}"
+  )
 endif()
 
 find_program(_code NAMES code.cmd code)

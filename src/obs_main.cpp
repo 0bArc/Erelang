@@ -29,7 +29,6 @@
 #include "erelang/symboltable.hpp"
 #include "erelang/modules.hpp"
 #include "erelang/version.hpp"
-#include "erelang/policy.hpp"
 #include "erelang/plugins.hpp"
 #include "erelang/ir.hpp"
 #include "erelang/codegen_x64.hpp"
@@ -42,10 +41,18 @@ namespace fs = std::filesystem;
 
 static fs::path resolve_executable_path(const char* argv0) {
 #ifdef _WIN32
-    wchar_t buffer[MAX_PATH];
-    DWORD len = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
-    if (len > 0) {
-        return fs::path(std::wstring(buffer, len));
+    {
+        DWORD size = MAX_PATH;
+        for (int attempt = 0; attempt < 16; ++attempt) {
+            std::wstring buffer(size, L'\0');
+            const DWORD n = GetModuleFileNameW(nullptr, &buffer[0], static_cast<DWORD>(buffer.size()));
+            if (n == 0) break;
+            if (n < buffer.size()) {
+                buffer.resize(n);
+                return fs::path(std::move(buffer));
+            }
+            size *= 2;
+        }
     }
 #endif
     if (argv0 && argv0[0] != '\0') {
@@ -552,10 +559,19 @@ static std::string generate_bootstrap_source(const fs::path& mainFile,
     // Load dynamic modules shipped alongside the app (.odll)
     {
 #ifdef _WIN32
-        wchar_t buf[MAX_PATH];
-        DWORD n = GetModuleFileNameW(nullptr, buf, MAX_PATH);
-        fs::path exeP = fs::path(std::wstring(buf, n));
-        erelang::load_dynamic_modules_in_dir(exeP.parent_path());
+        DWORD size = MAX_PATH;
+        for (int attempt = 0; attempt < 16; ++attempt) {
+            std::wstring buffer(size, L'\0');
+            const DWORD n = GetModuleFileNameW(nullptr, &buffer[0], static_cast<DWORD>(buffer.size()));
+            if (n == 0) break;
+            if (n < buffer.size()) {
+                buffer.resize(n);
+                fs::path exeP = fs::path(std::move(buffer));
+                erelang::load_dynamic_modules_in_dir(exeP.parent_path());
+                break;
+            }
+            size *= 2;
+        }
 #endif
     }
 
@@ -607,10 +623,7 @@ static std::string generate_bootstrap_source(const fs::path& mainFile,
         auto tcRes = tc.check(mainProg);
         if (!tcRes.ok) {
             for (auto& d : tcRes.diagnostics) {
-                const char* tag = d.severity == erelang::Severity::Warning ? "[warn] " : (d.severity == erelang::Severity::Note ? "[note] " : "[error] ");
-                std::cerr << tag << d.code << ": " << d.message;
-                if (!d.context.empty()) std::cerr << " (" << d.context << ")";
-                std::cerr << "\n";
+                std::cerr << erelang::format_diagnostic(d) << "\n";
             }
             return 1;
         }
@@ -702,7 +715,7 @@ static int run_command(const std::string& cmd, const fs::path& workdir) {
         return -1;
     }
 #ifdef _WIN32
-    const std::string full = "cmd /c \"" + cmd + "\"";
+    const std::string full = "cmd /S /C \"" + cmd + "\"";
 #else
     const std::string full = cmd;
 #endif
@@ -1019,20 +1032,15 @@ struct ExecutionContext {
 
 [[nodiscard]] int handle_list_builtins() {
     constexpr std::array builtins{
-        "now_ms","now_iso","env","username","computer_name","machine_guid","uuid","rand_int","hwid","args_count","args_get",
+        "now_ms","now_iso","env","username","computer_name","uuid","rand_int","args_count","args_get",
         "os.args","os.args_count","os.args_get","exec","os.exec","spawn","os.spawn","exit","stdin_read",
         "read_text","write_text","append_text","file_exists","mkdirs","copy_file","move_file","delete_file","list_files","cwd","chdir",
         "path_join","path_dirname","path_basename","path_ext","file_mtime",
         "color.red","color.green","color.yellow","color.blue","color.magenta","color.cyan","color.bold","color.reset",
-    "http_get","http_download","hls_download_best","url_encode",
-    "network.ip.flush","network.ip.release","network.ip.renew","network.ip.registerdns",
-    "win_window_create","win_button_create","win_checkbox_create","win_radiobutton_create","win_slider_create","win_textbox_create","win_label_create","win_on","win_show","win_loop","win_get_text","win_set_text","win_get_check","win_set_check","win_get_slider","win_set_slider","win_close","win_auto_scale","win_set_scale","win_message_box",
-    "ui_window_create","ui_label","ui_button","ui_checkbox","ui_radio","ui_slider","ui_textbox","ui_same_line","ui_newline","ui_spacer","ui_separator","ui_load",
         "data_new","data_set","data_get","data_has","data_keys","data_save","data_load",
-        "hash_fnv1a","random_bytes","regex_match","regex_find","regex_replace","perm_grant","perm_revoke","perm_has","perm_list",
-        "bin_new","bin_from_hex","bin_to_hex","bin_len","bin_get","bin_set","bin_fill","bin_slice",
-        "thread_run","thread_join","thread_done","collatz_len","collatz_sweep","collatz_best_steps","collatz_avg_steps",
-        "dev_meta","audit","advance_time"
+        "perm_grant","perm_revoke","perm_has","perm_list",
+        "collatz_len","collatz_sweep","collatz_best_steps","collatz_avg_steps",
+        "advance_time"
     };
 
     for (const auto* builtin : builtins) {
@@ -1143,7 +1151,7 @@ struct ExecutionContext {
         std::cout << "\n";
     }
 
-    std::cout << "(Bootstrap UI now uses standard console output; scripts should rely on win_* built-ins for GUIs.)\n";
+    std::cout << "(Bootstrap uses console output only.)\n";
     return 0;
 }
 
@@ -1151,7 +1159,7 @@ struct ExecutionContext {
     print_banner();
     std::cout << "Reasons it leans DSL-like / special-purpose\n\n";
     std::cout << "Scope is narrow\n\n";
-    std::cout << "It bakes in things like GUI, filesystem, UUIDs, debugging, and entities.\n\n";
+    std::cout << "It bakes in things like filesystem, UUIDs, debugging, and entities.\n\n";
     std::cout << "There’s no mention of broad ecosystems (e.g., networking libraries, math/science packages, concurrency models beyond parallel {}).\n\n";
     std::cout << "Small type system\n\n";
     std::cout << "Only str, int, bool.\n\n";
@@ -1175,7 +1183,6 @@ struct ExecutionContext {
         return 1;
     }
 
-    erelang::PolicyManager::instance().load("policy.cfg");
     erelang::Runtime::set_cli_args(originalArgs);
 
     try {
@@ -1241,6 +1248,19 @@ struct ExecutionContext {
         if (!merged.entities.empty()) {
             mainProgram.entities.insert(mainProgram.entities.begin(), merged.entities.begin(), merged.entities.end());
         }
+        for (std::size_t mi = 0; mi + 1 < ordered.size(); ++mi) {
+            const auto& m = ordered[mi];
+            for (const auto& g : m.globals) {
+                if (!std::any_of(mainProgram.globals.begin(), mainProgram.globals.end(),
+                                 [&](const erelang::GlobalDecl& e){ return e.name == g.name; }))
+                    mainProgram.globals.push_back(g);
+            }
+            for (const auto& imp : m.imports) {
+                if (!std::any_of(mainProgram.imports.begin(), mainProgram.imports.end(),
+                                 [&](const erelang::ImportDecl& e){ return e.path == imp.path; }))
+                    mainProgram.imports.push_back(imp);
+            }
+        }
 
         const auto append_aliases = [&](const erelang::Program& src) {
             for (const auto& alias : src.pluginAliases) {
@@ -1278,13 +1298,7 @@ struct ExecutionContext {
         auto tcResult = typeChecker.check(mainProgram);
         if (!tcResult.ok) {
             for (const auto& diag : tcResult.diagnostics) {
-                const char* tag = diag.severity == erelang::Severity::Warning ? "[warn] "
-                                  : (diag.severity == erelang::Severity::Note ? "[note] " : "[error] ");
-                std::cerr << tag << diag.code << ": " << diag.message;
-                if (!diag.context.empty()) {
-                    std::cerr << " (" << diag.context << ")";
-                }
-                std::cerr << '\n';
+                std::cerr << erelang::format_diagnostic(diag) << '\n';
             }
             return 1;
         }
@@ -1319,7 +1333,7 @@ struct ExecutionContext {
         return rc;
 #endif
     } catch (const std::exception& ex) {
-        std::cerr << "Run error: " << ex.what() << '\n';
+        std::cerr << ex.what() << '\n';
         return 1;
     }
 }
@@ -1357,6 +1371,19 @@ static bool load_merged_program_for_script(const fs::path& script,
         if (!merged.entities.empty()) {
             mainProgram.entities.insert(mainProgram.entities.begin(), merged.entities.begin(), merged.entities.end());
         }
+        for (std::size_t mj = 0; mj + 1 < ordered.size(); ++mj) {
+            const auto& mo = ordered[mj];
+            for (const auto& g : mo.globals) {
+                if (!std::any_of(mainProgram.globals.begin(), mainProgram.globals.end(),
+                                 [&](const erelang::GlobalDecl& e){ return e.name == g.name; }))
+                    mainProgram.globals.push_back(g);
+            }
+            for (const auto& imp : mo.imports) {
+                if (!std::any_of(mainProgram.imports.begin(), mainProgram.imports.end(),
+                                 [&](const erelang::ImportDecl& e){ return e.path == imp.path; }))
+                    mainProgram.imports.push_back(imp);
+            }
+        }
 
         const auto append_aliases = [&](const erelang::Program& src) {
             for (const auto& alias : src.pluginAliases) {
@@ -1387,7 +1414,7 @@ static bool load_merged_program_for_script(const fs::path& script,
 static int run_system_command_in_dir(const std::string& command, const fs::path& workingDirectory) {
     if (workingDirectory.empty()) return -1;
 #ifdef _WIN32
-    const std::string full = "cmd /c \"" + command + "\"";
+    const std::string full = "cmd /S /C \"" + command + "\"";
 #else
     const std::string full = command;
 #endif
@@ -1411,7 +1438,14 @@ int main(int argc, char** argv) {
     for (int i=1;i<argc;++i) {
         std::string a = argv[i];
         if (a == "--about" || a == "--bootstrap") bootstrapRequested = true; // repurpose --about to show the rich UI
-        else if (a == "--ui-scale" && i+1 < argc) { forcedUiScale = std::max(0.5f, std::stof(argv[++i])); }
+        else if (a == "--ui-scale" && i+1 < argc) {
+            ++i;
+            try {
+                forcedUiScale = std::max(0.5f, std::stof(std::string{argv[i]}));
+            } catch (...) {
+                forcedUiScale = 0.0f;
+            }
+        }
         else if (a == "--no-vsync") { defaultVsync = false; }
     }
     if (bootstrapRequested) {
@@ -1424,9 +1458,6 @@ int main(int argc, char** argv) {
     std::vector<std::string> args(argv + 1, argv + argc);
     // Pass CLI args to runtime for deterministic seed scan
     erelang::Runtime::set_cli_args(args);
-    // Load policy file if present (policy.cfg) in current directory
-    erelang::PolicyManager::instance().load("policy.cfg");
-
     erelang::ExecutionContext ctx = erelang::build_execution_context(argc > 0 ? argv[0] : nullptr);
     [[maybe_unused]] auto& pluginManifests = ctx.pluginManifests;
 #ifdef ERELANG_STATIC_RUNNER
@@ -1731,24 +1762,47 @@ int main(int argc, char** argv) {
 
     const std::string& configName = layout.config;
     auto locate_file = [](const std::vector<fs::path>& roots, const std::vector<std::string>& names) -> fs::path {
+        fs::path best;
+        fs::file_time_type bestTime{};
+        bool hasBest = false;
+        std::error_code ec;
         for (const auto& root : roots) {
             if (root.empty()) continue;
             for (const auto& name : names) {
                 fs::path candidate = root / name;
-                if (fs::exists(candidate)) {
-                    return candidate;
+                if (!fs::exists(candidate, ec) || ec) {
+                    ec.clear();
+                    continue;
+                }
+                auto t = fs::last_write_time(candidate, ec);
+                if (ec) {
+                    ec.clear();
+                    if (!hasBest) {
+                        best = candidate;
+                        hasBest = true;
+                    }
+                    continue;
+                }
+                if (!hasBest || t > bestTime) {
+                    best = candidate;
+                    bestTime = t;
+                    hasBest = true;
                 }
             }
         }
-        return {};
+        return best;
     };
 
     // Prefer optimized runtime artifacts even when erelang itself was built in Debug.
     // This keeps compiled app size lower in default --compile mode.
-    std::vector<std::string> preferredConfigs{ "MinSizeRel", "Release", "RelWithDebInfo" };
-    if (!configName.empty() &&
-        std::find(preferredConfigs.begin(), preferredConfigs.end(), configName) == preferredConfigs.end()) {
+    std::vector<std::string> preferredConfigs;
+    if (!configName.empty()) {
         preferredConfigs.push_back(configName);
+    }
+    for (const auto& cfg : { std::string("MinSizeRel"), std::string("Release"), std::string("RelWithDebInfo"), std::string("Debug") }) {
+        if (std::find(preferredConfigs.begin(), preferredConfigs.end(), cfg) == preferredConfigs.end()) {
+            preferredConfigs.push_back(cfg);
+        }
     }
 
     auto append_unique = [](std::vector<fs::path>& roots, const fs::path& candidate) {
@@ -1880,7 +1934,14 @@ int main(int argc, char** argv) {
                 }
             }
             std::ofstream out(file, std::ios::binary);
+            if (!out) {
+                std::cerr << "[erelang] Failed to open for writing: " << file.string() << "\n";
+                return;
+            }
             out << content;
+            if (!out.good()) {
+                std::cerr << "[erelang] Failed to write: " << file.string() << "\n";
+            }
         };
 
         const std::string generatedMain = useDynamic ? generate_dynamic_bootstrap_source(input, orderedFiles)
@@ -1982,16 +2043,28 @@ int main(int argc, char** argv) {
             for (auto& entry : fs::directory_iterator(libRoot, ec)) {
                 if (entry.is_regular_file() && entry.path().extension() == ".odll") {
                     fs::path dst = output.parent_path() / entry.path().filename();
-                    fs::copy_file(entry.path(), dst, fs::copy_options::overwrite_existing, ec);
-                    copiedOdlls.push_back(dst.filename().generic_string());
+                    std::error_code copyEc;
+                    fs::copy_file(entry.path(), dst, fs::copy_options::overwrite_existing, copyEc);
+                    if (copyEc) {
+                        std::cerr << "[erelang] Failed to copy module " << entry.path().string()
+                                  << ": " << copyEc.message() << "\n";
+                    } else {
+                        copiedOdlls.push_back(dst.filename().generic_string());
+                    }
                 }
                 if (entry.is_directory() && entry.path().extension() == ".olib") {
                     // nested odlls
                     for (auto& e2 : fs::directory_iterator(entry.path(), ec)) {
                         if (e2.is_regular_file() && e2.path().extension() == ".odll") {
                             fs::path dst2 = output.parent_path() / e2.path().filename();
-                            fs::copy_file(e2.path(), dst2, fs::copy_options::overwrite_existing, ec);
-                            copiedOdlls.push_back(dst2.filename().generic_string());
+                            std::error_code copyEc;
+                            fs::copy_file(e2.path(), dst2, fs::copy_options::overwrite_existing, copyEc);
+                            if (copyEc) {
+                                std::cerr << "[erelang] Failed to copy module " << e2.path().string()
+                                          << ": " << copyEc.message() << "\n";
+                            } else {
+                                copiedOdlls.push_back(dst2.filename().generic_string());
+                            }
                         }
                     }
                 }
@@ -2042,14 +2115,24 @@ int main(int argc, char** argv) {
         try {
             fs::path manifestPath = output.parent_path() / "manifest.erelang";
             std::ofstream mout(manifestPath, std::ios::binary);
-            if (mout) {
+            if (!mout) {
+                std::cerr << "[erelang] Failed to open manifest for writing: " << manifestPath.string() << "\n";
+            } else {
                 auto now = std::chrono::system_clock::now();
                 std::time_t t = std::chrono::system_clock::to_time_t(now);
+                // ctime() appends a trailing newline; strip it for a clean value.
+                std::string timestamp;
+                if (const char* ts = std::ctime(&t)) {
+                    timestamp = ts;
+                    while (!timestamp.empty() && (timestamp.back() == '\n' || timestamp.back() == '\r')) {
+                        timestamp.pop_back();
+                    }
+                }
                 // Basic fields
                 mout << "name=" << output.stem().generic_string() << "\n";
                 mout << "input=" << fs::absolute(input).generic_string() << "\n";
                 mout << "build=" << (useDynamic ? "dynamic" : "static") << "\n";
-                mout << "timestamp=" << std::string(std::ctime(&t) ? std::ctime(&t) : "") << "";
+                mout << "timestamp=" << timestamp << "\n";
                 // Embedded files list
                 if (!orderedFiles.empty()) {
                     mout << "files=";
@@ -2078,7 +2161,11 @@ int main(int argc, char** argv) {
                     mout << "\n";
                 }
             }
-        } catch (...) { /* best-effort; ignore */ }
+        } catch (const std::exception& ex) {
+            std::cerr << "[erelang] Manifest write failed: " << ex.what() << "\n";
+        } catch (...) {
+            std::cerr << "[erelang] Manifest write failed with unknown error\n";
+        }
 
         // Best-effort strip (further size reduction)
 #ifdef _WIN32

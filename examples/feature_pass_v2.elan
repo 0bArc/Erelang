@@ -1,0 +1,39 @@
+@erelang
+
+public int add(a: int, b: int) {
+  return a + b;
+}
+
+public entity Counter {
+  public field value: int;
+
+  public action init(v: int) {
+    self.value = v;
+  }
+
+  public int bump(int step) {
+    self.value = self.value + step;
+    return self.value;
+  }
+}
+
+public action main {
+  import "builtin/math" as math;
+
+  Array<int> nums = [1,2,3];
+  Map<string, any> m = {"k": 9};
+
+
+  Counter c = new Counter();
+  c.init(10);
+
+  try {
+    print add(2, 3);
+    print c.bump(5);
+    print math.add(7, 8);
+  } catch (err) {
+    print err;
+  }
+}
+
+run main;

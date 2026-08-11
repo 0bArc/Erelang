@@ -43,7 +43,7 @@ DslSpec make_default_spec() {
 
 const std::unordered_set<std::string>& canonical_keywords() {
     static const std::unordered_set<std::string> keywords = {
-        "if","else","while","for","switch","case","default","return","let","const",
+        "if","else","while","for","switch","case","default","return","const",
         "action","entity","hook","global","run","in","public","private","export",
         "true","false","null","nil","nullptr"
     };

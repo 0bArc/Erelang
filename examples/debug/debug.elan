@@ -1,14 +1,19 @@
 @erelang
 
-import "../lib/debugger.0bs"
+#include <../lib/debugger.elan>
 
-hook onStart { print "=== Debugger ===" }
-hook onEnd { print "=== End ===" }
+hook onStart {
+    print "=== Debugger ===";
+}
+
+hook onEnd {
+    print "=== End ===";
+}
 
 public action debug_main {
-  return
+    return;
 }
 
 
-run debug_main
+run debug_main;
 

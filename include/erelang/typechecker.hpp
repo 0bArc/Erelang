@@ -74,10 +74,29 @@ public:
     DiagBuilder(TCResult& r, Severity sev, std::string msg, std::string code, std::string ctx)
       : res_(r) { d_.severity=sev; d_.message=std::move(msg); d_.code=std::move(code); d_.context=std::move(ctx); }
     DiagBuilder& at(int line, int col) { d_.line=line; d_.col=col; return *this; }
-    void emit() { if (d_.severity==Severity::Error) res_.ok=false; res_.diagnostics.push_back(std::move(d_)); }
+    DiagBuilder& hint(std::string note) { hint_ = std::move(note); return *this; }
+    void emit() {
+        if (d_.severity==Severity::Error) res_.ok=false;
+        res_.diagnostics.push_back(d_);
+        if (!hint_.empty()) {
+            Diagnostic note;
+            note.severity = Severity::Note;
+            note.code = d_.code;
+            note.message = std::move(hint_);
+            note.context = d_.context;
+            note.line = d_.line;
+            note.col = d_.col;
+            res_.diagnostics.push_back(std::move(note));
+        }
+    }
 private:
-    TCResult& res_; Diagnostic d_;
+    TCResult& res_;
+    Diagnostic d_;
+    std::string hint_;
 };
+
+// Format a diagnostic for stderr (erelang CLI).
+std::string format_diagnostic(const Diagnostic& d);
 
 // Expression checker (caches inferred types)
 class ExprChecker {
@@ -105,6 +124,9 @@ public:
     TCResult check(const Program& program);
     // helpers used by visitors
     static bool is_bool(const TypeInfo& t) { return t.name == "bool"; }
+    static bool is_bool_condition_type(const TypeInfo& t) {
+        return t.name == "bool" || t.name == "unknown";
+    }
     static bool is_int(const TypeInfo& t) { return t.name == "int"; }
     static bool is_string(const TypeInfo& t) { return t.name == "string"; }
     bool returns_void(const Action& a) const { return a.returnType.empty() || a.returnType == "void"; }
@@ -114,6 +136,7 @@ private:
     void pass_check_program(const Program& program, TCResult& out);
     void finalize_unused(const Program& program, TCResult& out);
     void init_builtins();
+    void register_imported_module_builtins(const Program& program);
 private:
     struct BuiltinInfo { int minParams; int maxParams; std::string returnType; };
     // symbol tables / caches

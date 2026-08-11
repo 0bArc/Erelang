@@ -15,10 +15,29 @@ static bool is_word_part(char c) {
     return std::isalnum(uc) || uc >= 0x80 || c=='_' || c=='$' ;
 }
 
-static bool canEXPR() {
-    
+// Number of Unicode code points in a UTF-8 encoded string (used to validate
+// char literals so a multi-character 'ab' is rejected instead of truncated).
+static std::size_t utf8_codepoint_count(const std::string& s) {
+    std::size_t count = 0;
+    for (unsigned char ch : s) {
+        if ((ch & 0xC0) != 0x80) ++count; // leading byte (or ASCII)
+    }
+    return count;
 }
 
+// Encode a BMP code point as UTF-8 bytes (must be <= 0xFFFF).
+static void append_utf8(std::string& out, unsigned int cp) {
+    if (cp < 0x80) {
+        out.push_back(static_cast<char>(cp));
+    } else if (cp < 0x800) {
+        out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else {
+        out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    }
+}
 
 Lexer::Lexer(std::string source) : src_(std::move(source)) {}
 Lexer::Lexer(std::string source, LexerOptions options) : src_(std::move(source)), opts_(std::move(options)) {}
@@ -68,8 +87,11 @@ std::vector<Token> Lexer::lex() {
                     char open = src_[k];
                     char close = (open == '"') ? '"' : '>';
                     ++k; ++ccol;
-                    while (k < src_.size() && src_[k] != close) { path.push_back(src_[k]); ++k; ++ccol; }
+                    // Stop at the closing quote/'>' OR a newline: an unterminated
+                    // include must not swallow the rest of the source file.
+                    while (k < src_.size() && src_[k] != close && src_[k] != '\n' && src_[k] != '\r') { path.push_back(src_[k]); ++k; ++ccol; }
                     if (k < src_.size() && src_[k] == close) { ++k; ++ccol; }
+                    else { path.clear(); } // unterminated: discard path so it is treated as malformed below
                 } else {
                     // bare path until whitespace
                     size_t m = k;
@@ -314,7 +336,10 @@ std::vector<Token> Lexer::lex() {
                                 else if (hc>='A'&&hc<='F') val += 10 + (hc - 'A');
                                 ++k; ++digits;
                             }
-                            if (digits==4) { s.push_back(static_cast<char>(val & 0xFF)); i = k; col += 6; continue; }
+                            if (digits==4) {
+                                append_utf8(s, static_cast<unsigned int>(val));
+                                i = k; col += 6; continue;
+                            }
                             else { s.push_back('u'); i+=2; col+=2; continue; }
                         }
                         default: s.push_back(esc); break;
@@ -330,7 +355,19 @@ std::vector<Token> Lexer::lex() {
                 continue;
             }
             ++i; ++col; // consume closing quote
-            if (quote == '\'') push(TokenKind::Char, s.size() ? s.substr(0,1) : std::string()); else push(TokenKind::String, s);
+            if (quote == '\'') {
+                // Char literals must hold exactly one character; reject 'ab'
+                // instead of silently truncating to 'a'.
+                if (utf8_codepoint_count(s) > 1) {
+                    std::ostringstream oss;
+                    oss << "Character literal contains more than one character at " << line << ":" << col;
+                    push(TokenKind::Bad, oss.str());
+                    continue;
+                }
+                push(TokenKind::Char, s);
+            } else {
+                push(TokenKind::String, s);
+            }
             continue;
         }
         // Numbers, including .5 and 123. forms; may be followed by duration or unit suffixes
@@ -359,8 +396,18 @@ std::vector<Token> Lexer::lex() {
                 // Recognize longest of: "ms","us","ns","s","m","h","d","w"
                 if (p >= src_.size()) return false;
                 advanced = 0;
+                // A unit is only a duration suffix when a letter does not
+                // immediately follow: "5s" is a duration but "5seconds" is a
+                // word-boundary unit. Digits are allowed to continue compound
+                // durations like "2m30s".
+                auto isBoundary = [&](size_t q) -> bool {
+                    if (q >= src_.size()) return true;
+                    const unsigned char u = static_cast<unsigned char>(src_[q]);
+                    return std::isalpha(u) == 0;
+                };
                 auto match = [&](const char* t) -> bool {
-                    size_t n = 0; while (t[n] && p+n < src_.size() && src_[p+n] == t[n]) ++n; return t[n]==0; };
+                    size_t n = 0; while (t[n] && p+n < src_.size() && src_[p+n] == t[n]) ++n;
+                    return t[n]==0 && isBoundary(p+n); };
                 if (p+2 <= src_.size() && match("ms")) { advanced = 2; return true; }
                 if (p+2 <= src_.size() && match("us")) { advanced = 2; return true; }
                 if (p+2 <= src_.size() && match("ns")) { advanced = 2; return true; }
@@ -481,7 +528,7 @@ std::vector<Token> Lexer::lex() {
             // Keyword/boolean/null handling
             auto kw = opts_.keywords;
             if (kw.empty()) {
-                kw = { "if","else","while","do","repeat","for","switch","case","default","return","let","const","action","entity","hook","global","run","in","public","private","export","namespace","unsafe","true","false","null","nil","nullptr","sizeof","typeof","decltype","alignof","offsetof","is_base_of","reinterpret_cast","bit_cast","bitcast" };
+                kw = { "if","else","while","do","repeat","for","switch","case","default","return","const","action","entity","hook","global","run","in","public","private","export","namespace","unsafe","true","false","null","nil","nullptr","sizeof","typeof","decltype","alignof","offsetof","is_base_of","reinterpret_cast","bit_cast","bitcast" };
             }
             std::string low = word; for (auto& ch : low) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
             if (kw.count(low)) push(TokenKind::Keyword, word); else push(TokenKind::Word, word);

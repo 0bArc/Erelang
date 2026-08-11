@@ -13,5 +13,5 @@ using AstNode = std::shared_ptr<AstNodeBase>;
 // Placeholder for future bytecode emission handle
 struct BytecodeChunk { std::vector<uint8_t> code; };
 
-AstNode ast_wrap_program(); // stub
+inline AstNode ast_wrap_program() { return {}; }
 }

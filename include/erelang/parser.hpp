@@ -31,14 +31,22 @@ struct TernaryExpr { ExprPtr cond; ExprPtr thenExpr; ExprPtr elseExpr; };
 struct UnaryExpr { UnOp op; ExprPtr expr; };
 struct NewExpr { std::string typeName; std::vector<ExprPtr> args; };
 struct MemberExpr { std::string objectName; std::string field; };
+struct IndexExpr { ExprPtr object; ExprPtr index; };
 struct FunctionCallExpr {
     std::string name;
     std::vector<ExprPtr> args;
-    bool collectionLiteral{false};
+};
+
+struct ListLiteralExpr {
+    std::vector<ExprPtr> elements;
+};
+
+struct DictLiteralExpr {
+    std::vector<ExprPtr> entries; // alternating key-string, value pairs
 };
 
 struct Expr {
-    std::variant<ExprString, ExprNull, ExprNumber, ExprBool, ExprIdent, BinaryExpr, TernaryExpr, UnaryExpr, NewExpr, MemberExpr, FunctionCallExpr> node;
+    std::variant<ExprString, ExprNull, ExprNumber, ExprBool, ExprIdent, BinaryExpr, TernaryExpr, UnaryExpr, NewExpr, MemberExpr, IndexExpr, FunctionCallExpr, ListLiteralExpr, DictLiteralExpr> node;
 };
 
 struct Block; // forward for recursive AST
@@ -60,6 +68,7 @@ struct SwitchCase { std::string value; std::shared_ptr<Block> body; };
 struct SwitchStmt { ExprPtr selector; std::vector<SwitchCase> cases; std::shared_ptr<Block> defaultBlk; };
 struct WhileStmt { ExprPtr cond; std::shared_ptr<Block> body; };
 struct BreakStmt {};
+struct ContinueStmt {};
 struct DoWhileStmt { std::shared_ptr<Block> body; ExprPtr cond; };
 struct RepeatStmt { ExprPtr count; std::shared_ptr<Block> body; };
 struct ForStmt {
@@ -68,12 +77,13 @@ struct ForStmt {
     std::shared_ptr<Block> step; // optional single-statement block
     std::shared_ptr<Block> body;
 };
-struct ForInStmt { std::string var; std::optional<std::string> valueVar; bool usedColon{false}; ExprPtr iterable; std::shared_ptr<Block> body; };
+struct ForInStmt { std::string var; std::string varType; std::optional<std::string> valueVar; bool usedColon{false}; ExprPtr iterable; std::shared_ptr<Block> body; };
 struct TryCatchStmt { std::shared_ptr<Block> tryBlk; std::string catchVar; std::shared_ptr<Block> catchBlk; };
 struct UnsafeStmt { std::shared_ptr<Block> body; };
 struct PointerSetStmt { ExprPtr pointer; ExprPtr value; };
+struct ImportStmt {};
 
-using Statement = std::variant<PrintStmt, SleepStmt, ActionCallStmt, std::shared_ptr<ParallelStmt>, WaitAllStmt, PauseStmt, InputStmt, FireStmt, LetStmt, ReturnStmt, SetStmt, MethodCallStmt, IfStmt, SwitchStmt, WhileStmt, DoWhileStmt, RepeatStmt, ForStmt, ForInStmt, TryCatchStmt, UnsafeStmt, PointerSetStmt, BreakStmt>;
+using Statement = std::variant<PrintStmt, SleepStmt, ActionCallStmt, std::shared_ptr<ParallelStmt>, WaitAllStmt, PauseStmt, InputStmt, FireStmt, LetStmt, ReturnStmt, SetStmt, MethodCallStmt, IfStmt, SwitchStmt, WhileStmt, DoWhileStmt, RepeatStmt, ForStmt, ForInStmt, TryCatchStmt, UnsafeStmt, PointerSetStmt, BreakStmt, ContinueStmt, ImportStmt>;
 
 struct Block { std::vector<Statement> stmts; };
 
@@ -114,12 +124,20 @@ struct Entity {
     std::string sourcePath;
 };
 
-struct GlobalDecl { std::string name; ExprPtr value; std::string sourcePath; };
+struct GlobalDecl {
+    std::string name;
+    std::string typeName; // optional type annotation (string, int, bool, ...)
+    ExprPtr value;
+    std::string sourcePath;
+    Visibility visibility{Visibility::Public};
+    bool exported{false};
+};
 
 struct ImportDecl {
     std::string path;
     std::optional<std::string> alias;
     bool pluginGlob{false};
+    std::vector<std::string> namedImports; // import {a,b,c} from "path" → expands to individual imports
 };
 
 struct ExternDecl {
@@ -153,6 +171,7 @@ struct Program {
 class Parser {
 public:
     explicit Parser(std::vector<Token> tokens);
+    Parser(std::vector<Token> tokens, std::string sourceName);
     Program parse();
 
 private:
@@ -174,6 +193,7 @@ private:
     Statement parse_statement();
     WhileStmt parse_while();
     BreakStmt parse_break();
+    ContinueStmt parse_continue();
     DoWhileStmt parse_do_while();
     ForStmt parse_for();
     ForInStmt parse_for_in_after_lparen();
@@ -185,6 +205,7 @@ private:
     TypeAliasDecl parse_type_alias();
     std::vector<Attribute> parse_attributes();
     std::string parse_type_annotation();
+    ImportDecl parse_import_decl();
     ExprPtr parse_expression();
     ExprPtr parse_ternary();
     ExprPtr parse_coalesce();
@@ -203,6 +224,11 @@ private:
     bool strict_{false};
     std::vector<std::string> namespaceStack_;
     bool parsingEntityMethod_{false};
+    std::string sourceName_;
+    std::vector<ImportDecl>* programImports_{nullptr};
+    std::vector<std::string> pendingErrors_; // errors from block recovery, drained by parse_program
+    int inTernaryThen_{0}; // >0 while parsing a ternary then-branch: suppresses ':' method sugar
+    int parseDepth_{0};    // recursion guard against deeply nested expressions/statements
 };
 
 } // namespace erelang

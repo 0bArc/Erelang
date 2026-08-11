@@ -1,6 +1,7 @@
 #include "erelang/optimizer.hpp"
 #include <memory>
 #include <optional>
+#include <cstdint>
 
 namespace erelang {
 namespace {
@@ -32,26 +33,62 @@ struct FoldStats {
 		return std::nullopt;
 	}
 	if (auto* number = std::get_if<ExprNumber>(&expr->node)) {
+		// Floating-point literals must not be folded with integer arithmetic:
+		// the runtime evaluates them via string/float rules, so folding would
+		// change program output (e.g. 1.5 + 2.5 must stay "1.5" "2.5" concat).
+		if (number->isFloatLiteral) {
+			return std::nullopt;
+		}
 		return number->v;
 	}
 	return std::nullopt;
 }
 
+// Returns the product lhs*rhs, or nullopt on signed overflow / exponent too large.
+[[nodiscard]] std::optional<int64_t> checked_mul(int64_t lhs, int64_t rhs) noexcept {
+#if defined(__GNUC__) || defined(__clang__)
+	__int128 wide = static_cast<__int128>(lhs) * static_cast<__int128>(rhs);
+	if (wide < static_cast<__int128>(INT64_MIN) || wide > static_cast<__int128>(INT64_MAX)) {
+		return std::nullopt;
+	}
+	return static_cast<int64_t>(wide);
+#else
+	if (lhs == 0 || rhs == 0) return 0;
+	if (lhs == -1 && rhs == INT64_MIN) return std::nullopt;
+	if (rhs == -1 && lhs == INT64_MIN) return std::nullopt;
+	int64_t result = lhs * rhs;
+	if (result / rhs != lhs) return std::nullopt;
+	return result;
+#endif
+}
+
 [[nodiscard]] std::optional<int64_t> apply_binary(BinOp op, int64_t lhs, int64_t rhs) noexcept {
 	switch (op) {
-		case BinOp::Add: return lhs + rhs;
-		case BinOp::Sub: return lhs - rhs;
-		case BinOp::Mul: return lhs * rhs;
+		case BinOp::Add:
+			if ((rhs > 0 && lhs > INT64_MAX - rhs) || (rhs < 0 && lhs < INT64_MIN - rhs)) return std::nullopt;
+			return lhs + rhs;
+		case BinOp::Sub:
+			if ((rhs < 0 && lhs > INT64_MAX + rhs) || (rhs > 0 && lhs < INT64_MIN + rhs)) return std::nullopt;
+			return lhs - rhs;
+		case BinOp::Mul:
+			return checked_mul(lhs, rhs);
 		case BinOp::Div:
 			if (rhs == 0) return std::nullopt;
+			if (lhs == INT64_MIN && rhs == -1) return std::nullopt;
 			return lhs / rhs;
 		case BinOp::Mod:
 			if (rhs == 0) return std::nullopt;
+			if (lhs == INT64_MIN && rhs == -1) return std::nullopt;
 			return lhs % rhs;
 		case BinOp::Pow: {
 			if (rhs < 0) return std::nullopt;
+			if (rhs > 62) return std::nullopt; // 2^63 overflows int64; bail on anything larger
 			int64_t value = 1;
-			for (int64_t i = 0; i < rhs; ++i) value *= lhs;
+			for (int64_t i = 0; i < rhs; ++i) {
+				auto product = checked_mul(value, lhs);
+				if (!product) return std::nullopt;
+				value = *product;
+			}
 			return value;
 		}
 		default: break;
@@ -92,10 +129,13 @@ void fold_expr(ExprPtr& expr, FoldStats& stats) {
 					return;
 				}
 
-				if (un.op == UnOp::Neg) {
-					expr = make_number_expr(-*value);
-					stats.record_fold();
+			if (un.op == UnOp::Neg) {
+				if (*value == INT64_MIN) {
+					return; // -INT64_MIN would be signed-overflow UB; skip folding
 				}
+				expr = make_number_expr(-*value);
+				stats.record_fold();
+			}
 			},
 			[](auto&) {}
 		},
@@ -176,6 +216,35 @@ void fold_block(Block& block, FoldStats& stats) {
 					if (stmt.defaultBlk) {
 						fold_block(*stmt.defaultBlk, stats);
 					}
+				},
+				[&](DoWhileStmt& stmt) {
+					fold_expr_inplace(stmt.cond);
+					if (stmt.body) {
+						fold_block(*stmt.body, stats);
+					}
+				},
+				[&](RepeatStmt& stmt) {
+					fold_expr_inplace(stmt.count);
+					if (stmt.body) {
+						fold_block(*stmt.body, stats);
+					}
+				},
+				[&](TryCatchStmt& stmt) {
+					if (stmt.tryBlk) {
+						fold_block(*stmt.tryBlk, stats);
+					}
+					if (stmt.catchBlk) {
+						fold_block(*stmt.catchBlk, stats);
+					}
+				},
+				[&](UnsafeStmt& stmt) {
+					if (stmt.body) {
+						fold_block(*stmt.body, stats);
+					}
+				},
+				[&](PointerSetStmt& stmt) {
+					fold_expr_inplace(stmt.pointer);
+					fold_expr_inplace(stmt.value);
 				},
 				[](auto&) {}
 			},

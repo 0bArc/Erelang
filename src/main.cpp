@@ -16,7 +16,6 @@
 #include "erelang/ir.hpp"
 #include "erelang/codegen_x64.hpp"
 #include "erelang/plugins.hpp"
-#include "erelang/creation_kit.hpp"
 #include "erelang/erodsl/spec.hpp"
 
 #ifdef _WIN32
@@ -31,10 +30,23 @@ std::filesystem::path locate_executable_root(int argc, char** argv) {
     namespace fs = std::filesystem;
     fs::path exeDir;
 #ifdef _WIN32
-    wchar_t buffer[MAX_PATH];
-    const DWORD len = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
-    if (len > 0) {
-        exeDir = fs::path(std::wstring(buffer, len)).parent_path();
+    std::wstring modulePath;
+    {
+        DWORD size = MAX_PATH;
+        for (int attempt = 0; attempt < 16; ++attempt) {
+            std::wstring buffer(size, L'\0');
+            const DWORD n = GetModuleFileNameW(nullptr, &buffer[0], static_cast<DWORD>(buffer.size()));
+            if (n == 0) break;
+            if (n < buffer.size()) {
+                buffer.resize(n);
+                modulePath = std::move(buffer);
+                break;
+            }
+            size *= 2;
+        }
+    }
+    if (!modulePath.empty()) {
+        exeDir = fs::path(modulePath).parent_path();
     }
 #endif
     if (exeDir.empty()) {
@@ -60,23 +72,11 @@ int main(int argc, char** argv) {
     using namespace erelang;
     namespace fs = std::filesystem;
 
-    const fs::path exeDir = locate_executable_root(argc, argv);
+#ifdef _WIN32
+    SetConsoleOutputCP(CP_UTF8);
+#endif
 
-    if (argc >= 2) {
-        const std::string_view command{argv[1]};
-        if (command == "--creation-kit" || command == "creation-kit" || command == "--kit" || command == "kit") {
-            CreationKitOptions opts;
-            opts.runtimeRoot = exeDir;
-            opts.userPluginRoot = ensure_user_plugin_root(&std::cerr);
-            if (opts.userPluginRoot.empty()) {
-                opts.userPluginRoot = exeDir / "plugins";
-            }
-            opts.input = &std::cin;
-            opts.output = &std::cout;
-            opts.log = &std::cerr;
-            return run_creation_kit(opts);
-        }
-    }
+    const fs::path exeDir = locate_executable_root(argc, argv);
 
     if (argc < 2) {
         std::cerr << "Usage: obc <file> [more ...]\n"
@@ -155,12 +155,12 @@ int main(int argc, char** argv) {
         };
         std::unordered_set<std::string> visited;
         std::vector<Program> ordered;
-        auto lex_program = [&](std::string source, const erodsl::DslSpec& language) {
+        auto lex_program = [&](std::string source, const erodsl::DslSpec& language, const std::string& sourcePath) {
             LexerOptions opts = erodsl::build_lexer_options(language);
             Lexer lx(std::move(source), opts);
             auto tokens = lx.lex();
             erodsl::apply_keyword_aliases(language, tokens);
-            return Parser(std::move(tokens)).parse();
+            return Parser(std::move(tokens), sourcePath).parse();
         };
         std::function<void(const std::string&)> load_prog = [&](const std::string& file){
             fs::path p = fs::absolute(file);
@@ -203,7 +203,11 @@ int main(int argc, char** argv) {
                 }
             }
             const auto& language = resolve_language(p);
-            Program prog = lex_program(std::move(source), language);
+            Program prog = lex_program(std::move(source), language, key);
+            for (auto& a : prog.actions) a.sourcePath = key;
+            for (auto& h : prog.hooks) h.sourcePath = key;
+            for (auto& e : prog.entities) e.sourcePath = key;
+            for (auto& g : prog.globals) g.sourcePath = key;
             // load imports first
             for (const auto& imp : prog.imports) {
                 if (imp.pluginGlob) continue;
@@ -218,8 +222,6 @@ int main(int argc, char** argv) {
                 if (ip.is_relative()) ip = p.parent_path() / ip;
                 load_prog(ip.string());
             }
-            // Debug: list entities found in this file
-            std::cerr << "[loader] loaded " << key << " actions=" << prog.actions.size() << " entities=" << prog.entities.size() << " imports=" << prog.imports.size() << "\n";
             ordered.push_back(std::move(prog));
         };
         std::vector<Runtime::PluginRecord> pluginCallbacks;
@@ -288,8 +290,8 @@ int main(int argc, char** argv) {
                 suffix = ".eir";
             } else {
                 X64Codegen codegen;
-                artifact = codegen.emit_nasm_win64(module);
-                suffix = ".asm";
+                artifact = codegen.emit_gas_win64_demo(module);
+                suffix = ".s";
             }
 
             fs::path output;

@@ -1,5 +1,0 @@
-public action main {
-  double x = 2.0
-  print x
-}
-run main

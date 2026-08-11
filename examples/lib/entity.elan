@@ -18,7 +18,7 @@ public entity Person {
 
 
 public action main() {
-  let person = new Person()
-  person.init("Alex", 28)
-  person.greet()
+  Person person = new Person();
+  person.init("Alex", 28);
+  person.greet();
 }

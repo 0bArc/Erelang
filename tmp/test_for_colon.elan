@@ -1,8 +1,0 @@
-@erelang
-public action main {
-  let a = [1,2,3]
-  for (x : a) {
-    print x
-  }
-}
-run main

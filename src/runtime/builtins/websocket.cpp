@@ -68,6 +68,7 @@ struct WebSocketConnection {
     std::mutex sendMutex;
     std::mutex recvMutex;
     bool closed = false;
+    std::string state = "connecting";  // "connecting" | "open" | "closing" | "closed"
     std::atomic<int> refCount{1};
 
     void addRef() { ++refCount; }
@@ -192,8 +193,8 @@ static int ws_connect_impl(const std::string& url) {
     }
 
     int id = ws_register(conn);
-    // Don't release - the map owns the reference now.
-    // ws_unregister will release when the connection is closed.
+    conn->state = "open";
+    // Return "ws:N" handle string instead of raw int
     return id;
 }
 
@@ -236,6 +237,7 @@ static std::string ws_recv_impl(int id) {
         result.assign(buf, bytesRead);
     } else if (bufferType == WINHTTP_WEB_SOCKET_CLOSE_BUFFER_TYPE) {
         conn->closed = true;
+        conn->state = "closed";
     }
     free(buf);
     return result;
@@ -246,9 +248,11 @@ static std::string ws_close_impl(int id) {
     if (!conn) return "true";
 
     {
+        conn->state = "closing";
         std::lock_guard<std::mutex> lock(conn->sendMutex);
         WinHttpWebSocketClose(conn->wsHandle, WINHTTP_WEB_SOCKET_SUCCESS_CLOSE_STATUS, nullptr, 0);
         conn->closed = true;
+        conn->state = "closed";
     }
 
     conn->release();
@@ -297,6 +301,7 @@ static std::string ws_recv_timeout_impl(int id, int timeoutMs) {
         result.assign(buf, bytesRead);
     } else if (bufferType == WINHTTP_WEB_SOCKET_CLOSE_BUFFER_TYPE) {
         conn->closed = true;
+        conn->state = "closed";
     }
     free(buf);
     return result;
@@ -320,7 +325,8 @@ static std::string ws_dispatch(const std::string& name, const std::vector<std::s
 
     if (name == "ws_connect") {
         int id = ws_connect_impl(argS(0));
-        return std::to_string(id);
+        if (id < 0) return "null";
+        return std::string("ws:") + std::to_string(id);
     }
     if (name == "ws_send") {
         int id = 0;
@@ -344,12 +350,123 @@ static std::string ws_dispatch(const std::string& name, const std::vector<std::s
         try { id = std::stoi(argS(0)); } catch (...) { return "true"; }
         return ws_close_impl(id);
     }
+    if (name == "ws_state") {
+        int id = 0;
+        try { id = std::stoi(argS(0)); } catch (...) { return "closed"; }
+        WebSocketConnection* conn = ws_get_connection(id);
+        if (!conn) return "closed";
+        std::string st = conn->state;
+        conn->release();
+        return st;
+    }
+    if (name == "ws_broadcast") {
+        std::string data = argS(0);
+        std::lock_guard<std::mutex> lock(g_wsMutex);
+        for (auto& [cid, c] : g_wsConnections) {
+            if (!c->closed) {
+                std::lock_guard<std::mutex> slock(c->sendMutex);
+                WinHttpWebSocketSend(c->wsHandle,
+                                      WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE,
+                                      const_cast<char*>(data.data()),
+                                      static_cast<DWORD>(data.size()));
+            }
+        }
+        return "true";
+    }
+    if (name == "ws_send_binary") {
+        int id = 0;
+        try { id = std::stoi(argS(0)); } catch (...) { return "false"; }
+        WebSocketConnection* conn = ws_get_connection(id);
+        if (!conn || conn->closed) return "false";
+        std::string data = argS(1);
+        std::lock_guard<std::mutex> lock(conn->sendMutex);
+        DWORD err = WinHttpWebSocketSend(conn->wsHandle,
+                                          WINHTTP_WEB_SOCKET_BINARY_MESSAGE_BUFFER_TYPE,
+                                          const_cast<char*>(data.data()),
+                                          static_cast<DWORD>(data.size()));
+        conn->release();
+        return err == ERROR_SUCCESS ? "true" : "false";
+    }
 
     return {};
 }
 
 std::string __erelang_builtin_websocket_dispatch(const std::string& name, const std::vector<std::string>& argv) {
     return ws_dispatch(name, argv);
+}
+
+// Handle method dispatch for ws: handles (called from actions.cpp)
+// id is the raw int (prefix already stripped)
+std::string __erelang_ws_handle_method(int id, const std::string& method, const std::vector<std::string>& args) {
+    auto argS = [&](size_t i) -> const std::string& {
+        static const std::string empty;
+        return i < args.size() ? args[i] : empty;
+    };
+
+    if (method == "send")     return ws_send_impl(id, argS(0));
+    if (method == "send_binary") {
+        // Send binary frame
+        WebSocketConnection* conn = ws_get_connection(id);
+        if (!conn || conn->closed) return "false";
+        std::string data = argS(0);
+        std::lock_guard<std::mutex> lock(conn->sendMutex);
+        DWORD err = WinHttpWebSocketSend(conn->wsHandle,
+                                          WINHTTP_WEB_SOCKET_BINARY_MESSAGE_BUFFER_TYPE,
+                                          const_cast<char*>(data.data()),
+                                          static_cast<DWORD>(data.size()));
+        conn->release();
+        return err == ERROR_SUCCESS ? "true" : "false";
+    }
+    if (method == "recv")     return ws_recv_impl(id);
+    if (method == "recv_timeout") {
+        int ms = 5000;
+        try { ms = std::stoi(argS(0)); } catch (...) {}
+        return ws_recv_timeout_impl(id, ms);
+    }
+    if (method == "close") {
+        int code = 1000;
+        std::string reason;
+        if (!argS(0).empty()) {
+            try { code = std::stoi(argS(0)); } catch (...) {}
+            reason = argS(1);
+        }
+        WebSocketConnection* conn = ws_get_connection(id);
+        if (!conn) return "true";
+        conn->state = "closing";
+        {
+            std::lock_guard<std::mutex> lock(conn->sendMutex);
+            WinHttpWebSocketClose(conn->wsHandle, static_cast<USHORT>(code),
+                                  reason.empty() ? nullptr : const_cast<char*>(reason.data()),
+                                  static_cast<DWORD>(reason.size()));
+            conn->closed = true;
+            conn->state = "closed";
+        }
+        conn->release();
+        ws_unregister(id);
+        return "true";
+    }
+    if (method == "broadcast") {
+        std::string data = argS(0);
+        std::lock_guard<std::mutex> lock(g_wsMutex);
+        for (auto& [cid, c] : g_wsConnections) {
+            if (!c->closed) {
+                std::lock_guard<std::mutex> slock(c->sendMutex);
+                WinHttpWebSocketSend(c->wsHandle,
+                                      WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE,
+                                      const_cast<char*>(data.data()),
+                                      static_cast<DWORD>(data.size()));
+            }
+        }
+        return "true";
+    }
+    if (method == "state") {
+        WebSocketConnection* conn = ws_get_connection(id);
+        if (!conn) return "closed";
+        std::string st = conn->state;
+        conn->release();
+        return st;
+    }
+    return {};
 }
 
 } // namespace erelang

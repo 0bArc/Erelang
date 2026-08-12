@@ -1,16 +1,27 @@
 @erelang
-#include <builtin/network> as net
 
-public action main {
-    string html = net.get("https://stratware.win");
-    int start = string.find(html, "<a ");
-    if (start >= 0) {
-        string sub = string.substr(html, start, 100);
-        print sub;
-    } else {
-        print "no anchor tag found";
+
+#include "builtin/fs" as fs;
+#include "builtin/path" as path;
+
+public action main() {
+    if (fs.exists("commands") && fs.is_dir("commands")) {
+        // only subfolders: mod, dev, ...
+        for (string subFolder in fs.dirs("commands")) {
+            string name = path.name(subFolder);
+            print(name);
+            for (string file in fs.files(subFolder)) {
+                if (path.ext(file) == ".elan") {
+                    print(file);
+                }
+            }
+        }
+    }
+
+    for (int i = 0; i < 10; i++) {
+        print(i);
     }
 }
 
-run main;
 
+run main;

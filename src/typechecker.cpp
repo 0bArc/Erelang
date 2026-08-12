@@ -346,6 +346,9 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
             if (valueType.empty() || valueType == "unknown") valueType = "any";
             inferred = {"map<string," + valueType + ">"};
             return;
+        } else if constexpr (std::is_same_v<T, LambdaExpr>) {
+            inferred = {"string"}; // lambda returns a func:N handle string
+            return;
         } else if constexpr (std::is_same_v<T, FunctionCallExpr>) {
 
             // Walk arguments so identifiers inside them are marked used (TC120)
@@ -391,15 +394,41 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
                 }
                 auto bIt = tc_.builtins_.find(builtinLookup);
                 if (bIt == tc_.builtins_.end()) {
-                    // Unknown calls in expression position must surface as TC001
-                    // instead of silently inferring "unknown". Dotted/qualified
-                    // names resolve at runtime (entity/struct methods), so only
-                    // flag plain identifiers.
-                    if (node.name.find('.') == std::string::npos &&
-                        node.name.find("::") == std::string::npos) {
-                        emit_unknown_call(result_, node.name, ctx.actionName());
+                    // Check dotted imports for module action calls in expression context
+                    bool resolvedModuleAction = false;
+                    const auto dotPos = builtinLookup.find('.');
+                    if (dotPos != std::string::npos && dotPos > 0 && ctx.program) {
+                        const std::string alias = builtinLookup.substr(0, dotPos);
+                        const std::string method = builtinLookup.substr(dotPos + 1);
+                        for (const auto& importDecl : ctx.program->imports) {
+                            if (!importDecl.alias || *importDecl.alias != alias) continue;
+                            auto actionIt = tc_.actions_.find(method);
+                            if (actionIt != tc_.actions_.end()) {
+                                inferred = { actionIt->second->returnType.empty() ? "void" : actionIt->second->returnType };
+                                resolvedModuleAction = true;
+                            }
+                            break;
+                        }
                     }
-                    inferred = {"unknown"};
+                    if (!resolvedModuleAction) {
+                        // Dotted/qualified names resolve at runtime as handle
+                        // method calls (object.method). All handle dispatch
+                        // methods return string values by convention.
+                        if (node.name.find('.') == std::string::npos &&
+                            node.name.find("::") == std::string::npos) {
+                            // Check if name is a variable in scope (possibly a func:N handle)
+                            if (ctx.scopes && ctx.scopes->lookup(node.name)) {
+                                // Variable exists in scope — treat as function handle call
+                                inferred = {"string"};
+                            } else {
+                                emit_unknown_call(result_, node.name, ctx.actionName());
+                                inferred = {"unknown"};
+                            }
+                        } else {
+                            // Handle/struct method call - returns string
+                            inferred = {"string"};
+                        }
+                    }
                 } else {
                     auto& bi = bIt->second;
                     if ((int)node.args.size() < bi.minParams || (bi.maxParams >= 0 && (int)node.args.size() > bi.maxParams)) {
@@ -413,6 +442,27 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
                     inferred = { bIt->second.returnType };
                 }
             }
+        } else if constexpr (std::is_same_v<T, PostfixExpr>) {
+            auto ot = check(node.operand, ctx);
+            if (ot.name != "unknown" && !TypeChecker::is_int(ot)) {
+                DiagBuilder(result_, Severity::Error, "Increment/decrement requires an int operand, got " + ot.name, "TC065", ctx.actionName()).emit();
+            }
+            inferred = ot;
+        } else if constexpr (std::is_same_v<T, PrefixExpr>) {
+            auto ot = check(node.operand, ctx);
+            if (ot.name != "unknown" && !TypeChecker::is_int(ot)) {
+                DiagBuilder(result_, Severity::Error, "Increment/decrement requires an int operand, got " + ot.name, "TC065", ctx.actionName()).emit();
+            }
+            inferred = ot;
+        } else if constexpr (std::is_same_v<T, CompoundAssignExpr>) {
+            auto lt = check(node.left, ctx);
+            auto rt = check(node.right, ctx);
+            if (node.op != BinOp::Add || (!TypeChecker::is_string(lt) && !TypeChecker::is_string(rt))) {
+                if (lt.name != "unknown" && rt.name != "unknown" && !TypeChecker::is_int(lt)) {
+                    DiagBuilder(result_, Severity::Error, "Compound assignment requires numeric operands, got " + lt.name, "TC066", ctx.actionName()).emit();
+                }
+            }
+            inferred = lt;
         }
     }, e->node);
     cache_[e.get()] = inferred;
@@ -831,6 +881,8 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
         } else if constexpr (std::is_same_v<T, PointerSetStmt>) {
             expr_.check(stmt.pointer, ctx);
             expr_.check(stmt.value, ctx);
+        } else if constexpr (std::is_same_v<T, ExprStmt>) {
+            expr_.check(stmt.expr, ctx);
         }
     }, s);
     return flow;
@@ -949,6 +1001,11 @@ void TypeChecker::pass_check_program(const Program& program, TCResult& out) {
                 scopes.declare(g.name, gi);
             }
         }
+        // Implicit runtime result variable (used by handle method call dispatch)
+        {
+            VarInfo ri; ri.type = {"string"}; ri.assigned = true; ri.used = true;
+            scopes.declare("_", ri);
+        }
         auto rf = stmt.check_block(a.body, ctx, scopes, a.returnType.empty()?"void":a.returnType);
         for (auto& frame : scopes.all()) for (auto& kv : frame) if (!kv.second.used) DiagBuilder(out, Severity::Warning, "Unused variable: " + kv.first, "TC120", a.name).emit();
         if (!returns_void(a) && rf != ReturnFlow::AlwaysReturn) DiagBuilder(out, Severity::Error, "Missing return in action declared to return " + a.returnType, "TC121", a.name).emit();
@@ -980,9 +1037,40 @@ void TypeChecker::register_imported_module_builtins(const Program& program) {
     };
     if (program_imports_module(&program, "builtin/network") || program_imports_module(&program, "builtin/net")) {
         add("http_get", 1, 1, "string");
+        add("http_get_auth", 2, 2, "string");
+        add("http_post", 3, 3, "string");
+        add("http_post_auth", 4, 4, "string");
+        add("http_put_auth", 4, 4, "string");
+        add("http_patch_auth", 4, 4, "string");
+        add("http_delete_auth", 2, 2, "string");
+        add("http_status", 1, 1, "string");
         add("http_download", 2, 2, "bool");
         add("hls_download_best", 2, 2, "bool");
         add("url_encode", 1, 1, "string");
+        add("http_create_server", 1, 3, "string");
+        add("http_create_server_tls", 3, 3, "string");
+        // Also register the alias-qualified forms so expressions like
+        //   string s = net.create_server("8080")
+        // resolve without needing a separate FunctionCallExpr -> alias lookup
+        add("net.create_server", 1, 3, "string");
+        add("net.create_server_tls", 3, 3, "string");
+        add("net.get", 1, 1, "string");
+        add("net.get_auth", 2, 2, "string");
+        add("net.post", 3, 3, "string");
+        add("net.post_auth", 4, 4, "string");
+        add("net.put", 3, 3, "string");
+        add("net.put_auth", 4, 4, "string");
+        add("net.patch", 4, 4, "string");
+        add("net.patch_auth", 4, 4, "string");
+        add("net.delete", 1, 1, "string");
+        add("net.delete_auth", 2, 2, "string");
+        add("net.head", 1, 1, "string");
+        add("net.status", 1, 1, "string");
+        add("net.download", 2, 2, "bool");
+        add("net.encode", 1, 1, "string");
+        add("net.json_encode", 1, 1, "string");
+        add("net.json_decode", 1, 1, "string");
+        add("net.get_resp", 1, 1, "string");
         add("network.ip.flush", 0, 0, "string");
         add("network.ip.release", 0, 1, "string");
         add("network.ip.renew", 0, 1, "string");
@@ -993,15 +1081,22 @@ void TypeChecker::register_imported_module_builtins(const Program& program) {
         add("network.debug.last", 0, 0, "string");
         add("network.debug.clear", 0, 0, "string");
         add("network.debug.log_tail", 0, 1, "string");
-        add("http_get_auth", 2, 2, "string");
-        add("http_post_auth", 4, 4, "string");
+    }
+    if (program_imports_module(&program, "builtin/tcp") || program_imports_module(&program, "builtin/rawtcp")) {
+        add("tcp.connect", 2, 2, "string");
     }
     if (program_imports_module(&program, "builtin/websocket") || program_imports_module(&program, "builtin/ws")) {
-        add("ws_connect", 1, 1, "int");
+        add("ws_connect", 1, 1, "string");
         add("ws_send", 2, 2, "bool");
         add("ws_recv", 1, 1, "string");
         add("ws_recv_timeout", 2, 2, "string");
         add("ws_close", 1, 1, "void");
+        add("ws_state", 1, 1, "string");
+        // Alias-qualified forms
+        add("ws.connect", 1, 1, "string");
+        add("ws.recv_timeout", 2, 2, "string");
+        add("ws.broadcast", 1, 1, "bool");
+        add("ws.send_binary", 1, 1, "bool");
     }
     if (program_imports_module(&program, "builtin/regex")) {
         add("regex_match", 2, 2, "bool");
@@ -1027,13 +1122,15 @@ void TypeChecker::register_imported_module_builtins(const Program& program) {
         add("thread_done", 1, 1, "bool");
         add("thread_list", 0, 0, "string");
         add("thread_wait_all", 0, 0, "void");
-        add("thread_count", 0, 0, "int");
+        add("thread_count", 0, 0, "string");
         add("thread_yield", 0, 0, "void");
         add("thread_gc", 0, 0, "void");
         add("thread_gc_all", 0, 0, "void");
         add("thread_purge", 0, 0, "void");
         add("thread_remove", 1, 2, "string");
         add("thread_state", 1, 1, "string");
+        add("thread_sleep", 1, 1, "void");
+        add("thread_result", 1, 1, "any");
     }
     if (program_imports_module(&program, "builtin/monitor")) {
         add("monitor_add", 1, 2, "string");
@@ -1065,12 +1162,25 @@ void TypeChecker::register_imported_module_builtins(const Program& program) {
         add("perm_grant", 1, 1, "void"); add("perm_revoke", 1, 1, "void");
         add("perm_has", 1, 1, "bool"); add("perm_list", 0, 0, "string");
     }
-    if (program_imports_module(&program, "builtin/system")) {
+    if (program_imports_module(&program, "builtin/system") || program_imports_module(&program, "builtin/process") || program_imports_module(&program, "builtin/proc")) {
         add("system.cmd", 1, 2, "string");
         add("system.execute", 1, 3, "int");
         add("system.output", 0, 0, "string");
         add("system.last_exit", 0, 0, "int");
         add("system.ip.flush", 0, 0, "string");
+    }
+    if (program_imports_module(&program, "builtin/performance") || program_imports_module(&program, "builtin/perf")) {
+        add("perf.profile.begin", 1, 1, "void");
+        add("perf.profile.end", 1, 1, "void");
+        add("perf.profile.duration", 1, 1, "string");
+        add("perf.profile.calls", 1, 1, "string");
+        add("perf.profile.report", 0, 0, "string");
+        add("perf.mem.usage", 0, 0, "string");
+        add("perf.mem.peak", 0, 0, "string");
+        add("perf.gc.collect", 0, 0, "void");
+        add("perf.gc.threshold", 1, 1, "void");
+        add("perf.gc.pause", 0, 0, "void");
+        add("perf.gc.resume", 0, 0, "void");
     }
     if (program_imports_module(&program, "builtin/path") || program_imports_module(&program, "builtin/erepath")) {
         add("path_join", 1, -1, "string"); add("path_dirname", 1, 1, "string");
@@ -1079,8 +1189,11 @@ void TypeChecker::register_imported_module_builtins(const Program& program) {
     }
     if (program_imports_module(&program, "builtin/fs") || program_imports_module(&program, "builtin/erefs")) {
         add("read_text", 1, 1, "string"); add("write_text", 2, 2, "void"); add("append_text", 2, 2, "void");
-        add("file_exists", 1, 1, "bool"); add("mkdirs", 1, 1, "void"); add("copy_file", 2, 2, "bool");
-        add("move_file", 2, 2, "bool"); add("delete_file", 1, 1, "bool"); add("list_files", 1, 1, "unknown");
+        add("file_exists", 1, 1, "bool"); add("is_dir", 1, 1, "bool"); add("is_file", 1, 1, "bool");
+        add("mkdirs", 1, 1, "void"); add("copy_file", 2, 2, "bool");
+        add("move_file", 2, 2, "bool"); add("delete_file", 1, 1, "bool");
+        add("list_files", 1, 1, "array<string>"); add("list_dirs", 1, 1, "array<string>");
+        add("list_regular_files", 1, 1, "array<string>");
         add("load_elan", 1, 1, "string"); add("load_elan_dir", 1, 1, "unknown");
         add("call_action", 1, -1, "any");
         add("cwd", 0, 0, "string"); add("chdir", 1, 1, "bool");
@@ -1120,6 +1233,11 @@ void TypeChecker::init_builtins() {
     add("toString",1,1,"string");
     add("tofloat",1,1,"double");
     add("tobool",1,1,"bool");
+    // type constructors
+    add("int",1,1,"int");
+    add("float",1,1,"double");
+    add("string",1,1,"string");
+    add("bool",1,1,"bool");
     add("__builtin_sizeof",1,1,"int");
     add("__builtin_alignof",1,1,"int");
     add("__builtin_typeof",1,1,"string");
@@ -1130,7 +1248,15 @@ void TypeChecker::init_builtins() {
     add("reinterpret_cast",2,2,"unknown");
     add("bit_cast",2,2,"unknown");
     add("to_json",1,1,"string");
-    add("from_json",1,1,"map<any,any>");
+    add("from_json",1,1,"string");
+    add("json.encode",1,1,"string");
+    add("json.decode",1,1,"string");
+    add("url_encode",1,1,"string");
+    add("json_encode",1,1,"string");
+    add("json_decode",1,1,"string");
+    add("http_get_resp",1,1,"string");
+    add("tcp_connect",2,2,"string");
+    add("tcp.connect",2,2,"string");
     // Dynamic module loading (JS-style require) — always available
     add("load_elan",1,1,"string");
     add("load_elan_dir",1,1,"unknown");
@@ -1165,6 +1291,9 @@ void TypeChecker::init_builtins() {
     add("list_get",2,2,"string");
     add("list_len",1,1,"int");
     add("list_join",2,2,"string");
+    add("map",2,2,"string");   // map(list, func) -> new list handle
+    add("filter",2,2,"string"); // filter(list, func) -> new list handle
+    add("reduce",3,3,"string"); // reduce(list, func, initial) -> accumulated value
     add("dict_new",0,0,"unknown");
     add("dict_set",3,3,"void");
     add("dict_get",2,2,"string");
@@ -1176,6 +1305,47 @@ void TypeChecker::init_builtins() {
     add("plugin_core",2,2,"string");
     add("plugin_core_files",1,1,"string");
     add("plugin_core_keys",2,2,"string");
+    // Handle method dispatch types for req:/res:/ws:/http:/sse: handles
+    // req: handle methods
+    add("req.body",0,0,"string");
+    add("req.query",1,1,"string");
+    add("req.header",1,1,"string");
+    add("req.method",0,0,"string");
+    add("req.path",0,0,"string");
+    add("req.cookie",1,1,"string");
+    add("req.file",1,1,"string");
+    add("req.save_upload",2,2,"string");
+    // res: handle methods
+    add("res.html",1,1,"void");
+    add("res.json",1,1,"void");
+    add("res.text",1,1,"void");
+    add("res.write",1,1,"void");
+    add("res.status",1,1,"void");
+    add("res.header",2,2,"void");
+    add("res.cookie",3,6,"void");
+    add("res.end",0,0,"void");
+    // ws: handle methods
+    add("ws.send",1,1,"bool");
+    add("ws.send_binary",1,1,"bool");
+    add("ws.recv",0,0,"string");
+    add("ws.recv_timeout",1,1,"string");
+    add("ws.close",0,2,"void");
+    add("ws.broadcast",1,1,"bool");
+    add("ws.state",0,0,"string");
+    // resp: handle methods
+    add("resp.status",0,0,"int");
+    add("resp.body",0,0,"string");
+    add("resp.header",1,1,"string");
+    add("resp.json",0,0,"string");
+    // tcp: handle methods
+    add("tcp.send",1,1,"int");
+    add("tcp.recv",0,0,"string");
+    add("tcp.recv_timeout",0,1,"string");
+    add("tcp.close",0,0,"bool");
+    add("tcp.state",0,0,"string");
+    // sse: handle methods
+    add("sse.emit",2,2,"void");
+    add("sse.close",0,0,"void");
 }
 
 } // namespace erelang

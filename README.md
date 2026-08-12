@@ -52,7 +52,7 @@ All runtime code lives under `src/runtime/`.
 
 | Module | Import path | Example alias |
 |--------|------------|---------------|
-| Filesystem | `builtin/fs` | `fs.read`, `fs.write`, `fs.exists` |
+| Filesystem | `builtin/fs` | `fs.read`, `fs.write`, `fs.exists`, `fs.is_dir`, `fs.dirs`, `fs.files` |
 | Path utilities | `builtin/path` | `path.join`, `path.parent`, `path.name` |
 | Network | `builtin/network` | `net.get`, `net.post`, `net.download` |
 | Math | `builtin/math` | `math.sin`, `math.sqrt`, `math.abs` |

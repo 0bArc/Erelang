@@ -82,11 +82,17 @@ std::optional<std::string> resolve_builtin_module_method(
             if (methodName == "write") return std::string("write_text");
             if (methodName == "append") return std::string("append_text");
             if (methodName == "exists") return std::string("file_exists");
+            if (methodName == "is_dir") return std::string("is_dir");
+            if (methodName == "is_file") return std::string("is_file");
             if (methodName == "mkdir") return std::string("mkdirs");
             if (methodName == "copy") return std::string("copy_file");
             if (methodName == "move") return std::string("move_file");
             if (methodName == "remove") return std::string("delete_file");
             if (methodName == "list") return std::string("list_files");
+            if (methodName == "dirs") return std::string("list_dirs");
+            if (methodName == "files") return std::string("list_regular_files");
+            if (methodName == "size") return std::string("file_size");
+            if (methodName == "mtime") return std::string("file_mtime");
             if (methodName == "load") return std::string("load_elan");
             if (methodName == "load_dir") return std::string("load_elan_dir");
             if (methodName == "cwd") return std::string("cwd");
@@ -148,15 +154,21 @@ std::optional<std::string> resolve_builtin_module_method(
             if (methodName == "get_auth") return std::string("http_get_auth");
             if (methodName == "post") return std::string("http_post");
             if (methodName == "post_auth") return std::string("http_post_auth");
-            if (methodName == "put") return std::string("http_put_auth");
+            if (methodName == "put") return std::string("http_put");
             if (methodName == "put_auth") return std::string("http_put_auth");
-            if (methodName == "patch") return std::string("http_patch_auth");
+            if (methodName == "patch") return std::string("http_patch");
             if (methodName == "patch_auth") return std::string("http_patch_auth");
-            if (methodName == "delete") return std::string("http_delete_auth");
+            if (methodName == "delete") return std::string("http_delete");
             if (methodName == "delete_auth") return std::string("http_delete_auth");
+            if (methodName == "head") return std::string("http_head");
             if (methodName == "status") return std::string("http_status");
             if (methodName == "download") return std::string("http_download");
             if (methodName == "encode" || methodName == "url_encode") return std::string("url_encode");
+            if (methodName == "json_encode") return std::string("json_encode");
+            if (methodName == "json_decode") return std::string("json_decode");
+            if (methodName == "get_resp") return std::string("http_get_resp");
+            if (methodName == "create_server") return std::string("http_create_server");
+            if (methodName == "create_server_tls") return std::string("http_create_server_tls");
             if (methodName.rfind("http_", 0) == 0 || methodName.rfind("network.", 0) == 0 ||
                 methodName == "hls_download_best" || methodName == "url_encode") {
                 return methodName;
@@ -191,6 +203,10 @@ std::optional<std::string> resolve_builtin_module_method(
             if (methodName == "wait_all") return std::string("thread_wait_all");
             if (methodName == "done") return std::string("thread_done");
             if (methodName == "list") return std::string("thread_list");
+            if (methodName == "gc") return std::string("thread_gc");
+            if (methodName == "gc_all") return std::string("thread_gc_all");
+            if (methodName == "remove") return std::string("thread_remove");
+            if (methodName == "state") return std::string("thread_state");
         }
 
         if (path_is(normalizedPath, {"builtin/monitor"})) {
@@ -221,7 +237,15 @@ std::optional<std::string> resolve_builtin_module_method(
             if (methodName == "recv") return std::string("ws_recv");
             if (methodName == "recv_timeout") return std::string("ws_recv_timeout");
             if (methodName == "close") return std::string("ws_close");
+            if (methodName == "state") return std::string("ws_state");
+            if (methodName == "broadcast") return std::string("ws_broadcast");
+            if (methodName == "send_binary") return std::string("ws_send_binary");
             if (methodName.rfind("ws_", 0) == 0) return methodName;
+        }
+
+        if (path_is(normalizedPath, {"builtin/tcp", "builtin/rawtcp"})) {
+            if (methodName == "connect") return std::string("tcp_connect");
+            if (methodName.rfind("tcp_", 0) == 0) return methodName;
         }
 
         if (path_is(normalizedPath, {"builtin/data"})) {
@@ -288,11 +312,17 @@ void bind_builtin_module_aliases(const Program& program, std::unordered_map<std:
             bind_alias(alias, "write", "write_text");
             bind_alias(alias, "append", "append_text");
             bind_alias(alias, "exists", "file_exists");
+            bind_alias(alias, "is_dir", "is_dir");
+            bind_alias(alias, "is_file", "is_file");
             bind_alias(alias, "mkdir", "mkdirs");
             bind_alias(alias, "copy", "copy_file");
             bind_alias(alias, "move", "move_file");
             bind_alias(alias, "remove", "delete_file");
             bind_alias(alias, "list", "list_files");
+            bind_alias(alias, "dirs", "list_dirs");
+            bind_alias(alias, "files", "list_regular_files");
+            bind_alias(alias, "size", "file_size");
+            bind_alias(alias, "mtime", "file_mtime");
             bind_alias(alias, "load", "load_elan");
             bind_alias(alias, "load_dir", "load_elan_dir");
             bind_alias(alias, "cwd", "cwd");
@@ -303,7 +333,7 @@ void bind_builtin_module_aliases(const Program& program, std::unordered_map<std:
             bind_alias(alias, "name", "path_basename");
             bind_alias(alias, "basename", "path_basename");
             bind_alias(alias, "ext", "path_ext");
-            bind_same(alias, {"load_elan", "load_elan_dir", "call_action", "list_files", "read_text", "write_text"});
+            bind_same(alias, {"load_elan", "load_elan_dir", "call_action", "list_files", "list_dirs", "list_regular_files", "read_text", "write_text", "is_dir", "is_file", "file_size", "file_mtime"});
         }
 
         if (path_is(normalizedPath, {"builtin/path", "builtin/erepath"})) {
@@ -358,20 +388,28 @@ void bind_builtin_module_aliases(const Program& program, std::unordered_map<std:
             bind_alias(alias, "get_auth", "http_get_auth");
             bind_alias(alias, "post", "http_post");
             bind_alias(alias, "post_auth", "http_post_auth");
-            bind_alias(alias, "put", "http_put_auth");
+            bind_alias(alias, "put", "http_put");
             bind_alias(alias, "put_auth", "http_put_auth");
-            bind_alias(alias, "patch", "http_patch_auth");
+            bind_alias(alias, "patch", "http_patch");
             bind_alias(alias, "patch_auth", "http_patch_auth");
-            bind_alias(alias, "delete", "http_delete_auth");
+            bind_alias(alias, "delete", "http_delete");
             bind_alias(alias, "delete_auth", "http_delete_auth");
+            bind_alias(alias, "head", "http_head");
             bind_alias(alias, "status", "http_status");
             bind_alias(alias, "download", "http_download");
             bind_alias(alias, "encode", "url_encode");
+            bind_alias(alias, "json_encode", "json_encode");
+            bind_alias(alias, "json_decode", "json_decode");
+            bind_alias(alias, "get_resp", "http_get_resp");
+            bind_alias(alias, "create_server", "http_create_server");
+            bind_alias(alias, "create_server_tls", "http_create_server_tls");
             bind_same(alias, {
                 "http_get", "http_get_auth", "http_post", "http_post_auth",
-                "http_put_auth", "http_patch_auth", "http_delete_auth",
+                "http_put", "http_put_auth", "http_patch", "http_patch_auth", "http_delete", "http_delete_auth",
+                "http_head",
                 "http_status", "http_download",
-                "hls_download_best", "url_encode",
+                "hls_download_best", "url_encode", "json_encode", "json_decode", "http_get_resp",
+                "http_create_server", "http_create_server_tls",
                 "network.ip.flush", "network.ip.release", "network.ip.renew", "network.ip.registerdns",
             });
         }
@@ -458,7 +496,14 @@ void bind_builtin_module_aliases(const Program& program, std::unordered_map<std:
             bind_alias(alias, "recv", "ws_recv");
             bind_alias(alias, "recv_timeout", "ws_recv_timeout");
             bind_alias(alias, "close", "ws_close");
-            bind_same(alias, {"ws_connect", "ws_send", "ws_recv", "ws_recv_timeout", "ws_close"});
+            bind_alias(alias, "broadcast", "ws_broadcast");
+            bind_alias(alias, "send_binary", "ws_send_binary");
+            bind_same(alias, {"ws_connect", "ws_send", "ws_recv", "ws_recv_timeout", "ws_close", "ws_broadcast", "ws_send_binary"});
+        }
+
+        if (path_is(normalizedPath, {"builtin/tcp", "builtin/rawtcp"})) {
+            bind_alias(alias, "connect", "tcp_connect");
+            bind_same(alias, {"tcp_connect"});
         }
 
         if (path_is(normalizedPath, {"builtin/system"})) {

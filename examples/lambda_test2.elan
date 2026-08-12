@@ -1,0 +1,17 @@
+@erelang
+
+public action main {
+    import "builtin/core" as core;
+
+    // Simple arrow lambda
+    string doubleIt = lambda(x: int) -> x * 2;
+
+    // Lambda in block form
+    string add = lambda(a: int, b: int): int {
+        int sum = a + b;
+        return sum;
+    };
+
+    print("doubleIt(21): ");
+    print(doubleIt(21));
+}

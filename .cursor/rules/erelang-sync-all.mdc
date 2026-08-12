@@ -1,0 +1,145 @@
+```markdown
+---
+description: When changing any Erelang syntax, builtin, handle type, module, AST node, or language feature, you MUST keep the entire project in perfect lockstep. Never leave any layer out of sync. Always reason about the full project structure first. Preserve all existing syntax and behavior. Build cleanly and regression-test before finishing.
+alwaysApply: true
+---
+
+# Erelang — Full-Stack Sync (Mandatory)
+
+This rule is non-negotiable. Any change to language features, syntax, builtins, handles, modules, or the type system **must** update every dependent layer in the same change. Partial updates are forbidden.
+
+## 0. Before you write a single line of code
+
+1. **Reason about the full project structure.** Mentally (or by reading) walk the real layout:
+
+   ```
+   src/
+     lexer.cpp / parser.cpp / typechecker.cpp / optimizer.cpp / ir.cpp
+     runtime/
+       core.cpp          # entry, run, hooks
+       helpers.cpp       # global containers
+       eval.cpp          # expression eval
+       actions.cpp       # statement exec + handle dispatch
+       builtins.cpp      # core + import-gated dispatch
+       imports.cpp       # alias binding
+       builtins/*.cpp    # per-module implementations
+       features/*.cpp
+     obs_main.cpp
+   include/              # public headers
+   docs/                 # single source of truth for syntax & APIs
+   examples/             # regression corpus
+   erevos-language/      # VS Code extension (syntaxes/, snippets/, src/)
+   CMakeLists.txt        # all three targets (static lib, shared, runner)
+   ```
+
+2. Identify **every** file that currently implements or documents the feature you are about to touch.
+3. Explicitly list the files you will modify. If the list is incomplete, stop and expand it.
+
+## 1. Absolute rules
+
+- **Never break past syntax or behavior.** Existing examples, kitchen-sink programs, and previously working language constructs must continue to parse, type-check, and run exactly as before unless the change is an intentional, documented breaking change (rare).
+- **No partial updates.** Adding a keyword/token without updating the typechecker + runtime + docs + extension is a hard failure.
+- **No slop.** 
+  - No stub implementations that return empty strings or “TODO”.
+  - No dead code, commented-out old paths, or inconsistent naming.
+  - Match existing style (C++20, 4-space indent, `std::string_view` for non-owned strings, const-correctness).
+  - Prefer the cleanest possible change that keeps the system consistent.
+- **Handle prefixes and method dispatch** live in `actions.cpp`. New prefixes (`http:`, `ws:`, `req:`, etc.) require an explicit `if (handle.rfind("prefix:", 0) == 0)` block.
+- **Import-gated modules** require coordinated changes in `imports.cpp`, `builtins.cpp`, the new `builtins/xxx.cpp`, `typechecker.cpp`, and `CMakeLists.txt`.
+
+## 2. Mandatory touch-point matrix
+
+| Kind of change | Required updates (all of them) |
+|---|---|
+| New / changed token or keyword | `lexer.cpp`, `parser.cpp`, `typechecker.cpp`, `eval.cpp` / `actions.cpp`, docs, `erevos-language/syntaxes/` |
+| New AST node / syntax construct | parser, typechecker, eval/actions, AST serializer if present, docs, extension grammar |
+| New core builtin | `typechecker.cpp` (register signature), `builtins.cpp`, `imports.cpp` if aliased, docs, extension completion/snippets |
+| New handle method or prefix | `actions.cpp` dispatch, typechecker, docs, extension |
+| New import-gated module | `src/runtime/builtins/<name>.cpp`, declare + wire in `builtins.cpp`, alias tables in `imports.cpp`, typechecker registry, **all three** places in `CMakeLists.txt`, module doc under `docs/`, extension |
+| Any language-visible change | `docs/` (especially `language.md` / module-specific pages), `examples/` (at least one exercise of the new feature), VS Code extension |
+| CMake / build surface | `CMakeLists.txt` for static lib, shared lib, and runner targets |
+
+## 3. VS Code extension (`erevos-language/`)
+
+After **every** syntax, keyword, builtin, or handle-prefix change:
+
+1. Update TextMate grammar under `syntaxes/`.
+2. Update snippets and any completion / hover providers in `src/`.
+3. Bump version if needed and rebuild the VSIX:
+   ```bash
+   cd erevos-language
+   vsce package
+   ```
+4. The packaged `.vsix` must be present and installable. Extension must highlight the new constructs and offer correct completions.
+
+Leaving the extension stale is treated the same as leaving the typechecker stale.
+
+## 4. Documentation
+
+- `docs/` is the single source of truth.
+- Update the relevant page(s) in the same change. Do not leave “docs later”.
+- If the change affects core language, update `language.md` (or the equivalent syntax document).
+- Module-specific APIs go in their dedicated doc (`network.md`, `threads.md`, etc.).
+
+## 5. Build & regression gate (must pass before you stop)
+
+1. Configure if needed:
+   ```bash
+   cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+   ```
+2. Full clean build of the runner (and any other targets you touched):
+   ```bash
+   cmake --build build --target erelang_runner -j 8
+   ```
+   Zero errors, zero new warnings that are your fault.
+3. Run the regression corpus (at minimum):
+   ```bash
+   ./build/bin/Debug/erelang.exe examples/language_kitchen_sink.elan
+   ./build/bin/Debug/erelang.exe examples/feature_pass_v2.elan
+   ./build/bin/Debug/erelang.exe examples/program.elan
+   ```
+   Plus any new example you added that exercises the change.
+4. If the change is experimental, also verify the experimental flag path still works.
+
+If the build or any existing example fails, the change is incomplete. Fix it before proceeding.
+
+## 6. Workflow checklist (copy this into your thinking)
+
+```
+[ ] Project structure reasoned about
+[ ] All affected files listed
+[ ] Lexer / parser updated (if syntax)
+[ ] Typechecker signatures & checks updated
+[ ] Runtime (eval / actions / builtins / imports) updated
+[ ] CMakeLists.txt updated for every target that needs the new file
+[ ] Docs updated
+[ ] At least one example that uses the new feature added or extended
+[ ] Existing kitchen-sink / feature examples still pass
+[ ] VS Code grammar + snippets + completions updated
+[ ] VSIX rebuilt
+[ ] Full build of erelang succeeds without issues.
+```
+
+Only when every box is checked is the change finished.
+
+## 7. Forbidden patterns
+
+- “I’ll update the typechecker later”
+- “Docs can wait”
+- “The extension is optional”
+- Adding a new keyword that makes old valid programs fail to parse
+- Shipping a builtin that is not registered in the typechecker
+- Leaving a new `.cpp` out of one of the CMake library targets
+- Returning empty / stub results from a newly added dispatch path
+
+Any of the above is considered a broken change and must be fixed immediately.
+```
+
+## 8. Code bumps
+Do not bump a patch version example 0.0.11 to -> 0.0.12 without approval.
+the developer will specify when to do it, so we can maintain a huge update cycle without a new bump everytime.
+
+
+## 9 Testing cycle
+When a new feature is implemented, then make sure to test the new system in .elan.
+Always run new code to make sure there are no syntax errors for automated development.

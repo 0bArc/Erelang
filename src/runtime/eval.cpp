@@ -21,6 +21,103 @@
 
 namespace erelang {
 
+bool Runtime::try_get_int_var(const Env& env, const std::string& name, int64_t& out) const {
+    if (auto it = env.intVars.find(name); it != env.intVars.end()) {
+        out = it->second;
+        return true;
+    }
+    if (auto it = env.vars.find(name); it != env.vars.end()) {
+        if (!is_int_string(it->second)) return false;
+        out = to_int(it->second);
+        return true;
+    }
+    if (auto it = globalIntVars_.find(name); it != globalIntVars_.end()) {
+        out = it->second;
+        return true;
+    }
+    if (auto it = globalVars_.find(name); it != globalVars_.end()) {
+        if (!is_int_string(it->second)) return false;
+        out = to_int(it->second);
+        return true;
+    }
+    return false;
+}
+
+void Runtime::set_var_int(Env& env, const std::string& name, int64_t value) const {
+    env.intVars[name] = value;
+    env.vars.erase(name);
+    if (globalNames_.count(name)) {
+        globalIntVars_[name] = value;
+        globalVars_.erase(name);
+    }
+}
+
+void Runtime::set_var_str(Env& env, const std::string& name, const std::string& value) const {
+    env.vars[name] = value;
+    env.intVars.erase(name);
+    if (globalNames_.count(name)) {
+        globalVars_[name] = value;
+        globalIntVars_.erase(name);
+    }
+}
+
+bool Runtime::try_eval_int(const Expr& e, const Env& env, int64_t& out) const {
+    if (std::holds_alternative<ExprNumber>(e.node)) {
+        out = std::get<ExprNumber>(e.node).v;
+        return true;
+    }
+    if (std::holds_alternative<ExprBool>(e.node)) {
+        out = std::get<ExprBool>(e.node).v ? 1 : 0;
+        return true;
+    }
+    if (std::holds_alternative<ExprIdent>(e.node)) {
+        return try_get_int_var(env, std::get<ExprIdent>(e.node).name, out);
+    }
+    if (std::holds_alternative<UnaryExpr>(e.node)) {
+        const auto& u = std::get<UnaryExpr>(e.node);
+        int64_t v = 0;
+        if (!u.expr || !try_eval_int(*u.expr, env, v)) return false;
+        if (u.op == UnOp::Neg) { out = -v; return true; }
+        if (u.op == UnOp::Not) { out = (v == 0) ? 1 : 0; return true; }
+        return false;
+    }
+    if (std::holds_alternative<BinaryExpr>(e.node)) {
+        const auto& b = std::get<BinaryExpr>(e.node);
+        int64_t li = 0, ri = 0;
+        if (!b.left || !b.right) return false;
+        if (!try_eval_int(*b.left, env, li) || !try_eval_int(*b.right, env, ri)) return false;
+        switch (b.op) {
+            case BinOp::Add: out = li + ri; return true;
+            case BinOp::Sub: out = li - ri; return true;
+            case BinOp::Mul: out = li * ri; return true;
+            case BinOp::Div: if (ri == 0) return false; out = li / ri; return true;
+            case BinOp::Mod: if (ri == 0) return false; out = li % ri; return true;
+            case BinOp::LT: out = (li < ri) ? 1 : 0; return true;
+            case BinOp::LE: out = (li <= ri) ? 1 : 0; return true;
+            case BinOp::GT: out = (li > ri) ? 1 : 0; return true;
+            case BinOp::GE: out = (li >= ri) ? 1 : 0; return true;
+            case BinOp::EQ: out = (li == ri) ? 1 : 0; return true;
+            case BinOp::NE: out = (li != ri) ? 1 : 0; return true;
+            default: return false;
+        }
+    }
+    if (std::holds_alternative<PostfixExpr>(e.node)) {
+        // Value of postfix is pre-increment value; mutation handled by ExprStmt.
+        const auto& pe = std::get<PostfixExpr>(e.node);
+        if (!pe.operand || !std::holds_alternative<ExprIdent>(pe.operand->node)) return false;
+        return try_get_int_var(env, std::get<ExprIdent>(pe.operand->node).name, out);
+    }
+    if (std::holds_alternative<PrefixExpr>(e.node)) {
+        const auto& pe = std::get<PrefixExpr>(e.node);
+        if (!pe.operand || !std::holds_alternative<ExprIdent>(pe.operand->node)) return false;
+        int64_t cur = 0;
+        if (!try_get_int_var(env, std::get<ExprIdent>(pe.operand->node).name, cur)) return false;
+        out = cur + (pe.isInc ? 1 : -1);
+        return true;
+    }
+    return false;
+}
+
 std::optional<ExprPtr> Runtime::parse_interpolation_expr(std::string_view exprText) const {
     const std::string key = trim_copy(exprText);
     if (key.empty()) {
@@ -114,6 +211,10 @@ std::string Runtime::eval_string(const Expr& e, const Env& env) const {
                 if (j!=std::string::npos) {
                     std::string key = s.substr(i+1, j-(i+1));
                     std::string trimmedKey = trim_copy(key);
+                    int64_t iv = 0;
+                    if (try_get_int_var(env, trimmedKey, iv)) {
+                        out += std::to_string(iv);
+                    } else {
                     auto it = env.vars.find(trimmedKey);
                     if (it != env.vars.end()) {
                         out += it->second;
@@ -128,6 +229,7 @@ std::string Runtime::eval_string(const Expr& e, const Env& env) const {
                             out += key;
                             out += '}';
                         }
+                    }
                     }
                     i = j+1; continue;
                 }
@@ -150,6 +252,10 @@ std::string Runtime::eval_string(const Expr& e, const Env& env) const {
     if (std::holds_alternative<ExprBool>(e.node)) return std::get<ExprBool>(e.node).v ? "true" : "false";
     if (std::holds_alternative<ExprIdent>(e.node)) {
         const auto& n = std::get<ExprIdent>(e.node);
+        int64_t iv = 0;
+        if (try_get_int_var(env, n.name, iv)) {
+            return std::to_string(iv);
+        }
         auto it = env.vars.find(n.name);
         if (it!=env.vars.end()) {
             if (it->second.rfind("struct:", 0) == 0) {
@@ -245,6 +351,19 @@ std::string Runtime::eval_string(const Expr& e, const Env& env) const {
     }
     if (std::holds_alternative<BinaryExpr>(e.node)) {
         const auto& b = std::get<BinaryExpr>(e.node);
+        // Fast path: pure int arithmetic / compare without string round-trips.
+        {
+            int64_t iv = 0;
+            if (try_eval_int(e, env, iv)) {
+                switch (b.op) {
+                    case BinOp::LT: case BinOp::LE: case BinOp::GT: case BinOp::GE:
+                    case BinOp::EQ: case BinOp::NE:
+                        return iv ? "true" : "false";
+                    default:
+                        return std::to_string(iv);
+                }
+            }
+        }
         std::string ls = eval_string(*b.left, env);
         std::string rs = eval_string(*b.right, env);
         int64_t li = to_int(ls), ri = to_int(rs);
@@ -489,6 +608,30 @@ std::string Runtime::eval_string(const Expr& e, const Env& env) const {
                 return calleeCtx.returnValue;
             }
         }
+        // Check if fc.name is a variable holding a func:N handle
+        auto funcVarIt = env.vars.find(fc.name);
+        if (funcVarIt != env.vars.end() && funcVarIt->second.rfind("func:", 0) == 0) {
+            const std::string& handle = funcVarIt->second;
+            const std::string funcIdStr = handle.substr(5);
+            int funcId = 0;
+            try { funcId = std::stoi(funcIdStr); }
+            catch (...) { return {}; }
+            auto cit = g_closures.find(funcId);
+            if (cit != g_closures.end() && cit->second && currentProgram_) {
+                ClosureData* cd = cit->second;
+                Env callEnv;
+                for (const auto& cv : cd->captured) callEnv.vars[cv.name] = cv.value;
+                for (const auto& kv : globalVars_) callEnv.vars[kv.first] = kv.second;
+                for (size_t i = 0; i < cd->body.params.size() && i < fc.args.size(); ++i) {
+                    callEnv.vars[cd->body.params[i].name] = eval_string(*fc.args[i], env);
+                }
+                ExecContext child;
+                exec_block(cd->body.body, *currentProgram_, child, callEnv);
+                if (!child.returned) return {};
+                return child.returnValue;
+            }
+            return {};
+        }
         return eval_builtin_call(fc.name, fc.args, env, true);
     }
     if (std::holds_alternative<ListLiteralExpr>(e.node)) {
@@ -499,9 +642,64 @@ std::string Runtime::eval_string(const Expr& e, const Env& env) const {
         const auto& lit = std::get<DictLiteralExpr>(e.node);
         return eval_builtin_call("dict_new", lit.entries, env, true);
     }
+    if (std::holds_alternative<LambdaExpr>(e.node)) {
+        const auto& lam = std::get<LambdaExpr>(e.node);
+        // Create a ClosureData from the LambdaExpr
+        int closureId = g_nextClosureId++;
+        ClosureData* cd = new ClosureData();
+        cd->refCount = 1;
+        cd->sourcePath = "<lambda>";
+        cd->sourceLine = 0;
+        // Build the Action from the lambda
+        cd->body.name = "lambda_" + std::to_string(closureId);
+        cd->body.params = lam.params;
+        cd->body.returnType = lam.returnType;
+        cd->body.visibility = Visibility::Public;
+        cd->body.exported = false;
+        cd->body.isAsync = false;
+        if (lam.isArrow && lam.body) {
+            // Arrow form: wrap single expression in return
+            cd->body.body.stmts.push_back(ReturnStmt{lam.body});
+        } else {
+            cd->body.body = lam.blockBody;
+        }
+        // Capture free variables from current env
+        for (const auto& cv : lam.capturedVars) {
+            ClosedVar capped;
+            capped.name = cv;
+            // Look up in environment
+            auto it = env.vars.find(cv);
+            if (it != env.vars.end()) {
+                capped.value = it->second;
+                capped.type = "string"; // default
+            } else {
+                capped.value = ""; // not found at runtime
+                capped.type = "unknown";
+            }
+            cd->captured.push_back(capped);
+        }
+        g_closures[closureId] = cd;
+        return "func:" + std::to_string(closureId);
+    }
     if (std::holds_alternative<NewExpr>(e.node)) {
         const auto& ne = std::get<NewExpr>(e.node);
         return std::string{"<new:"} + ne.typeName + ">";
+    }
+    if (std::holds_alternative<PostfixExpr>(e.node)) {
+        // Value context: evaluate operand (mutation handled at statement level).
+        const auto& pe = std::get<PostfixExpr>(e.node);
+        return eval_string(*pe.operand, env);
+    }
+    if (std::holds_alternative<PrefixExpr>(e.node)) {
+        const auto& pe = std::get<PrefixExpr>(e.node);
+        const std::string cur = eval_string(*pe.operand, env);
+        if (is_int_string(cur)) return std::to_string(to_int(cur) + (pe.isInc ? 1 : -1));
+        return cur;
+    }
+    if (std::holds_alternative<CompoundAssignExpr>(e.node)) {
+        const auto& ca = std::get<CompoundAssignExpr>(e.node);
+        auto bin = Expr{ BinaryExpr{ ca.op, ca.left, ca.right } };
+        return eval_string(bin, env);
     }
     return {};
 }

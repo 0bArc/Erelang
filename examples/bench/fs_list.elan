@@ -1,0 +1,28 @@
+@erelang
+
+#include "builtin/fs" as fs;
+#include "builtin/path" as path;
+
+// List dirs+files under args_get(0); print INNER_MS and entry count.
+public action main() {
+    string root = "bench_tree";
+    if (args_count() > 0) {
+        root = args_get(0);
+    }
+    int t0 = now_ms();
+    int count = 0;
+    for (string d in fs.dirs(root)) {
+        count = count + 1;
+        for (string f in fs.files(d)) {
+            count = count + 1;
+        }
+    }
+    for (string f in fs.files(root)) {
+        count = count + 1;
+    }
+    int t1 = now_ms();
+    print("INNER_MS=" + string(t1 - t0));
+    print("COUNT=" + string(count));
+}
+
+run main;

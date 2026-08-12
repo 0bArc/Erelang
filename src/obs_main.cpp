@@ -14,6 +14,7 @@
 #include <chrono>
 #include <array>
 #include <optional>
+#include <thread>
 #include <span>
 #include <string_view>
 #ifdef _WIN32
@@ -30,6 +31,7 @@
 #include "erelang/modules.hpp"
 #include "erelang/version.hpp"
 #include "erelang/plugins.hpp"
+#include "erelang/features/ast_serializer.hpp"
 #include "erelang/ir.hpp"
 #include "erelang/codegen_x64.hpp"
 #else
@@ -98,7 +100,7 @@ static void print_help() {
                  "  erelang --about\n"
                  "  erelang --bootstrap  (force show bootstrap manifest UI even if args given)\n"
                  "  erelang <path\\to\\file.(elan|ere)> [--debug] [--auto]\n"
-                 "  erelang --compile <path\\to\\file.(elan|ere)> [--output <path\\to\\out.exe>] [--static|--dynamic] [--bundle-runtime]\n"
+                 "  erelang --compile <path\\to\\file.(elan|ere)> [--output <path\\to\\out.exe>] [--static|--dynamic] [--bundle-runtime] [--manifest] [--lto] [--strip] [--minify] [--gc-sections]\n"
                  "  erelang --emit-ir <path\\to\\file.(elan|ere)> [--out <path\\to\\out.eir>]\n"
                  "  erelang --emit-asm <path\\to\\file.(elan|ere)> [--out <path\\to\\out.s>]\n"
                  "  erelang --build-native <path\\to\\file.(elan|ere)> [--out <path\\to\\out.exe>]\n"
@@ -108,7 +110,9 @@ static void print_help() {
                  "  Run a .elan/.ere script directly or compile it to a standalone .exe.\n"
                  "  --compile builds a standalone Windows .exe for the given erelang file.\n"
                  "  Imports are resolved at compile-time and embedded into the executable.\n"
-                 "  Each compiled app writes manifest.erelang next to the exe with build + content metadata.\n"
+                 "  Builtin modules (builtin/*) are handled by the runtime — the compiled exe\n"
+                 "  works standalone with erelang installed.\n"
+                 "  Use --manifest to generate manifest.erelang next to the output.\n"
                  "  By default, --compile emits a self-contained executable (no erelang.dll required).\n"
                  "  Use --dynamic for a tiny launcher that depends on erelang.dll.\n"
                  "  Use --dynamic --bundle-runtime to copy erelang.dll next to the output.\n"
@@ -458,6 +462,14 @@ static std::string generate_bootstrap_source(const fs::path& mainFile,
         };
 
         auto resolve_import = [&](const std::string& basePath, const std::string& imp)->std::optional<std::string> {
+            // Builtin modules are compiled into the runtime; no filesystem lookup
+            {
+                std::string lowered = imp;
+                std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char ch) {
+                    return static_cast<char>(std::tolower(ch));
+                });
+                if (lowered.rfind("builtin/", 0) == 0 || lowered.rfind("builtin:", 0) == 0) return std::nullopt;
+            }
             fs::path ap = fs::absolute(basePath);
             fs::path ip = imp;
             // Build candidate extensions: .0bs and .obsecret when none provided
@@ -529,6 +541,8 @@ static std::string generate_bootstrap_source(const fs::path& mainFile,
                                 if (end != std::string::npos) {
                                     std::string inc = t.substr(pos+1, end-(pos+1));
                                     for (auto& ch : inc) if (ch=='\\') ch='/';
+                                    // Skip builtin includes — they are compiled into the runtime library
+                                    if (inc.rfind("builtin/", 0) == 0 || inc.rfind("builtin:", 0) == 0) continue;
                                     fs::path ip = inc; if (ip.is_relative()) ip = p.parent_path()/ip; load_prog(ip.string());
                                 }
                             } else {
@@ -1050,7 +1064,8 @@ struct ExecutionContext {
     constexpr std::array builtins{
         "now_ms","now_iso","env","username","computer_name","uuid","rand_int","args_count","args_get",
         "os.args","os.args_count","os.args_get","exec","os.exec","spawn","os.spawn","exit","stdin_read",
-        "read_text","write_text","append_text","file_exists","mkdirs","copy_file","move_file","delete_file","list_files","cwd","chdir",
+        "read_text","write_text","append_text","file_exists","is_dir","is_file","mkdirs","copy_file","move_file","delete_file",
+        "list_files","list_dirs","list_regular_files","file_size","file_mtime","cwd","chdir",
         "path_join","path_dirname","path_basename","path_ext","file_mtime",
         "color.red","color.green","color.yellow","color.blue","color.magenta","color.cyan","color.bold","color.reset",
         "data_new","data_set","data_get","data_has","data_keys","data_save","data_load",
@@ -1442,7 +1457,119 @@ static int run_system_command_in_dir(const std::string& command, const fs::path&
 }
 #endif
 
+// ─── Fast bootstrap: embed pre-compiled serialized Program ───────────────────
+
+static std::string generate_bootstrap_source_fast(const std::vector<uint8_t>& blob) {
+    std::ostringstream cpp;
+    cpp << R"CPP(#include <string>
+#include <vector>
+#include <iostream>
+#include <filesystem>
+#include <cstdlib>
+#include <functional>
+#include "erelang/runtime.hpp"
+#include "erelang/features/ast_serializer.hpp"
+
+namespace fs = std::filesystem;
+
+static const uint8_t kProgramBlob[] = {
+)CPP";
+
+    // Write blob as hex bytes, 16 per line
+    for (size_t i = 0; i < blob.size(); ++i) {
+        if (i % 16 == 0) cpp << "    ";
+        cpp << "0x";
+        uint8_t b = blob[i];
+        cpp << "0123456789ABCDEF"[(b >> 4) & 0xF];
+        cpp << "0123456789ABCDEF"[b & 0xF];
+        cpp << ",";
+        if (i % 16 == 15 || i == blob.size() - 1) cpp << "\n";
+    }
+
+    cpp << R"CPP(};
+static const size_t kProgramBlobSize = sizeof(kProgramBlob);
+
+int main(int argc, char** argv) {
+    try {
+        using namespace erelang;
+        auto prog = features::deserialize_program(kProgramBlob, kProgramBlobSize);
+        if (!prog) {
+            std::cerr << "Error: Failed to deserialize embedded program\n";
+            return 1;
+        }
+
+        // Pass CLI args through to runtime for args_count/args_get built-ins
+        std::vector<std::string> cliArgs;
+        for (int i = 1; i < argc; ++i) cliArgs.emplace_back(argv[i]);
+        Runtime::set_cli_args(cliArgs);
+
+        Runtime rt;
+        return rt.run(*prog);
+    } catch (const std::exception& ex) {
+        std::cerr << "Error: " << ex.what() << "\n";
+        return 1;
+    }
+}
+)CPP";
+    return cpp.str();
+}
+
 } // namespace erelang
+
+// ─── Fast bootstrap: embed pre-compiled serialized Program ───────────────────
+
+static std::string generate_bootstrap_source_fast(const std::vector<uint8_t>& blob) {
+    std::ostringstream cpp;
+    cpp << R"CPP(#include <string>
+#include <vector>
+#include <iostream>
+#include <filesystem>
+#include <cstdlib>
+#include <functional>
+#include "erelang/runtime.hpp"
+#include "erelang/features/ast_serializer.hpp"
+
+static const uint8_t kProgramBlob[] = {
+)CPP";
+
+    // Write blob as hex bytes, 16 per line
+    for (size_t i = 0; i < blob.size(); ++i) {
+        if (i % 16 == 0) cpp << "    ";
+        cpp << "0x";
+        uint8_t b = blob[i];
+        cpp << "0123456789ABCDEF"[(b >> 4) & 0xF];
+        cpp << "0123456789ABCDEF"[b & 0xF];
+        cpp << ",";
+        if (i % 16 == 15 || i == blob.size() - 1) cpp << "\n";
+    }
+
+    cpp << R"CPP(};
+static const size_t kProgramBlobSize = sizeof(kProgramBlob);
+
+int main(int argc, char** argv) {
+    try {
+        using namespace erelang;
+        auto prog = features::deserialize_program(kProgramBlob, kProgramBlobSize);
+        if (!prog) {
+            std::cerr << "Error: Failed to deserialize embedded program\n";
+            return 1;
+        }
+
+        // Pass CLI args through to runtime for args_count/args_get built-ins
+        std::vector<std::string> cliArgs;
+        for (int i = 1; i < argc; ++i) cliArgs.emplace_back(argv[i]);
+        Runtime::set_cli_args(cliArgs);
+
+        Runtime rt;
+        return rt.run(*prog);
+    } catch (const std::exception& ex) {
+        std::cerr << "Error: " << ex.what() << "\n";
+        return 1;
+    }
+}
+)CPP";
+    return cpp.str();
+}
 
 int main(int argc, char** argv) {
     // If no args, just show banner (no GUI)
@@ -1648,6 +1775,7 @@ int main(int argc, char** argv) {
         bool strip = false;
         bool minify = false;
         bool gcSections = false;
+        bool emitManifest = false;
         for (size_t i=2; i<args.size(); ++i) {
             if (args[i] == "--output" && i+1 < args.size()) { output = args[i+1]; ++i; }
             else if (args[i] == "--static") { preferStatic = true; }
@@ -1657,6 +1785,7 @@ int main(int argc, char** argv) {
             else if (args[i] == "--strip") { strip = true; }
             else if (args[i] == "--minify") { minify = true; }
             else if (args[i] == "--gc-sections") { gcSections = true; }
+            else if (args[i] == "--manifest") { emitManifest = true; }
         }
         // Default to a self-contained executable unless --dynamic is explicitly requested.
         if (!preferStatic && !preferDynamic) preferStatic = true;
@@ -1968,8 +2097,164 @@ int main(int argc, char** argv) {
             }
         };
 
+        // ─── Pre-compile pipeline: lex + parse + merge + typecheck + optimize + serialize ─────
+        std::vector<uint8_t> programBlob;
+        {
+            using namespace erelang;
+
+            std::unordered_set<std::string> visitedPaths;
+            std::vector<Program> parsedPrograms;
+            std::function<void(const std::string&)> load_prog_ct = [&](const std::string& absPath) {
+                fs::path p = fs::absolute(absPath);
+                std::string key = p.string();
+                if (visitedPaths.count(key)) return;
+                visitedPaths.insert(key);
+
+                // Find source text from orderedFiles
+                std::string source;
+                for (auto& [fp, txt] : orderedFiles) {
+                    if (fs::absolute(fp).string() == key) { source = txt; break; }
+                }
+                if (source.empty()) {
+                    // Try disk
+                    std::ifstream in(key, std::ios::binary);
+                    if (!in) { std::cerr << "[erelang] compile: cannot find source for " << key << "\n"; return; }
+                    std::ostringstream ss; ss << in.rdbuf(); source = ss.str();
+                }
+
+                // Preprocess #include — collect transitive dependencies
+                {
+                    std::istringstream iss(source); std::string line;
+                    while (std::getline(iss, line)) {
+                        std::string t = line; while (!t.empty() && (t.back()=='\r'||t.back()=='\n')) t.pop_back();
+                        if (t.rfind("#include", 0) == 0) {
+                            size_t pos = t.find_first_not_of(" \t", 8);
+                            if (pos != std::string::npos) {
+                                char open = t[pos];
+                                if (open=='"' || open=='<') {
+                                    char close = (open=='"') ? '"' : '>';
+                                    size_t end = t.find(close, pos+1);
+                                    if (end != std::string::npos) {
+                                        std::string inc = t.substr(pos+1, end-(pos+1));
+                                        for (auto& ch : inc) if (ch=='\\') ch='/';
+                                        if (inc.rfind("builtin/", 0) == 0 || inc.rfind("builtin:", 0) == 0) continue;
+                                        fs::path ip = inc; if (ip.is_relative()) ip = p.parent_path()/ip;
+                                        load_prog_ct(ip.string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                LexerOptions lxopts; lxopts.enableDurations = true; lxopts.enableUnits = true;
+                lxopts.enablePolyIdentifiers = true; lxopts.emitDocComments = true; lxopts.emitComments = false;
+                Lexer lx(source, lxopts);
+                auto tokens = lx.lex();
+                Parser ps(std::move(tokens));
+                Program prog = ps.parse();
+                for (auto& a : prog.actions) a.sourcePath = key;
+                for (auto& h : prog.hooks) h.sourcePath = key;
+                for (auto& e : prog.entities) e.sourcePath = key;
+                for (auto& g : prog.globals) g.sourcePath = key;
+                for (const auto& imp : prog.imports) {
+                    if (imp.pluginGlob) continue;
+                    auto next = resolve_import_local(key, imp.path);
+                    if (next) load_prog_ct(*next);
+                }
+                parsedPrograms.push_back(std::move(prog));
+            };
+
+            load_prog_ct(fs::absolute(input).string());
+
+            // Merge all parsed programs
+            Program mainProg;
+            if (parsedPrograms.size() > 1) {
+                Program merged;
+                for (size_t i = 0; i + 1 < parsedPrograms.size(); ++i) {
+                    const Program& m = parsedPrograms[i];
+                    merged.actions.insert(merged.actions.end(), m.actions.begin(), m.actions.end());
+                    merged.hooks.insert(merged.hooks.end(), m.hooks.begin(), m.hooks.end());
+                    merged.entities.insert(merged.entities.end(), m.entities.begin(), m.entities.end());
+                    merged.structs.insert(merged.structs.end(), m.structs.begin(), m.structs.end());
+                    merged.enums.insert(merged.enums.end(), m.enums.begin(), m.enums.end());
+                    merged.typeAliases.insert(merged.typeAliases.end(), m.typeAliases.begin(), m.typeAliases.end());
+                    merged.globals.insert(merged.globals.end(), m.globals.begin(), m.globals.end());
+                    merged.externs.insert(merged.externs.end(), m.externs.begin(), m.externs.end());
+                }
+                mainProg = parsedPrograms.back();
+                if (!merged.actions.empty()) mainProg.actions.insert(mainProg.actions.begin(), merged.actions.begin(), merged.actions.end());
+                if (!merged.hooks.empty()) mainProg.hooks.insert(mainProg.hooks.begin(), merged.hooks.begin(), merged.hooks.end());
+                if (!merged.entities.empty()) mainProg.entities.insert(mainProg.entities.begin(), merged.entities.begin(), merged.entities.end());
+                if (!merged.structs.empty()) mainProg.structs.insert(mainProg.structs.begin(), merged.structs.begin(), merged.structs.end());
+                if (!merged.enums.empty()) mainProg.enums.insert(mainProg.enums.begin(), merged.enums.begin(), merged.enums.end());
+                if (!merged.typeAliases.empty()) mainProg.typeAliases.insert(mainProg.typeAliases.begin(), merged.typeAliases.begin(), merged.typeAliases.end());
+                if (!merged.globals.empty()) mainProg.globals.insert(mainProg.globals.begin(), merged.globals.begin(), merged.globals.end());
+                if (!merged.externs.empty()) mainProg.externs.insert(mainProg.externs.begin(), merged.externs.begin(), merged.externs.end());
+            } else if (!parsedPrograms.empty()) {
+                mainProg = std::move(parsedPrograms[0]);
+            }
+
+            // Plugin aliases
+            for (const auto& src : parsedPrograms) {
+                for (const auto& alias : src.pluginAliases) {
+                    if (std::find(mainProg.pluginAliases.begin(), mainProg.pluginAliases.end(), alias) == mainProg.pluginAliases.end())
+                        mainProg.pluginAliases.push_back(alias);
+                }
+            }
+
+            // Collect directives from all programs
+            for (const auto& src : parsedPrograms) {
+                for (const auto& d : src.directives) {
+                    if (std::find_if(mainProg.directives.begin(), mainProg.directives.end(),
+                                    [&](const Attribute& a){ return a.name == d.name; }) == mainProg.directives.end())
+                        mainProg.directives.push_back(d);
+                }
+            }
+
+            bool hasDebugMain = false;
+            for (const auto& a : mainProg.actions) if (a.name == "debug_main") { hasDebugMain = true; break; }
+            if (hasDebugMain) mainProg.runTarget = std::string("debug_main");
+            if (!mainProg.runTarget) {
+                for (const auto& a : mainProg.actions) if (a.name == "main") { mainProg.runTarget = std::string("main"); break; }
+            }
+
+            // Collect all imports across all parsed programs
+            for (const auto& src : parsedPrograms) {
+                for (const auto& imp : src.imports) {
+                    if (std::find_if(mainProg.imports.begin(), mainProg.imports.end(),
+                                    [&](const ImportDecl& ex){ return ex.path == imp.path; }) == mainProg.imports.end())
+                        mainProg.imports.push_back(imp);
+                }
+            }
+
+            // Symbol table + typecheck
+            SymbolTable symtab;
+            for (const auto& a : mainProg.actions) symtab.add(a.name, "action");
+            for (const auto& e : mainProg.entities) symtab.add(e.name, "entity");
+            TypeChecker tc;
+            auto tcRes = tc.check(mainProg);
+            if (!tcRes.ok) {
+                for (auto& d : tcRes.diagnostics) {
+                    std::cerr << format_diagnostic(d) << "\n";
+                }
+                std::cerr << "[erelang] Type checking failed — cannot produce compiled binary.\n";
+                return 1;
+            }
+
+            optimize_program(mainProg);
+
+            // Serialize
+            try {
+                programBlob = features::serialize_program(mainProg);
+            } catch (const std::exception& ex) {
+                std::cerr << "[erelang] Serialization failed: " << ex.what() << "\n";
+                return 1;
+            }
+        }
+
         const std::string generatedMain = useDynamic ? generate_dynamic_bootstrap_source(input, orderedFiles)
-                                                     : generate_bootstrap_source(input, orderedFiles);
+                                                     : generate_bootstrap_source_fast(programBlob);
         write_if_changed(tempProj / "main.cpp", generatedMain);
 
     const std::string libLoc = libPath.generic_string();
@@ -2013,10 +2298,21 @@ int main(int argc, char** argv) {
     fs::path tempBuild = tempProj / "build";
         fs::create_directories(tempBuild);
 
-    std::string generator = "MinGW Makefiles";
+    // Prefer Ninja for speed; fall back to MinGW Makefiles, then NMake
     std::string ext = libPath.extension().string();
     for (auto& c : ext) c = static_cast<char>(::tolower(static_cast<unsigned char>(c)));
-    if (ext == ".lib") generator = "NMake Makefiles";
+    std::string generator;
+    if (ext == ".lib") {
+        generator = "NMake Makefiles";
+    } else {
+        // Check if ninja is available (ignore output, check exit code only)
+        int ninjaRc = run_command("ninja --version >nul 2>&1", tempProj);
+        if (ninjaRc == 0) {
+            generator = "Ninja";
+        } else {
+            generator = "MinGW Makefiles";
+        }
+    }
     fs::path produced = tempBuild / "app.exe";
     const fs::path ninjaOrMakeStamp = tempBuild / "CMakeCache.txt";
     bool needConfigure = !fs::exists(ninjaOrMakeStamp);
@@ -2039,7 +2335,8 @@ int main(int argc, char** argv) {
         std::cout << "[erelang] CMake configure: up-to-date (skipped)\n";
     }
     if (needBuild) {
-        std::string bld = std::string("cmake --build ") + '"' + tempBuild.string() + '"' + " --config Release";
+        auto nproc = std::max(1u, std::thread::hardware_concurrency());
+        std::string bld = std::string("cmake --build ") + '"' + tempBuild.string() + '"' + " --config Release --parallel " + std::to_string(nproc);
         std::cout << "[erelang] CMake build: " << bld << "\n";
         if (run_command(bld, tempProj) != 0) { std::cerr << "Build failed\n"; return 1; }
     } else {
@@ -2135,7 +2432,8 @@ int main(int argc, char** argv) {
             fs::remove(output.parent_path() / "erelang.dll", ec);
         }
 
-        // Generate manifest.erelang next to the built exe
+        // Generate manifest.erelang next to the built exe (only with --manifest flag)
+        if (emitManifest) {
         try {
             fs::path manifestPath = output.parent_path() / "manifest.erelang";
             std::ofstream mout(manifestPath, std::ios::binary);
@@ -2190,6 +2488,7 @@ int main(int argc, char** argv) {
         } catch (...) {
             std::cerr << "[erelang] Manifest write failed with unknown error\n";
         }
+        } // emitManifest
 
         // Best-effort strip (further size reduction)
 #ifdef _WIN32

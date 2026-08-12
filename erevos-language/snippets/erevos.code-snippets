@@ -3,7 +3,7 @@
     "prefix": "action",
     "body": [
       "public action ${1:name}(${2:param}: ${3:type}) {",
-      "  ${0}// body",
+      "  ${0:// body}",
       "}"
     ],
     "description": "Create an action"
@@ -20,18 +20,18 @@
   "Array Literal": {
     "prefix": "arr",
     "body": [
-      "let ${1:array} = [${2:1,2,3}]"
+      "Array<${1:int}> ${2:arr} = [${0:1, 2, 3}];"
     ],
-    "description": "Create an array/list literal"
+    "description": "Create a typed array literal"
   },
   "Dictionary Literal": {
     "prefix": "dict",
     "body": [
-      "let ${1:dictionary} = {",
-      "  \"${2:key}\": ${3:value}",
-      "}"
+      "Map<${1:string}, ${2:any}> ${3:dict} = {",
+      "  \"${4:key}\": ${5:value}",
+      "};"
     ],
-    "description": "Create a dictionary literal"
+    "description": "Create a typed dictionary literal"
   },
   "For Each Array": {
     "prefix": "forarr",
@@ -59,5 +59,46 @@
       "}"
     ],
     "description": "Iterate dictionary key/value pairs with colon syntax"
+  },
+  "Import Module": {
+    "prefix": "import",
+    "body": [
+      "import \"${1:builtin/module}\" as ${2:mod};"
+    ],
+    "description": "Import a module with alias"
+  },
+  "Include Directive": {
+    "prefix": "#include",
+    "body": [
+      "#include <${1:builtin/module}> as ${2:mod}"
+    ],
+    "description": "Include a builtin module with alias"
+  },
+  "Thread Spawn": {
+    "prefix": "thread",
+    "body": [
+      "import \"builtin/threads\" as ${1:thread};",
+      "",
+      "public action ${2:worker} {",
+      "    ${0}",
+      "}",
+      "",
+      "public action main {",
+      "    string tid = ${1:thread}.spawn(\"${2:worker}\");",
+      "    ${1:thread}.join(tid);",
+      "}"
+    ],
+    "description": "Create a worker thread pattern"
+  },
+  "Try Catch": {
+    "prefix": "try",
+    "body": [
+      "try {",
+      "    ${0}",
+      "} catch (err) {",
+      "    print err;",
+      "}"
+    ],
+    "description": "Try-catch block"
   }
 }

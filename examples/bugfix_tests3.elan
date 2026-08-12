@@ -1,6 +1,6 @@
 @erelang
 
-#include "unterminated
+#include "unterminated";
 
 action include_test {
     print "survived";

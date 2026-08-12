@@ -126,6 +126,7 @@ private:
 
     struct Env {
         std::unordered_map<std::string, std::string> vars;    // variable storage
+        std::unordered_map<std::string, int64_t> intVars;     // lazy int slots (avoid string round-trips)
         std::unordered_map<std::string, ObjPtr> objects;      // object instances
     };
 
@@ -133,6 +134,7 @@ private:
     mutable const Program* currentProgram_ = nullptr; // lifetime: referenced Program must outlive thread workers.
     mutable std::filesystem::path scriptDirectory_; // entry script parent dir for relative fs paths
     mutable std::unordered_map<std::string, std::string> globalVars_; // global variable backing store
+    mutable std::unordered_map<std::string, int64_t> globalIntVars_;   // lazy int slots for globals
     mutable std::unordered_set<std::string> globalNames_;             // quick membership for globals
     mutable std::unordered_map<std::string, ExprPtr> interpolationExprCache_;
     mutable std::mutex interpolationExprCacheMutex_;
@@ -150,6 +152,10 @@ private:
     const Entity* find_entity(const Program& program, std::string_view name) const;
     const Action* find_entity_method(const Entity& e, std::string_view name) const;
     std::string eval_string(const Expr& e, const Env& env) const;
+    bool try_eval_int(const Expr& e, const Env& env, int64_t& out) const;
+    bool try_get_int_var(const Env& env, const std::string& name, int64_t& out) const;
+    void set_var_int(Env& env, const std::string& name, int64_t value) const;
+    void set_var_str(Env& env, const std::string& name, const std::string& value) const;
     std::optional<ExprPtr> parse_interpolation_expr(std::string_view exprText) const;
     std::optional<std::string> eval_interpolation_expr(std::string_view exprText, const Env& env) const;
     std::string eval_builtin_call(std::string_view name, const std::vector<ExprPtr>& args, const Env& env, bool allowCollectionHelpers = false) const;

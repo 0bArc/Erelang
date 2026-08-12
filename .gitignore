@@ -58,6 +58,9 @@ vscode
 
 # Generated test artifacts
 test_print.0bs
+__demo_download.bin
+*_download.bin
+examples/bench/_tree/
 
 # OS cruft
 Thumbs.db

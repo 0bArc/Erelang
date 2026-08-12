@@ -31,6 +31,8 @@ int g_nextSetId = 1;
 std::unordered_map<int, std::unordered_set<std::string>> g_sets;
 int g_nextQueueId = 1;
 std::unordered_map<int, std::deque<std::string>> g_queues;
+int g_nextClosureId = 1;
+std::unordered_map<int, ClosureData*> g_closures;
 
 void reset_global_container_state() {
     g_lists.clear();
@@ -40,6 +42,8 @@ void reset_global_container_state() {
     g_strBuffers.clear();
     g_sets.clear();
     g_queues.clear();
+    for (auto& kv : g_closures) { if (kv.second) { kv.second->refCount = 1; kv.second->release(); } }
+    g_closures.clear();
     g_nextListId = 1;
     g_nextDictId = 1;
     g_nextPtrId = 1;
@@ -47,6 +51,7 @@ void reset_global_container_state() {
     g_nextStrBufId = 1;
     g_nextSetId = 1;
     g_nextQueueId = 1;
+    g_nextClosureId = 1;
 }
 
 std::string slurp_text(const fs::path& p) {

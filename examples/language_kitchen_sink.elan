@@ -22,7 +22,7 @@ public action print_array(Array<any> values) {
 
 public action print_dict(Map<string,any> d) {
     for (string k, any v : d) {
-        print k + " -> " + toString(v);
+        print k + " -> " + string(v);
     }
 }
 

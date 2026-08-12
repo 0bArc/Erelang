@@ -213,6 +213,16 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
             // also store a string representation
             env.vars[st.name] = st.name;
         } else {
+            int64_t iv = 0;
+            const bool wantInt = st.declaredType.empty() || normalize_runtime_type_name(st.declaredType) == "int";
+            if (wantInt && try_eval_int(*st.value, env, iv)) {
+                if (!st.declaredType.empty() && normalize_runtime_type_name(st.declaredType) != "int") {
+                    // fall through to typed string path
+                } else {
+                    set_var_int(env, st.name, iv);
+                    return;
+                }
+            }
             std::string v = eval_string(*st.value, env);
             if (!st.declaredType.empty()) {
                 auto infer_runtime_value_type = [&](const std::string& value) {
@@ -238,18 +248,21 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                     );
                 }
             }
-            env.vars[st.name] = v;
+            if (is_int_string(v) && (st.declaredType.empty() || normalize_runtime_type_name(st.declaredType) == "int")) {
+                set_var_int(env, st.name, to_int(v));
+            } else {
+                set_var_str(env, st.name, v);
+            }
             if (std::holds_alternative<FunctionCallExpr>(st.value->node)) {
                 const auto& fc = std::get<FunctionCallExpr>(st.value->node);
                 if (fc.name == "dynamic_cast") {
                     auto source = env.objects.find(v);
                     if (source != env.objects.end()) {
                         env.objects[st.name] = source->second;
-                        env.vars[st.name] = st.name;
+                        set_var_str(env, st.name, st.name);
                     }
                 }
             }
-            if (globalNames_.count(st.name)) globalVars_[st.name] = v;
         }
         return;
     }
@@ -335,10 +348,144 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
         const auto& st = std::get<ForStmt>(s);
         // init
         if (st.init) exec_block(*st.init, program, ctx, env);
+
+        // Fast path: counted int for-loop with pure int body → native C++ loop.
+        // Pattern: for (i = ...; i < N; i++) { x = <int expr>; ... }
+        // Eliminates per-iteration AST / hash-map / exec_stmt dispatch (hypothesis F/G/H).
+        auto ident_name = [](const ExprPtr& e) -> std::optional<std::string> {
+            if (e && std::holds_alternative<ExprIdent>(e->node)) return std::get<ExprIdent>(e->node).name;
+            return std::nullopt;
+        };
+        auto is_inc_step_on = [&](const std::string& var) -> bool {
+            if (!st.step || st.step->stmts.size() != 1) return false;
+            const auto& stepStmt = st.step->stmts[0];
+            if (!std::holds_alternative<ExprStmt>(stepStmt)) return false;
+            const auto& es = std::get<ExprStmt>(stepStmt);
+            if (!es.expr) return false;
+            if (std::holds_alternative<PostfixExpr>(es.expr->node)) {
+                const auto& pe = std::get<PostfixExpr>(es.expr->node);
+                auto n = ident_name(pe.operand);
+                return pe.isInc && n && *n == var;
+            }
+            if (std::holds_alternative<PrefixExpr>(es.expr->node)) {
+                const auto& pe = std::get<PrefixExpr>(es.expr->node);
+                auto n = ident_name(pe.operand);
+                return pe.isInc && n && *n == var;
+            }
+            return false;
+        };
+        auto body_is_int_assigns = [&]() -> bool {
+            if (!st.body) return false;
+            for (const auto& bs : st.body->stmts) {
+                if (!std::holds_alternative<SetStmt>(bs)) return false;
+                const auto& set = std::get<SetStmt>(bs);
+                if (set.isMember) return false;
+                int64_t ignore = 0;
+                if (!try_eval_int(*set.value, env, ignore)) return false;
+            }
+            return !st.body->stmts.empty();
+        };
+
+        if (st.cond && std::holds_alternative<BinaryExpr>((*st.cond)->node)) {
+            const auto& cond = std::get<BinaryExpr>((*st.cond)->node);
+            auto leftName = ident_name(cond.left);
+            if (leftName && (cond.op == BinOp::LT || cond.op == BinOp::LE) &&
+                is_inc_step_on(*leftName) && body_is_int_assigns()) {
+                int64_t* iPtr = nullptr;
+                if (auto it = env.intVars.find(*leftName); it != env.intVars.end()) {
+                    iPtr = &it->second;
+                }
+                int64_t limit = 0;
+                const bool limitOk = try_eval_int(*cond.right, env, limit);
+                if (iPtr && limitOk) {
+                    // Collect assignment targets + RHS expressions (stable for loop duration).
+                    struct Assign { std::string name; const Expr* rhs; int64_t* slot; };
+                    std::vector<Assign> assigns;
+                    assigns.reserve(st.body->stmts.size());
+                    bool slotsOk = true;
+                    for (const auto& bs : st.body->stmts) {
+                        const auto& set = std::get<SetStmt>(bs);
+                        auto vit = env.intVars.find(set.varOrField);
+                        if (vit == env.intVars.end()) {
+                            // Ensure target exists as int slot (e.g. first write).
+                            int64_t cur = 0;
+                            (void)try_get_int_var(env, set.varOrField, cur);
+                            set_var_int(env, set.varOrField, cur);
+                            vit = env.intVars.find(set.varOrField);
+                        }
+                        if (vit == env.intVars.end()) { slotsOk = false; break; }
+                        assigns.push_back(Assign{set.varOrField, set.value.get(), &vit->second});
+                    }
+                    // Re-resolve iPtr after possible rehash from set_var_int.
+                    iPtr = &env.intVars.find(*leftName)->second;
+                    for (auto& a : assigns) {
+                        a.slot = &env.intVars.find(a.name)->second;
+                    }
+                    if (slotsOk) {
+                        // Specialize sum = sum + i (or sum = i + sum) to pointer arithmetic.
+                        bool directAdd = false;
+                        int64_t* accPtr = nullptr;
+                        if (assigns.size() == 1 && assigns[0].rhs &&
+                            std::holds_alternative<BinaryExpr>(assigns[0].rhs->node)) {
+                            const auto& be = std::get<BinaryExpr>(assigns[0].rhs->node);
+                            if (be.op == BinOp::Add) {
+                                auto ln = ident_name(be.left);
+                                auto rn = ident_name(be.right);
+                                if (ln && rn &&
+                                    ((*ln == assigns[0].name && *rn == *leftName) ||
+                                     (*rn == assigns[0].name && *ln == *leftName))) {
+                                    accPtr = assigns[0].slot;
+                                    directAdd = true;
+                                }
+                            }
+                        }
+                        if (directAdd && accPtr) {
+                            if (cond.op == BinOp::LT) {
+                                for (; *iPtr < limit; ++(*iPtr)) {
+                                    *accPtr = *accPtr + *iPtr;
+                                }
+                            } else {
+                                for (; *iPtr <= limit; ++(*iPtr)) {
+                                    *accPtr = *accPtr + *iPtr;
+                                }
+                            }
+                            return;
+                        }
+                        auto run_body = [&]() {
+                            for (auto& a : assigns) {
+                                int64_t v = 0;
+                                if (!try_eval_int(*a.rhs, env, v)) {
+                                    set_var_str(env, a.name, eval_string(*a.rhs, env));
+                                    return false;
+                                }
+                                *a.slot = v;
+                            }
+                            return true;
+                        };
+                        if (cond.op == BinOp::LT) {
+                            for (; *iPtr < limit; ++(*iPtr)) {
+                                if (!run_body()) break;
+                            }
+                        } else {
+                            for (; *iPtr <= limit; ++(*iPtr)) {
+                                if (!run_body()) break;
+                            }
+                        }
+                        return;
+                    }
+                }
+            }
+        }
+
         while (true) {
             if (st.cond) {
-                std::string c = eval_string(**st.cond, env);
-                if (!is_truthy(c)) break;
+                int64_t cv = 0;
+                if (try_eval_int(**st.cond, env, cv)) {
+                    if (cv == 0) break;
+                } else {
+                    std::string c = eval_string(**st.cond, env);
+                    if (!is_truthy(c)) break;
+                }
             }
             exec_block(*st.body, program, ctx, env);
             if (ctx.breakSignal) {
@@ -492,6 +639,66 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
         }
         return;
     }
+    if (std::holds_alternative<ExprStmt>(s)) {
+        const auto& st = std::get<ExprStmt>(s);
+        if (!st.expr) return;
+        auto read_var = [&](const std::string& name) -> std::string {
+            int64_t iv = 0;
+            if (try_get_int_var(env, name, iv)) return std::to_string(iv);
+            auto it = env.vars.find(name);
+            if (it != env.vars.end()) return it->second;
+            auto git = globalVars_.find(name);
+            if (git != globalVars_.end()) return git->second;
+            return {};
+        };
+        auto write_var = [&](const std::string& name, const std::string& val) {
+            if (is_int_string(val)) set_var_int(env, name, to_int(val));
+            else set_var_str(env, name, val);
+        };
+        auto lvalue_name = [](const ExprPtr& e) -> std::optional<std::string> {
+            if (e && std::holds_alternative<ExprIdent>(e->node)) return std::get<ExprIdent>(e->node).name;
+            return std::nullopt;
+        };
+        if (std::holds_alternative<PostfixExpr>(st.expr->node)) {
+            const auto& pe = std::get<PostfixExpr>(st.expr->node);
+            if (auto name = lvalue_name(pe.operand)) {
+                int64_t cur = 0;
+                if (!try_get_int_var(env, *name, cur)) cur = to_int(read_var(*name));
+                set_var_int(env, *name, cur + (pe.isInc ? 1 : -1));
+            } else {
+                (void)eval_string(*st.expr, env);
+            }
+            return;
+        }
+        if (std::holds_alternative<PrefixExpr>(st.expr->node)) {
+            const auto& pe = std::get<PrefixExpr>(st.expr->node);
+            if (auto name = lvalue_name(pe.operand)) {
+                int64_t cur = 0;
+                if (!try_get_int_var(env, *name, cur)) cur = to_int(read_var(*name));
+                set_var_int(env, *name, cur + (pe.isInc ? 1 : -1));
+            } else {
+                (void)eval_string(*st.expr, env);
+            }
+            return;
+        }
+        if (std::holds_alternative<CompoundAssignExpr>(st.expr->node)) {
+            const auto& ca = std::get<CompoundAssignExpr>(st.expr->node);
+            if (auto name = lvalue_name(ca.left)) {
+                auto binExpr = std::make_shared<Expr>(Expr{ BinaryExpr{ ca.op, std::make_shared<Expr>(Expr{ExprIdent{*name}}), ca.right } });
+                int64_t iv = 0;
+                if (try_eval_int(*binExpr, env, iv)) {
+                    set_var_int(env, *name, iv);
+                } else {
+                    write_var(*name, eval_string(*binExpr, env));
+                }
+            } else {
+                (void)eval_string(*st.expr, env);
+            }
+            return;
+        }
+        (void)eval_string(*st.expr, env);
+        return;
+    }
     if (std::holds_alternative<SetStmt>(s)) {
         const auto& st = std::get<SetStmt>(s);
         if (st.isMember) {
@@ -549,9 +756,12 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 if (globalNames_.count(st.varOrField)) globalVars_[st.varOrField] = env.vars[st.varOrField];
                 return;
             }
-            std::string v = eval_string(*st.value, env);
-            env.vars[st.varOrField] = v;
-            if (globalNames_.count(st.varOrField)) globalVars_[st.varOrField] = v;
+            int64_t iv = 0;
+            if (try_eval_int(*st.value, env, iv)) {
+                set_var_int(env, st.varOrField, iv);
+            } else {
+                set_var_str(env, st.varOrField, eval_string(*st.value, env));
+            }
         }
         return;
     }
@@ -1176,6 +1386,126 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 return;
             }
             }
+            // WebSocket handle dispatch (handle prefix "ws:")
+            {
+            std::string wsMethod = methodName;
+            if (handle.rfind("ws:", 0) == 0) {
+                int id = to_int(handle.substr(3));
+                std::vector<std::string> args;
+                for (size_t i = 0; i < mc.args.size(); ++i) {
+                    args.push_back(eval_string(*mc.args[i], env));
+                }
+                std::string result = __erelang_ws_handle_method(id, wsMethod, args);
+                env.vars["_"] = result;
+                return;
+            }
+            }
+            // HTTP server handle dispatch (handle prefix "http:")
+            {
+            if (handle.rfind("http:", 0) == 0) {
+                int id = to_int(handle.substr(5));
+                std::vector<std::string> args;
+                for (size_t i = 0; i < mc.args.size(); ++i) {
+                    args.push_back(eval_string(*mc.args[i], env));
+                }
+                std::string result = __erelang_http_handle_method(id, methodName, args);
+                env.vars["_"] = result;
+                return;
+            }
+            }
+            // Request handle dispatch (handle prefix "req:")
+            {
+            if (handle.rfind("req:", 0) == 0) {
+                int id = to_int(handle.substr(4));
+                std::vector<std::string> args;
+                for (size_t i = 0; i < mc.args.size(); ++i) {
+                    args.push_back(eval_string(*mc.args[i], env));
+                }
+                std::string result = __erelang_req_handle_method(id, methodName, args);
+                env.vars["_"] = result;
+                return;
+            }
+            }
+            // Response handle dispatch (handle prefix "res:")
+            {
+            if (handle.rfind("res:", 0) == 0) {
+                int id = to_int(handle.substr(4));
+                std::vector<std::string> args;
+                for (size_t i = 0; i < mc.args.size(); ++i) {
+                    args.push_back(eval_string(*mc.args[i], env));
+                }
+                std::string result = __erelang_res_handle_method(id, methodName, args);
+                env.vars["_"] = result;
+                return;
+            }
+            }
+            // SSE handle dispatch (handle prefix "sse:")
+            {
+            if (handle.rfind("sse:", 0) == 0) {
+                int id = to_int(handle.substr(4));
+                std::vector<std::string> args;
+                for (size_t i = 0; i < mc.args.size(); ++i) {
+                    args.push_back(eval_string(*mc.args[i], env));
+                }
+                std::string result = __erelang_sse_handle_method(id, methodName, args);
+                env.vars["_"] = result;
+                return;
+            }
+            }
+            // HTTP Response handle dispatch (handle prefix "resp:")
+            {
+            if (handle.rfind("resp:", 0) == 0) {
+                int id = to_int(handle.substr(5));
+                std::vector<std::string> args;
+                for (size_t i = 0; i < mc.args.size(); ++i) {
+                    args.push_back(eval_string(*mc.args[i], env));
+                }
+                std::string result = __erelang_resp_handle_method(id, methodName, args);
+                env.vars["_"] = result;
+                return;
+            }
+            }
+            // Raw TCP handle dispatch (handle prefix "tcp:")
+            {
+            if (handle.rfind("tcp:", 0) == 0) {
+                int id = to_int(handle.substr(4));
+                std::vector<std::string> args;
+                for (size_t i = 0; i < mc.args.size(); ++i) {
+                    args.push_back(eval_string(*mc.args[i], env));
+                }
+                std::string result = __erelang_tcp_handle_method(id, methodName, args);
+                env.vars["_"] = result;
+                return;
+            }
+            }
+            // Closure dispatch (handle prefix "func:")
+            if (handle.rfind("func:", 0) == 0) {
+                const std::string funcIdStr = handle.substr(5);
+                int funcId = 0;
+                try { funcId = std::stoi(funcIdStr); }
+                catch (...) { throw std::runtime_error("Invalid func handle: " + handle); }
+                auto it = g_closures.find(funcId);
+                if (it == g_closures.end() || !it->second) {
+                    // Allow call on null — silently return empty string
+                    env.vars["_"] = "";
+                    return;
+                }
+                ClosureData* cd = it->second;
+                Env callEnv;
+                // Seed captured values
+                for (const auto& cv : cd->captured) {
+                    callEnv.vars[cv.name] = cv.value;
+                }
+                // Bind arguments
+                for (size_t i = 0; i < cd->body.params.size() && i < mc.args.size(); ++i) {
+                    callEnv.vars[cd->body.params[i].name] = eval_string(*mc.args[i], env);
+                }
+                // Execute body
+                ExecContext child;
+                exec_block(cd->body.body, program, child, callEnv);
+                env.vars["_"] = child.returnValue;
+                return;
+            }
             if (handle.rfind("struct:", 0) == 0) {
                 const std::string structName = handle.substr(7);
                 const StructDecl* sd = find_struct_decl(program, structName);
@@ -1292,6 +1622,29 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
             }
         }
         else {
+            // Check if name resolves to a func:N handle in env
+            auto envIt = env.vars.find(call.name);
+            if (envIt != env.vars.end() && envIt->second.rfind("func:", 0) == 0) {
+                const std::string& handle = envIt->second;
+                const std::string funcIdStr = handle.substr(5);
+                int funcId = 0;
+                try { funcId = std::stoi(funcIdStr); }
+                catch (...) { throw std::runtime_error("Invalid func handle: " + handle); }
+                auto cit = g_closures.find(funcId);
+                if (cit != g_closures.end() && cit->second) {
+                    ClosureData* cd = cit->second;
+                    Env callEnv;
+                    for (const auto& cv : cd->captured) callEnv.vars[cv.name] = cv.value;
+                    for (const auto& kv : globalVars_) callEnv.vars[kv.first] = kv.second;
+                    for (size_t i = 0; i < cd->body.params.size() && i < call.args.size(); ++i) {
+                        callEnv.vars[cd->body.params[i].name] = eval_string(*call.args[i], env);
+                    }
+                    ExecContext child;
+                    exec_block(cd->body.body, program, child, callEnv);
+                    env.vars["_"] = child.returnValue;
+                    return;
+                }
+            }
             for (const auto& ex : program.externs) {
                 if (ex.name == call.name) {
                     throw std::runtime_error("Extern action not bound at runtime: " + call.name);

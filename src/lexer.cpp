@@ -528,7 +528,7 @@ std::vector<Token> Lexer::lex() {
             // Keyword/boolean/null handling
             auto kw = opts_.keywords;
             if (kw.empty()) {
-                kw = { "if","else","while","do","repeat","for","switch","case","default","return","const","action","entity","hook","global","run","in","public","private","export","namespace","unsafe","true","false","null","nil","nullptr","sizeof","typeof","decltype","alignof","offsetof","is_base_of","reinterpret_cast","bit_cast","bitcast" };
+                kw = { "if","else","while","do","repeat","for","switch","case","default","return","const","action","entity","hook","global","run","in","public","private","export","namespace","unsafe","true","false","null","nil","nullptr","sizeof","typeof","decltype","alignof","offsetof","is_base_of","reinterpret_cast","bit_cast","bitcast","lambda" };
             }
             std::string low = word; for (auto& ch : low) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
             if (kw.count(low)) push(TokenKind::Keyword, word); else push(TokenKind::Word, word);

@@ -40,13 +40,13 @@ run main;
 #include <builtin/fs> as fs
 
 public action main {
-    files = fs.list("inbox");
-    n = list_len(files);
-    i = 0;
-    while (i < n) {
-        f = list_get(files, i);
+    for (string f in fs.list("inbox")) {
         print f;
-        i = i + 1;
+    }
+    for (string folder in fs.dirs("inbox")) {
+        if (fs.is_dir(folder)) {
+            print folder;
+        }
     }
 }
 

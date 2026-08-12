@@ -1,0 +1,21 @@
+@erelang
+
+public action main {
+    // ==========================================
+    // Arrow lambda: single expression
+    // ==========================================
+    string doubleIt = lambda(x: int) -> x * 2;
+    string result = doubleIt(21);
+    print("doubleIt(21): ");
+    print(result);
+
+    // ==========================================
+    // Block lambda: multiple statements
+    // ==========================================
+    string greet = lambda(name: string): string {
+        string msg = "Hello, " + name + "!";
+        return msg;
+    };
+    string g = greet("World");
+    print(g);
+}

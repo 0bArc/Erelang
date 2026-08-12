@@ -3,7 +3,7 @@
   "displayName": "Erelang Language",
   "publisher": "localdev",
   "description": "Syntax highlighting and language basics for Erelang (.ere/.elan)",
-  "version": "0.0.22",
+  "version": "0.0.27",
   "engines": {
     "vscode": "^1.104.0"
   },
@@ -28,16 +28,51 @@
         },
         "editor.suggestOnTriggerCharacters": true,
         "editor.acceptSuggestionOnEnter": "smart",
-        "editor.wordBasedSuggestions": "off"
+        "editor.wordBasedSuggestions": "off",
+        "editor.links": false,
+        "editor.codeActionsOnSave": {},
+        "editor.formatOnSave": false,
+        "editor.semanticHighlighting.enabled": false
       }
     },
+    "semanticTokenTypes": [
+      {
+        "id": "function",
+        "superType": "function",
+        "description": "Style for defined action/function names in Erelang"
+      },
+      {
+        "id": "class",
+        "superType": "class",
+        "description": "Style for entity, struct, and enum type names in Erelang"
+      }
+    ],
+    "semanticTokenModifiers": [
+      {
+        "id": "declaration",
+        "description": "Style for action/function declarations"
+      },
+      {
+        "id": "defaultLibrary",
+        "description": "Style for built-in/module functions"
+      }
+    ],
+    "semanticTokenScopes": [
+      {
+        "scopes": {
+          "function": ["entity.name.function", "entity.name.function.erelang"],
+          "function.declaration": ["entity.name.function", "entity.name.function.erelang"],
+          "class": ["entity.name.type", "entity.name.class", "entity.name.type.erelang"]
+        }
+      }
+    ],
     "configuration": {
       "title": "Erelang",
       "properties": {
         "erelang.autoSuggestIdentifiers": {
           "type": "boolean",
-          "default": true,
-          "description": "Retrigger IntelliSense while typing identifier characters in Erelang files. Suggestions are filtered to the word being typed."
+          "default": false,
+          "description": "Retrigger IntelliSense while typing #include paths. Off by default; include completions also trigger on #, <, \", / and space."
         },
         "erelang.debugCompletion": {
           "type": "boolean",

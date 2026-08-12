@@ -9,6 +9,18 @@ import { INCLUDE_ALIAS_RE, IMPORT_ALIAS_RE, MODULE_METHODS } from './constants';
 import { ImportedSymbols } from './types';
 import { ACTION_RE } from './constants';
 
+// ─── Caches (invalidate on document change) ──────────────────────────────────
+
+const _importCache = new Map<string, { version: number; value: ImportedSymbols }>();
+const _actionCache = new Map<string, Set<string>>();
+let   _pluginScriptsCache: string[] | null = null;
+let   _pluginScriptsCacheTime = 0;
+const _pluginCacheTtlMs = 30_000;
+
+export function invalidateImportCache(docUri?: string): void {
+  if (docUri) _importCache.delete(docUri); else _importCache.clear();
+}
+
 // ─── Path Normalization ──────────────────────────────────────────────────────
 
 export function normalizeSpec(spec: string): string {
@@ -34,7 +46,6 @@ function getPluginRoots(): string[] {
   if (appData) {
     roots.push(path.join(appData, 'Erelang', 'Plugins'));
   }
-  // Also search workspace folders for plugin directories
   for (const folder of vscode.workspace.workspaceFolders ?? []) {
     roots.push(path.join(folder.uri.fsPath, 'plugins'));
   }
@@ -60,6 +71,10 @@ function parsePluginScripts(elpPath: string): string[] {
 }
 
 function findPluginScripts(): string[] {
+  const now = Date.now();
+  if (_pluginScriptsCache !== null && now - _pluginScriptsCacheTime < _pluginCacheTtlMs) {
+    return _pluginScriptsCache;
+  }
   const scripts: string[] = [];
   for (const root of getPluginRoots()) {
     try {
@@ -75,6 +90,8 @@ function findPluginScripts(): string[] {
       }
     } catch { /* skip */ }
   }
+  _pluginScriptsCache = scripts;
+  _pluginScriptsCacheTime = now;
   return scripts;
 }
 
@@ -94,7 +111,6 @@ export function resolveIncludeFile(doc: vscode.TextDocument, spec: string): stri
     if (!path.extname(norm)) {
       for (const e of ['.elan', '.ere', '.0bs']) bases.push(path.resolve(f.uri.fsPath, norm + e));
     }
-    // Also search workspace plugins/
     const wsPlugins = path.join(f.uri.fsPath, 'plugins');
     if (fs.existsSync(wsPlugins)) {
       bases.push(path.join(wsPlugins, norm));
@@ -103,7 +119,6 @@ export function resolveIncludeFile(doc: vscode.TextDocument, spec: string): stri
       }
     }
   }
-  // Search plugin roots
   for (const pluginRoot of getPluginRoots()) {
     const full = path.join(pluginRoot, norm);
     if (fs.existsSync(full)) { bases.push(full); continue; }
@@ -113,7 +128,6 @@ export function resolveIncludeFile(doc: vscode.TextDocument, spec: string): stri
         if (fs.existsSync(withExt)) bases.push(withExt);
       }
     }
-    // Also crawl subdirectories for plugin files
     try {
       if (fs.existsSync(pluginRoot)) {
         const entries = fs.readdirSync(pluginRoot, { withFileTypes: true });
@@ -140,6 +154,9 @@ export function resolveIncludeFile(doc: vscode.TextDocument, spec: string): stri
 // ─── Action Extraction ───────────────────────────────────────────────────────
 
 export function extractActions(filePath: string): Set<string> {
+  const cached = _actionCache.get(filePath);
+  if (cached) return cached;
+
   const names = new Set<string>();
   try {
     for (const line of fs.readFileSync(filePath, 'utf8').split(/\r?\n/)) {
@@ -147,12 +164,18 @@ export function extractActions(filePath: string): Set<string> {
       if (m) names.add(m[1]);
     }
   } catch { /* skip */ }
+
+  _actionCache.set(filePath, names);
   return names;
 }
 
 // ─── Import Collection ───────────────────────────────────────────────────────
 
 export function collectImports(doc: vscode.TextDocument): ImportedSymbols {
+  const docUri = doc.uri.toString();
+  const cached = _importCache.get(docUri);
+  if (cached && cached.version === doc.version) return cached.value;
+
   const aliasToActions = new Map<string, Set<string>>();
   const allActions     = new Set<string>();
 
@@ -168,7 +191,6 @@ export function collectImports(doc: vscode.TextDocument): ImportedSymbols {
     } else {
       const imp = IMPORT_ALIAS_RE.exec(text);
       if (imp) {
-        // Groups: 1=<angle>, 2="double", 3='single', 4=bare  5=alias
         const rawPath = imp[1] ?? imp[2] ?? imp[3] ?? imp[4] ?? '';
         spec  = rawPath || null;
         alias = imp[5] ?? (spec ? defaultAlias(spec) : null);
@@ -187,13 +209,7 @@ export function collectImports(doc: vscode.TextDocument): ImportedSymbols {
     for (const a of acts) allActions.add(a);
   }
 
-  // Also collect from plugin directories so plugin actions are available
-  const pluginScripts = findPluginScripts();
-  for (const scriptPath of pluginScripts) {
-    const acts = extractActions(scriptPath);
-    if (acts.size === 0) continue;
-    for (const a of acts) allActions.add(a);
-  }
-
-  return { aliasToActions, allActions };
+  const result: ImportedSymbols = { aliasToActions, allActions };
+  _importCache.set(docUri, { version: doc.version, value: result });
+  return result;
 }

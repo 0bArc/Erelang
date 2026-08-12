@@ -1104,7 +1104,16 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         return it->second->good() ? "true" : "false";
     }
     if (nameStr == "file_exists") {
-        return std::filesystem::exists(fsPath(0)) ? std::string("true") : std::string("false");
+        std::error_code ec;
+        return std::filesystem::exists(fsPath(0), ec) && !ec ? std::string("true") : std::string("false");
+    }
+    if (nameStr == "is_dir") {
+        std::error_code ec;
+        return std::filesystem::is_directory(fsPath(0), ec) && !ec ? std::string("true") : std::string("false");
+    }
+    if (nameStr == "is_file") {
+        std::error_code ec;
+        return std::filesystem::is_regular_file(fsPath(0), ec) && !ec ? std::string("true") : std::string("false");
     }
     if (nameStr == "file_size") {
         std::error_code ec;
@@ -1127,10 +1136,24 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         std::error_code ec; std::filesystem::remove(fsPath(0), ec);
         return !ec ? std::string("true") : std::string("false");
     }
-    if (nameStr == "list_files") {
+    if (nameStr == "list_files" || nameStr == "list_dirs" || nameStr == "list_regular_files") {
+        const bool dirsOnly = (nameStr == "list_dirs");
+        const bool filesOnly = (nameStr == "list_regular_files");
+        const auto root = fsPath(0);
+        std::error_code ec;
+        if (!std::filesystem::is_directory(root, ec) || ec) {
+            throw std::runtime_error(std::string(nameStr) + ": not a directory: " + root.string());
+        }
         int id = g_nextListId++;
         g_lists[id] = {};
-        std::error_code ec; for (auto& e : std::filesystem::directory_iterator(fsPath(0), ec)) {
+        for (auto& e : std::filesystem::directory_iterator(root, ec)) {
+            if (ec) break;
+            std::error_code tec;
+            if (dirsOnly) {
+                if (!e.is_directory(tec) || tec) continue;
+            } else if (filesOnly) {
+                if (!e.is_regular_file(tec) || tec) continue;
+            }
             g_lists[id].push_back(e.path().string());
         }
         std::sort(g_lists[id].begin(), g_lists[id].end());
@@ -1568,6 +1591,89 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         for (int i=0;i<36;++i) { if (p < 4 && i == idxs[p]) { ++p; continue; } r[i] = hex[d(rng)]; }
         return r;
 #endif
+    }
+    // HOF — map: apply func to each element, return new list
+    if (nameStr == "map") {
+        if (args.size() < 2) return {};
+        std::string listHandle = eval_string(*args[0], env);
+        std::string funcHandle = eval_string(*args[1], env);
+        // Parse list handle
+        auto listIdStr = listHandle.substr(5);
+        int listId = std::stoi(listIdStr);
+        auto lit = g_lists.find(listId);
+        if (lit == g_lists.end()) return {};
+        // Parse func handle
+        auto funcIdStr = funcHandle.substr(5);
+        int funcId = std::stoi(funcIdStr);
+        auto fit = g_closures.find(funcId);
+        if (fit == g_closures.end() || !fit->second) return {};
+        ClosureData* cd = fit->second;
+        // Apply to each element
+        int newListId = g_nextListId++;
+        for (const auto& elem : lit->second) {
+            Env callEnv;
+            for (const auto& cv : cd->captured) callEnv.vars[cv.name] = cv.value;
+            if (!cd->body.params.empty()) callEnv.vars[cd->body.params[0].name] = elem;
+            ExecContext child;
+            exec_block(cd->body.body, *currentProgram_, child, callEnv);
+            g_lists[newListId].push_back(child.returned ? child.returnValue : elem);
+        }
+        return std::string("list:") + std::to_string(newListId);
+    }
+    // HOF — filter: keep elements where func returns truthy
+    if (nameStr == "filter") {
+        if (args.size() < 2) return {};
+        std::string listHandle = eval_string(*args[0], env);
+        std::string funcHandle = eval_string(*args[1], env);
+        auto listIdStr = listHandle.substr(5);
+        int listId = std::stoi(listIdStr);
+        auto lit = g_lists.find(listId);
+        if (lit == g_lists.end()) return {};
+        auto funcIdStr = funcHandle.substr(5);
+        int funcId = std::stoi(funcIdStr);
+        auto fit = g_closures.find(funcId);
+        if (fit == g_closures.end() || !fit->second) return {};
+        ClosureData* cd = fit->second;
+        int newListId = g_nextListId++;
+        for (const auto& elem : lit->second) {
+            Env callEnv;
+            for (const auto& cv : cd->captured) callEnv.vars[cv.name] = cv.value;
+            if (!cd->body.params.empty()) callEnv.vars[cd->body.params[0].name] = elem;
+            ExecContext child;
+            exec_block(cd->body.body, *currentProgram_, child, callEnv);
+            std::string result = child.returned ? child.returnValue : elem;
+            if (!result.empty() && result != "0" && result != "false") {
+                g_lists[newListId].push_back(elem);
+            }
+        }
+        return std::string("list:") + std::to_string(newListId);
+    }
+    // HOF — reduce: accumulate values
+    if (nameStr == "reduce") {
+        if (args.size() < 3) return {};
+        std::string listHandle = eval_string(*args[0], env);
+        std::string funcHandle = eval_string(*args[1], env);
+        std::string initial = eval_string(*args[2], env);
+        auto listIdStr = listHandle.substr(5);
+        int listId = std::stoi(listIdStr);
+        auto lit = g_lists.find(listId);
+        if (lit == g_lists.end()) return initial;
+        auto funcIdStr = funcHandle.substr(5);
+        int funcId = std::stoi(funcIdStr);
+        auto fit = g_closures.find(funcId);
+        if (fit == g_closures.end() || !fit->second) return initial;
+        ClosureData* cd = fit->second;
+        std::string acc = initial;
+        for (const auto& elem : lit->second) {
+            Env callEnv;
+            for (const auto& cv : cd->captured) callEnv.vars[cv.name] = cv.value;
+            if (cd->body.params.size() > 0) callEnv.vars[cd->body.params[0].name] = acc;
+            if (cd->body.params.size() > 1) callEnv.vars[cd->body.params[1].name] = elem;
+            ExecContext child;
+            exec_block(cd->body.body, *currentProgram_, child, callEnv);
+            acc = child.returned ? child.returnValue : acc;
+        }
+        return acc;
     }
     if (nameStr == "list_new") {
         int id = g_nextListId++;

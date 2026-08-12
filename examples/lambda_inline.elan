@@ -1,0 +1,18 @@
+@erelang
+
+public action main {
+    Array<int> nums = [1, 2, 3, 4, 5];
+
+    // Inline lambda as argument (no variable needed)
+    string mapped = map(nums, lambda(x: int) -> x * x);
+    print("mapped inline: ");
+    print(mapped);
+
+    string filtered = filter(nums, lambda(x: int) -> x % 2);
+    print("filtered inline: ");
+    print(filtered);
+
+    string summed = reduce([10, 20, 30], lambda(a: int, b: int) -> a + b, 0);
+    print("sum: ");
+    print(summed);
+}

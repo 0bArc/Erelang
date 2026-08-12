@@ -1,12 +1,12 @@
 @erelang
 #include <builtin/fs> as fs
-#include <builtin/system> as sys
+#include <builtin/process> as proc
 #include <builtin/math> as math
 
 // testfile.elan
 // Exercises the language features needed to build a CLI tool:
 //   - command-line argument parsing (args_count / args_get)
-//   - running subprocesses and capturing output (sys.cmd)
+//   - running subprocesses and capturing output (proc.shell)
 //   - file I/O (fs.read / fs.write / fs.exists)
 //   - string formatting, conditionals, loops
 //   - exit codes
@@ -57,8 +57,8 @@ action cmd_run {
         i = i + 1;
     }
     print "executing: {script}";
-    string out = sys.cmd(script);
-    print "exit_code={sys.last_exit()}";
+    string out = proc.shell(script);
+    print "exit_code={proc.exit_code()}";
     print "output:";
     print "{out}";
     if (string.len(out) > 0) {

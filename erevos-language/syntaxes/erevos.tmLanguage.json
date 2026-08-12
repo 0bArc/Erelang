@@ -10,13 +10,13 @@
     { "include": "#numbers" },
     { "include": "#constants" },
     { "include": "#entityDecl" },
+    { "include": "#newExpr" },
     { "include": "#actionDecl" },
     { "include": "#foreachHeader" },
     { "include": "#typeAnnotation" },
     { "include": "#storageModifiers" },
     { "include": "#controlKeywords" },
-    { "include": "#builtinFunctions" },
-    { "include": "#functionCall" },
+    { "include": "#builtins" },
     { "include": "#memberAccess" },
     { "include": "#operators" },
     { "include": "#punctuation" }
@@ -60,25 +60,7 @@
       "patterns": [
         {
           "name": "string.quoted.double.erelang",
-          "begin": "\"",
-          "end": "\"",
-          "patterns": [
-            { "name": "constant.character.escape.erelang", "match": "\\\\." },
-            {
-              "name": "meta.interpolation.erelang",
-              "begin": "\\{",
-              "end": "\\}",
-              "beginCaptures": { "0": { "name": "punctuation.definition.template-expression.begin.erelang" } },
-              "endCaptures":   { "0": { "name": "punctuation.definition.template-expression.end.erelang" } },
-              "patterns": [
-                { "include": "#numbers" },
-                { "include": "#constants" },
-                { "include": "#memberAccess" },
-                { "include": "#operators" },
-                { "name": "variable.other.readwrite.erelang", "match": "[A-Za-z_][A-Za-z0-9_]*" }
-              ]
-            }
-          ]
+          "match": "\"(?:\\\\.|[^\"\\\\])*\""
         }
       ]
     },
@@ -107,10 +89,29 @@
       ]
     },
 
+    "newExpr": {
+      "patterns": [
+        {
+          "match": "\\b(new)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.operator.new.erelang" },
+            "2": { "name": "entity.name.type.erelang" }
+          }
+        }
+      ]
+    },
+
     "actionDecl": {
       "patterns": [
         {
           "match": "\\b(action)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.erelang" },
+            "2": { "name": "entity.name.function.erelang" }
+          }
+        },
+        {
+          "match": "\\b(void|int|double|float|string|str|bool|char|auto|any|pointer|Array|Map|HashMap)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
           "captures": {
             "1": { "name": "storage.type.erelang" },
             "2": { "name": "entity.name.function.erelang" }
@@ -123,27 +124,13 @@
       "patterns": [
         {
           "name": "meta.foreach.erelang",
-          "begin": "\\b(for)\\s*(\\()",
-          "end": "(\\))",
-          "beginCaptures": {
+          "match": "\\b(for)\\s*(\\()([^\\n)]*)(\\))?",
+          "captures": {
             "1": { "name": "keyword.control.erelang" },
-            "2": { "name": "punctuation.section.parens.begin.erelang" }
-          },
-          "endCaptures": {
-            "1": { "name": "punctuation.section.parens.end.erelang" }
-          },
-          "patterns": [
-            { "include": "#comments" },
-            { "include": "#numbers" },
-            { "include": "#constants" },
-            { "include": "#typeAnnotation" },
-            { "name": "keyword.operator.erelang", "match": "(:(?!:)|\\bin\\b)" },
-            { "name": "keyword.operator.erelang", "match": "[=<>!]+|&&|\\|\\|" },
-            { "name": "keyword.operator.erelang", "match": "[+\\-*/%]" },
-            { "name": "punctuation.separator.erelang", "match": "," },
-            { "name": "punctuation.terminator.erelang", "match": ";" },
-            { "name": "variable.parameter.erelang", "match": "[A-Za-z_][A-Za-z0-9_]*" }
-          ]
+            "2": { "name": "punctuation.section.parens.begin.erelang" },
+            "3": { "name": "variable.parameter.erelang" },
+            "4": { "name": "punctuation.section.parens.end.erelang" }
+          }
         }
       ]
     },
@@ -156,7 +143,7 @@
         },
         {
           "name": "storage.type.erelang",
-          "match": "\\b(Array|Map|HashMap)<[^>]*>"
+          "match": "\\b(Array|Map|HashMap)<[^>\\n]{0,80}>"
         }
       ]
     },
@@ -165,7 +152,7 @@
       "patterns": [
         {
           "name": "storage.modifier.erelang",
-          "match": "\\b(public|private|export|extern|const|constexpr|static|global|field|new|async|import|run|let)\\b"
+          "match": "\\b(public|private|export|extern|const|constexpr|static|global|field|new|async|import|run|let|lambda)\\b"
         }
       ]
     },
@@ -179,23 +166,11 @@
       ]
     },
 
-    "builtinFunctions": {
+    "builtins": {
       "patterns": [
         {
           "name": "support.function.builtin.erelang",
-          "match": "\\b(print|PRINT|sleep|now_ms|env|username|computer_name|machine_guid|uuid|rand_int|args_count|args_get|exec|spawn|exit|read_line|stdin_read|stderr_print|input|chdir|toint|toInt|tofloat|tostr|toString|tobool|to_json|from_json|sizeof|typeof|decltype|alignof|offsetof|ptr_new|ptr_get|ptr_set|ptr_free|ptr_valid|malloc|free|make_unique|make_shared|unique_reset|shared_reset|string\\.len|string\\.lower|string\\.upper|string\\.strip|string\\.lstrip|string\\.rstrip|string\\.starts_with|string\\.ends_with|string\\.find|string\\.substr|char_is_digit|char_is_space|char_is_alpha|char_is_ident_start|char_is_ident_part|set_new|set_add|set_has|set_remove|set_size|set_values|queue_new|queue_push|queue_pop|queue_peek|queue_len|queue_clear|file_open|file_close|file_read|file_write|file_seek|file_tell|file_flush|file_mtime|file_size|fopen|fclose|fread|fwrite|fseek|ftell|fflush|strbuf_new|strbuf_append|strbuf_clear|strbuf_len|strbuf_to_string|strbuf_free|strbuf_reserve|color\\.red|color\\.green|color\\.yellow|color\\.blue|color\\.magenta|color\\.cyan|color\\.bold|color\\.reset|table_new|table_put|table_get|table_has|table_remove|table_rows|table_columns|table_row_keys|table_clear_row|table_count_row)\\b(?=\\s*[\\(;\\s]|$)"
-        }
-      ]
-    },
-
-    "functionCall": {
-      "patterns": [
-        {
-          "name": "meta.function-call.erelang",
-          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
-          "captures": {
-            "1": { "name": "entity.name.function.erelang" }
-          }
+          "match": "\\b(print|PRINT|sleep|input)\\b"
         }
       ]
     },
@@ -204,7 +179,7 @@
       "patterns": [
         {
           "name": "meta.member-access.erelang",
-          "match": "([A-Za-z_][A-Za-z0-9_]*)\\.([A-Za-z_][A-Za-z0-9_]*)",
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\.([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
             "1": { "name": "variable.other.erelang" },
             "2": { "name": "variable.other.property.erelang" }
@@ -215,12 +190,11 @@
 
     "operators": {
       "patterns": [
-        { "name": "keyword.operator.assignment.erelang", "match": "(?<![=!<>])=(?!=)" },
         { "name": "keyword.operator.comparison.erelang", "match": "==|!=|<=|>=|<|>" },
+        { "name": "keyword.operator.assignment.erelang", "match": "=" },
         { "name": "keyword.operator.logical.erelang",    "match": "&&|\\|\\||!" },
         { "name": "keyword.operator.arithmetic.erelang", "match": "[+\\-*/%]" },
-        { "name": "keyword.operator.bitwise.erelang",    "match": "&|\\||\\^|~|<<|>>" },
-        { "name": "keyword.operator.erelang",            "match": "::|\\?\\.?|\\.\\.\\." }
+        { "name": "keyword.operator.erelang",            "match": "::|\\.\\.\\." }
       ]
     },
 

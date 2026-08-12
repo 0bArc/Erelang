@@ -17,6 +17,7 @@ public entity Counter {
   }
 }
 
+
 public action main {
   import "builtin/math" as math;
 
@@ -25,7 +26,6 @@ public action main {
 
 
   Counter c = new Counter();
-  c.init(10);
 
   try {
     print add(2, 3);

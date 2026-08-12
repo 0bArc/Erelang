@@ -16,14 +16,24 @@ Whole-file helpers: best for scripts.
 | `fs.read(path)` | `read_text` | path | file contents string |
 | `fs.write(path, text)` | `write_text` | path, body | void |
 | `fs.append(path, text)` | `append_text` | path, body | void |
-| `fs.exists(path)` | `file_exists` | path | `"true"` / `"false"` |
+| `fs.exists(path)` | `file_exists` | path | `bool` (file **or** directory) |
+| `fs.is_dir(path)` | `is_dir` | path | `bool` |
+| `fs.is_file(path)` | `is_file` | path | `bool` (regular file) |
 | `fs.mkdir(path)` | `mkdirs` | path | void (creates parents) |
-| `fs.copy(src, dst)` | `copy_file` | src, dst | `"true"` / `"false"` |
-| `fs.move(src, dst)` | `move_file` | src, dst | `"true"` / `"false"` |
-| `fs.remove(path)` | `delete_file` | path | `"true"` / `"false"` |
-| `fs.list(dir)` | `list_files` | directory | list handle |
+| `fs.copy(src, dst)` | `copy_file` | src, dst | `bool` |
+| `fs.move(src, dst)` | `move_file` | src, dst | `bool` |
+| `fs.remove(path)` | `delete_file` | path | `bool` |
+| `fs.list(dir)` | `list_files` | directory | `Array<string>` of child paths |
+| `fs.dirs(dir)` | `list_dirs` | directory | `Array<string>` of subdirectory paths |
+| `fs.files(dir)` | `list_regular_files` | directory | `Array<string>` of regular file paths |
+| `fs.size(path)` | `file_size` | path | bytes as int (`-1` on error) |
+| `fs.mtime(path)` | `file_mtime` | path | Unix seconds as int (`0` on error) |
 | `fs.cwd()` | `cwd` | | current directory |
-| `fs.chdir(path)` | `chdir` | path | `"true"` / `"false"` |
+| `fs.chdir(path)` | `chdir` | path | `bool` |
+
+`fs.list` / `fs.dirs` / `fs.files` throw if the path is missing or not a directory (they do not return an empty list for typos).
+
+`fs.read` / `fs.write` are for **file content only**. To list a directory, use `fs.list`, `fs.dirs`, or `fs.files`. Prefer `fs.exists(p) && fs.is_dir(p)` when you mean a directory.
 
 ## Examples
 
@@ -79,20 +89,52 @@ run main;
 
 ### List a directory
 
-`fs.list` returns a list handle: iterate with `list_get` or `for`:
+`fs.list` returns path strings. Bind the loop variable as `string`:
 
 ```elan
 @erelang
 #include <builtin/fs> as fs
 
 public action main {
-    files = fs.list("examples");
-    for (f : files) {
+    Array<string> entries = fs.list("examples");
+    for (string f in entries) {
         print f;
     }
 }
 
 run main;
+```
+
+### Subcommand folders (dirs only)
+
+```elan
+@erelang
+#include <builtin/fs> as fs
+#include <builtin/path> as path
+
+public action main {
+    if (fs.exists("commands") && fs.is_dir("commands")) {
+        for (string subFolder in fs.dirs("commands")) {
+            string name = path.name(subFolder);  // mod, dev, ...
+            for (string file in fs.files(subFolder)) {
+                if (path.ext(file) == ".elan") {
+                    print(file);
+                }
+            }
+        }
+    }
+}
+
+run main;
+```
+
+Equivalent without filters:
+
+```elan
+for (string entry in fs.list("commands")) {
+    if (!fs.is_dir(entry)) continue;
+    string name = path.name(entry);
+}
 ```
 
 ## Path helpers
@@ -123,10 +165,12 @@ run main;
 
 ## Metadata
 
-| Builtin | Returns |
-|---------|---------|
-| `file_size(path)` | bytes as string int, `-1` on error |
-| `file_mtime(path)` | Unix seconds as string int |
+| Alias / Builtin | Returns |
+|-----------------|---------|
+| `fs.size(path)` / `file_size(path)` | bytes as int, `-1` on error |
+| `fs.mtime(path)` / `file_mtime(path)` | Unix seconds as int; `0` on error (ambiguous with epoch — check `fs.exists` first) |
+
+`fs.list` / `fs.dirs` / `fs.files` throw if the path is missing or not a directory (they do not return an empty list for typos).
 
 ## Streaming handles
 

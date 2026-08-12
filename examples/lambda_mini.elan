@@ -1,0 +1,11 @@
+@erelang
+
+public action main {
+    string f = lambda(x: int) -> x + 1;
+    print("lambda created: ");
+    print(f);
+
+    string r = f(41);
+    print("result: ");
+    print(r);
+}

@@ -1,0 +1,125 @@
+```markdown
+---
+description: Enforce high code quality across the entire Erelang codebase. Reject slop, incomplete changes, style drift, and anything that weakens consistency, readability, or long-term maintainability. Always apply when writing or reviewing C++, docs, examples, or extension code.
+alwaysApply: true
+---
+
+# Erelang — Code Quality
+
+This document defines the non-negotiable quality bar for every change in the repository.  
+Sloppy, incomplete, inconsistent, or “good enough for now” code is forbidden.
+
+## 1. Core Principles
+
+1. **Clarity over cleverness**  
+   Code must be easy to read six months from now. Prefer the straightforward, local solution.
+
+2. **Consistency is mandatory**  
+   Match the surrounding code in style, naming, structure, and error-handling patterns.  
+   Never introduce a second way of doing the same thing.
+
+3. **Completeness**  
+   A change is finished only when it compiles cleanly, the typechecker knows about it, the runtime dispatches it correctly, documentation is updated, examples exercise it, and the VS Code extension reflects it.  
+   Partial work that leaves the system inconsistent is a quality failure.
+
+4. **No silent degradation**  
+   Existing programs, examples, and language constructs must continue to work exactly as before unless an intentional, documented breaking change is being made.
+
+5. **Zero tolerance for slop on review or production**  
+   - No TODO / FIXME left in production paths  
+   - No stub implementations that return empty strings or do nothing  
+   - No commented-out dead code  
+   - No “temporary” hacks that become permanent  
+   - No copy-pasted blocks that should have been factored  
+
+## 2. C++ Style (Strict)
+
+- **Standard**: C++20 only.  
+- **Indentation**: 4 spaces. Tabs are forbidden.  
+- **Braces**: Opening brace on the same line as the control statement.  
+  ```cpp
+  if (condition) {
+      do_something();
+  }
+  ```
+- **const correctness**: Use `const` and `constexpr` everywhere the value does not change.  
+- **String parameters**: Prefer `std::string_view` for non-owning parameters. Only take `std::string` (or `const std::string&`) when ownership or modification is required.  
+- **auto**: Allowed when the type is obvious from the right-hand side. Do not use `auto` when it obscures important type information.  
+- **Include order**:  
+  1. Corresponding header (if any)  
+  2. Standard library headers  
+  3. Project headers  
+- **Forward declarations**: Prefer them in headers to reduce compile-time coupling.  
+- **Namespaces**: All project code lives in `namespace erelang`. Do not pollute the global namespace.  
+- **Naming**:
+  - Functions / methods: `snake_case`
+  - Types / classes / structs: `PascalCase` or existing project convention (stay consistent with the file you are editing)
+  - Constants: `kConstantName` or existing style in that area
+  - Member variables: follow the file’s existing convention (do not invent a new one)
+
+## 3. Runtime & Language Implementation Rules
+
+- **Typechecker is law**  
+  Every new builtin, method, or language construct **must** be registered in the typechecker with accurate signatures.  
+  Type mismatches are hard errors. Never introduce silent `any` fallbacks.
+
+- **Dispatch must be complete**  
+  New handle prefixes require an explicit dispatch block in `actions.cpp`.  
+  New import-gated modules require full wiring: implementation file → declaration → import alias tables → CMake → typechecker.
+
+- **No half-implemented features**  
+  If a feature is not ready for users, it stays behind an experimental flag or is not merged. Shipping a partial surface that crashes or returns empty results is unacceptable.
+
+- **Error handling**  
+  Prefer clear, early failure with useful diagnostic messages.  
+  Do not swallow errors or return empty results as a substitute for proper error propagation.
+
+## 4. Documentation & Examples
+
+- Documentation under `docs/` is part of the product.  
+  A language change without updated docs is incomplete.
+- Every non-trivial feature must have at least one example under `examples/` that exercises it.
+- Kitchen-sink and feature-pass examples are regression tests. They must continue to pass after your change.
+
+## 5. Build & Tooling Hygiene
+
+- `CMakeLists.txt` must list every new source file in **all** relevant targets (static library, shared library, runner).  
+  Forgetting one target is a quality defect.
+- The project must build with zero errors and no new warnings introduced by your change.
+- After any syntax or builtin change the VS Code extension (`erevos-language/`) must be updated and the VSIX rebuilt.
+
+## 6. Review Checklist (use before finishing any change)
+
+```
+[ ] Code matches surrounding style exactly
+[ ] No dead / commented-out / stub code
+[ ] const / string_view used correctly
+[ ] Typechecker fully updated
+[ ] Runtime dispatch complete and correct
+[ ] CMakeLists.txt updated for every target
+[ ] Docs updated
+[ ] At least one example exercises the change
+[ ] Existing examples still pass
+[ ] Extension (grammar + completions) updated if language surface changed
+[ ] Build succeeds cleanly
+```
+
+If any item is unchecked, the change is not ready.
+
+## 7. Forbidden Patterns (instant rejection)
+
+- Adding a keyword or syntax that breaks previously valid programs
+- New builtin that is not registered in the typechecker
+- New `.cpp` missing from one of the CMake targets
+- Returning `""` or doing nothing as a “placeholder”
+- Introducing a second naming or error-handling convention
+- Leaving the VS Code extension out of date
+- “I’ll clean this up later” comments
+
+## 8. Mindset
+
+Write code as if the next person to read it is you in six months, angry, tired, and under time pressure.  
+Make that future self grateful, not furious.
+
+High quality is not optional. It is the default.
+```

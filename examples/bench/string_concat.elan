@@ -1,0 +1,16 @@
+@erelang
+
+// Build a growing string N times; print INNER_MS and length.
+public action main() {
+    int N = 20000;
+    int t0 = now_ms();
+    string s = "";
+    for (int i = 0; i < N; i++) {
+        s = s + "x";
+    }
+    int t1 = now_ms();
+    print("INNER_MS=" + string(t1 - t0));
+    print("LEN=" + string(string.len(s)));
+}
+
+run main;

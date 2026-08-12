@@ -15,13 +15,13 @@
 
 import * as vscode from 'vscode';
 import { ENTITY_RE, ACTION_RE, FIELD_RE, HOOK_RE } from './constants';
-import { validateSemicolons } from './diagnostics';
+import { validateDocument } from './diagnostics';
 import {
   ErelangCompletionProvider, setDebugChannel, isForeachColonCtx, isDictLiteralCtx,
-  isControlFlowAwaitingBody, markAutoSuggestFromEdit,
 } from './completions';
-import { collect } from './symbols';
-import { parseForEachHeader } from './symbols';
+import { collect, parseForEachHeader, invalidateEntityMemberCache } from './symbols';
+import { invalidateDefCache } from './semantic-tokens';
+import { invalidateImportCache } from './imports';
 
 // ─── Symbol Providers ───────────────────────────────────────────────────────
 
@@ -42,7 +42,7 @@ class ErelangDocumentSymbolProvider implements vscode.DocumentSymbolProvider {
 
 class ErelangWorkspaceSymbolProvider implements vscode.WorkspaceSymbolProvider {
   async provideWorkspaceSymbols(query: string): Promise<vscode.SymbolInformation[]> {
-    const uris = await vscode.workspace.findFiles('**/*.{0bs,ere,elan}');
+    const uris = await vscode.workspace.findFiles('**/*.{0bs,ere,elan}', '**/node_modules/**', 40);
     const out: vscode.SymbolInformation[] = [];
     for (const uri of uris) {
       const doc = await vscode.workspace.openTextDocument(uri);
@@ -59,47 +59,6 @@ class ErelangWorkspaceSymbolProvider implements vscode.WorkspaceSymbolProvider {
   }
 }
 
-function cursorAfterChange(change: vscode.TextDocumentContentChangeEvent): vscode.Position {
-  return new vscode.Position(
-    change.range.start.line,
-    change.range.start.character + change.text.length,
-  );
-}
-
-// ─── Auto-Retrigger Logic ────────────────────────────────────────────────────
-
-function shouldRetrigger(
-  change:   vscode.TextDocumentContentChangeEvent,
-  prefix:   string,
-  fullLine: string,
-  cursor:   vscode.Position,
-): boolean {
-  const typed     = change.text.length === 1 && /[A-Za-z0-9_]/.test(change.text);
-  const openBrace = change.text.includes('{');
-  const deleted   = change.text.length === 0 && change.rangeLength > 0;
-  if (!typed && !openBrace && !deleted) return false;
-  if (/^\s*\/\//.test(prefix)) return false;
-
-  if (isControlFlowAwaitingBody(prefix.replace(/\{\s*$/, ''))) return false;
-
-  if (
-    /^\s*#\s*[A-Za-z]*\s*(?:[<"].*)?$/i.test(prefix) ||
-    /^\s*#\s*include\s+[A-Za-z0-9_./\\-]*$/i.test(prefix)
-  ) {
-    if (deleted) return true;
-    return change.text.length === 1 && /[#A-Za-z0-9_./\\"<>\- ]/.test(change.text);
-  }
-
-  if (openBrace) {
-    const beforeBrace = prefix.replace(/\{\s*$/, '').trimEnd();
-    if (isControlFlowAwaitingBody(beforeBrace)) return false;
-    return true;
-  }
-  if (deleted)   return /[A-Za-z_]\w+$/.test(prefix);
-  if (/[A-Za-z_]\w+$/.test(prefix)) return true;
-  return false;
-}
-
 // ─── Activation ─────────────────────────────────────────────────────────────
 
 export function activate(ctx: vscode.ExtensionContext) {
@@ -110,39 +69,46 @@ export function activate(ctx: vscode.ExtensionContext) {
   ctx.subscriptions.push(debugCh);
   setDebugChannel(debugCh);
 
-  // Semicolon diagnostics
-  const semiDiags = vscode.languages.createDiagnosticCollection('erelang-semicolons');
+  // Diagnostics — semicolons, entity constructors, undefined action calls
+  const semiDiags = vscode.languages.createDiagnosticCollection('erelang');
   ctx.subscriptions.push(semiDiags);
-  const refreshSemi = (d: vscode.TextDocument) => validateSemicolons(d, semiDiags);
-  ctx.subscriptions.push(vscode.workspace.onDidOpenTextDocument(refreshSemi));
-  ctx.subscriptions.push(vscode.workspace.onDidChangeTextDocument(e => refreshSemi(e.document)));
-  ctx.subscriptions.push(vscode.workspace.onDidSaveTextDocument(refreshSemi));
-  for (const d of vscode.workspace.textDocuments) refreshSemi(d);
+  const refreshDiags = (d: vscode.TextDocument) => {
+    if (d.isClosed || d.languageId !== 'erelang') return;
+    try { validateDocument(d, semiDiags); } catch { /* never crash the host */ }
+  };
+  ctx.subscriptions.push(vscode.workspace.onDidOpenTextDocument(refreshDiags));
+  ctx.subscriptions.push(vscode.workspace.onDidSaveTextDocument(d => {
+    invalidateImportCache(d.uri.toString());
+    invalidateDefCache(d.uri.toString());
+    invalidateEntityMemberCache(d.uri.toString());
+    refreshDiags(d);
+  }));
+  for (const d of vscode.workspace.textDocuments) refreshDiags(d);
 
-  // Auto-retrigger backup when quickSuggestions disabled in user settings
-  let retriggerTimer: NodeJS.Timeout | undefined;
+  // No-op code action provider — prevents VS Code from stalling searching for one.
+  // The only diagnostic we emit is "Missing semicolon", whose fix is adding a semicolon.
+  // VS Code already handles this via the built-in quick-fix (insert `;`) without us.
   ctx.subscriptions.push(
-    vscode.workspace.onDidChangeTextDocument(event => {
-      if (!vscode.workspace.getConfiguration('erelang').get<boolean>('autoSuggestIdentifiers', true)) return;
-      if (event.document.languageId !== 'erelang') return;
-      if (event.contentChanges.length === 0) return;
-      const editor = vscode.window.activeTextEditor;
-      if (!editor || editor.document.uri.toString() !== event.document.uri.toString()) return;
+    vscode.languages.registerCodeActionsProvider(
+      { language: 'erelang' },
+      {
+        provideCodeActions(_doc, _range, _ctx, _token): vscode.CodeAction[] {
+          return [];
+        },
+      },
+    ),
+  );
 
-      const shouldTrigger = event.contentChanges.some(change => {
-        const cursor   = cursorAfterChange(change);
-        const lineText = event.document.lineAt(cursor.line).text;
-        const prefix   = lineText.slice(0, cursor.character);
-        return shouldRetrigger(change, prefix, lineText, cursor);
-      });
-      if (!shouldTrigger) return;
-
-      if (retriggerTimer) clearTimeout(retriggerTimer);
-      retriggerTimer = setTimeout(() => {
-        markAutoSuggestFromEdit();
-        void vscode.commands.executeCommand('editor.action.triggerSuggest');
-      }, 15);
-    })
+  // No-op document formatter — prevents VS Code from stalling searching for one on save.
+  ctx.subscriptions.push(
+    vscode.languages.registerDocumentFormattingEditProvider(
+      { language: 'erelang' },
+      {
+        provideDocumentFormattingEdits(_doc, _opts, _token): vscode.TextEdit[] {
+          return [];
+        },
+      },
+    ),
   );
 
   // Debug command: dump completion context to output panel
@@ -174,12 +140,12 @@ export function activate(ctx: vscode.ExtensionContext) {
     })
   );
 
-  // Register providers
+  // Completions — `.` for members, `#` for includes. No work on backspace.
   ctx.subscriptions.push(
     vscode.languages.registerCompletionItemProvider(
       { language: 'erelang' },
       new ErelangCompletionProvider(),
-      '#', '.', ':', '"', '<', '/', '\\',
+      '#', '.', '<', '"', '/', ' ',
     ),
   );
   ctx.subscriptions.push(

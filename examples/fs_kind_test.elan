@@ -1,0 +1,36 @@
+@erelang
+#include "builtin/fs" as fs;
+#include "builtin/path" as path;
+
+public action main() {
+    fs.mkdir("_fs_kind_test/sub");
+    fs.write("_fs_kind_test/a.txt", "hi");
+
+    if (!fs.is_dir("_fs_kind_test")) { print("FAIL is_dir root"); exit(1); }
+    if (!fs.is_file("_fs_kind_test/a.txt")) { print("FAIL is_file"); exit(1); }
+    if (fs.is_dir("_fs_kind_test/a.txt")) { print("FAIL file marked dir"); exit(1); }
+
+    int dirs = 0;
+    for (string d in fs.dirs("_fs_kind_test")) {
+        dirs = dirs + 1;
+        if (path.name(d) != "sub") { print("FAIL dirs name"); exit(1); }
+    }
+    if (dirs != 1) { print("FAIL dirs count"); exit(1); }
+
+    int files = 0;
+    for (string f in fs.files("_fs_kind_test")) {
+        files = files + 1;
+        if (path.name(f) != "a.txt") { print("FAIL files name"); exit(1); }
+    }
+    if (files != 1) { print("FAIL files count"); exit(1); }
+
+    int sz = fs.size("_fs_kind_test/a.txt");
+    if (sz < 2) { print("FAIL size"); exit(1); }
+
+    print("OK");
+    fs.remove("_fs_kind_test/a.txt");
+    fs.remove("_fs_kind_test/sub");
+    fs.remove("_fs_kind_test");
+}
+
+run main;

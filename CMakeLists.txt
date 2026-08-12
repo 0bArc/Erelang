@@ -51,12 +51,12 @@ endif()
 if (CMAKE_BUILD_TYPE STREQUAL "Release")
   # Favor size + link-time optimization
   if (MSVC)
-    add_compile_options(/O1 /GL)
+    add_compile_options(/O1 /GL /GS- /Gy /Gw)
     set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} /LTCG /OPT:REF /OPT:ICF")
     set(CMAKE_STATIC_LINKER_FLAGS_RELEASE "${CMAKE_STATIC_LINKER_FLAGS_RELEASE} /LTCG")
   else()
-      add_compile_options(-Os -ffunction-sections -fdata-sections)
-      add_link_options(-Wl,--gc-sections)
+      add_compile_options(-Os -ffunction-sections -fdata-sections -fvisibility=hidden -fvisibility-inlines-hidden)
+      add_link_options(-Wl,--gc-sections -Wl,--strip-all -Wl,-s)
       # Avoid enabling IPO/LTO globally for MinGW/GCC to prevent ICE with <filesystem>/DLL link
       include(CheckIPOSupported)
       check_ipo_supported(RESULT lto_ok OUTPUT lto_out)
@@ -87,6 +87,7 @@ add_library(erelang STATIC
   src/runtime/builtins/binary.cpp
   src/runtime/builtins/performance.cpp
   src/runtime/features/serialization.cpp
+  src/runtime/features/ast_serializer.cpp
   src/typechecker.cpp
   src/optimizer.cpp
   src/modules.cpp
@@ -221,7 +222,7 @@ if (BUILD_SHARED_RUNTIME AND SPLIT_RUNTIME_DLLS)
   if (WIN32)
     # Link common Windows libs where broadly needed
     foreach(tgt IN ITEMS ob_frontend ob_semantic ob_optimizer ob_gc ob_ffi ob_stdlib ob_modules ob_builtins_math ob_builtins_network ob_builtins_system erelang_shared)
-      target_link_libraries(${tgt} PUBLIC advapi32 user32 rpcrt4 winhttp)
+      target_link_libraries(${tgt} PUBLIC advapi32 user32 rpcrt4 winhttp ws2_32)
       target_compile_definitions(${tgt} PUBLIC UNICODE _UNICODE)
     endforeach()
   endif()
@@ -274,7 +275,7 @@ elseif (BUILD_SHARED_RUNTIME)
   set_property(TARGET erelang_shared PROPERTY INTERPROCEDURAL_OPTIMIZATION OFF)
   ob_set_output(erelang_shared SHARED)
   if (WIN32)
-    target_link_libraries(erelang_shared PUBLIC advapi32 user32 rpcrt4 winhttp)
+    target_link_libraries(erelang_shared PUBLIC advapi32 user32 rpcrt4 winhttp ws2_32)
     target_compile_definitions(erelang_shared PUBLIC UNICODE _UNICODE)
   endif()
   if (NOT MSVC)
@@ -305,9 +306,13 @@ if (WIN32)
             "$<TARGET_FILE_DIR:erelang_runner>/obs.exe"
     COMMENT "Creating legacy runner alias obs.exe"
   )
-  # Config-agnostic copy so `erelang` on PATH always hits the latest build
-  # (PATH points at build/bin and %LOCALAPPDATA%/Erelang/bin — not Debug/Release).
+  # Always refresh build/bin/Debug — that dir is first on PATH for instant `erelang`.
+  # Also mirror to build/bin and %LOCALAPPDATA%/Erelang/bin as fallbacks.
   add_custom_command(TARGET erelang_runner POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${_OB_OUTPUT_BIN}/Debug"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:erelang_runner>"
+            "${_OB_OUTPUT_BIN}/Debug/erelang.exe"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${_OB_OUTPUT_BIN}"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "$<TARGET_FILE:erelang_runner>"
@@ -317,9 +322,9 @@ if (WIN32)
             "$<TARGET_FILE:erelang_runner>"
             "$ENV{LOCALAPPDATA}/Erelang/bin/erelang.exe"
     COMMAND ${CMAKE_COMMAND}
-      -DBIN_DIR=$ENV{LOCALAPPDATA}/Erelang/bin
+      -DBIN_DIR=${_OB_OUTPUT_BIN}/Debug
       -P ${CMAKE_SOURCE_DIR}/tools/cmake/ensure-erelang-path.cmake
-    COMMENT "Installing erelang.exe for plain `erelang` on PATH"
+    COMMENT "Installing erelang.exe to build/bin/Debug (PATH)"
   )
 endif()
 if (WIN32 AND NOT MSVC AND ERELANG_BUNDLE_MINGW_RUNTIME)
@@ -333,7 +338,7 @@ if (WIN32 AND NOT MSVC AND ERELANG_BUNDLE_MINGW_RUNTIME)
 endif()
 if (WIN32)
   target_compile_definitions(erelang_runner PRIVATE UNICODE _UNICODE)
-  target_link_libraries(erelang_runner PRIVATE erelang advapi32 user32 rpcrt4 winhttp shell32)
+  target_link_libraries(erelang_runner PRIVATE erelang advapi32 user32 rpcrt4 winhttp shell32 ws2_32)
 else()
   target_link_libraries(erelang_runner PRIVATE erelang)
 endif()
@@ -409,9 +414,9 @@ endif()
 # Windows-specific UI/linking settings
 if (WIN32)
 
-  target_link_libraries(erelang PUBLIC advapi32 user32 rpcrt4 winhttp)
+  target_link_libraries(erelang PUBLIC advapi32 user32 rpcrt4 winhttp ws2_32)
   target_compile_definitions(erelang PUBLIC UNICODE _UNICODE)
-  target_link_libraries(erelang_runner PUBLIC advapi32 user32 rpcrt4 winhttp)
+  target_link_libraries(erelang_runner PUBLIC advapi32 user32 rpcrt4 winhttp ws2_32)
   target_compile_definitions(erelang_runner PUBLIC UNICODE _UNICODE)
 
   # Compute path to the built static library (used when embedding payload)

@@ -78,7 +78,7 @@ static std::string performance_dispatch(const std::string& name, const std::vect
     // Memory API
     if (name == "perf.mem.usage") {
         // Stub — would query OS for RSS
-        return "0";
+        return "Not implemented yet";
     }
     if (name == "perf.mem.peak") {
         // Stub — would query OS for peak RSS
@@ -88,7 +88,7 @@ static std::string performance_dispatch(const std::string& name, const std::vect
     // GC controls (stubs — the runtime doesn't have a real GC)
     if (name == "perf.gc.collect") {
         // Force cleanup of container state
-        return "true";
+        return "Not implemented yet";
     }
     if (name == "perf.gc.threshold") {
         // Stub
@@ -96,11 +96,11 @@ static std::string performance_dispatch(const std::string& name, const std::vect
     }
     if (name == "perf.gc.pause") {
         // Stub
-        return "true";
+        return "Not implemented yet";
     }
     if (name == "perf.gc.resume") {
         // Stub
-        return "true";
+        return "Not implemented yet";
     }
 
     return {};

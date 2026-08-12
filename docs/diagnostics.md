@@ -41,6 +41,8 @@ Every builtin-gated function requires its module to be imported. See [imports.md
 
 Check the name you're calling matches the declared `public action` name exactly (case-sensitive).
 
+`new Counter()` is entity construction, not an action call. The typechecker and language server treat the name after `new` as an entity type. A red underline on `Counter()` means the entity is not declared in this file — not that `new` is invalid.
+
 ## Fixing TC130: unused included action
 
 `#include <modules/math.elan>` merges every `public action`. Either call them or remove the include.

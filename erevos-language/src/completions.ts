@@ -9,7 +9,7 @@ import {
   LANGUAGE_KEYWORDS, BUILT_INS, DEPRECATED_BUILT_INS,
 } from './constants';
 import { PrintStringContext } from './types';
-import { collect, collectEntityInstances, collectEntityActions, collectEntityFields } from './symbols';
+import { collect, collectEntityInstances, collectEntityMembers } from './symbols';
 import { collectImports } from './imports';
 
 // ─── Debug (lightweight, no circular dep) ────────────────────────────────────
@@ -79,8 +79,11 @@ function includePathCompletions(doc: vscode.TextDocument, pos: vscode.Position, 
   const builtinModules = [
     'builtin/fs','builtin/erefs','builtin/path','builtin/erepath',
     'builtin/regex','builtin/crypto','builtin/network','builtin/net',
+    'builtin/websocket','builtin/ws',
     'builtin/math','builtin/binary','builtin/threads','builtin/monitor',
     'builtin/data','builtin/perm','builtin/system',
+    'builtin/process','builtin/proc',
+    'builtin/performance','builtin/perf',
   ];
   for (const mod of builtinModules) {
     if (!mod.toLowerCase().startsWith(partial.toLowerCase())) continue;
@@ -92,6 +95,7 @@ function includePathCompletions(doc: vscode.TextDocument, pos: vscode.Position, 
     ci.insertText = insert;
     ci.range      = replaceRange;
     ci.detail     = mode === 'bare' ? 'include builtin module' : 'builtin module';
+    ci.sortText   = `a_${mod}`;
     out.push(ci);
   }
 
@@ -108,6 +112,7 @@ function includePathCompletions(doc: vscode.TextDocument, pos: vscode.Position, 
         ci.insertText = mode === 'bare' ? `<${insert}` : e.name + '/';
         ci.range      = replaceRange;
         ci.detail     = 'folder';
+        ci.command    = { command: 'editor.action.triggerSuggest', title: 'Show include paths' };
         out.push(ci);
       } else if (e.isFile() && /\.(elan|ere|0bs)$/i.test(e.name)) {
         const insert = dirPart + e.name;
@@ -140,6 +145,7 @@ function includeDirectiveCompletions(pos: vscode.Position, prefix: string): vsco
   keyword.range      = new vscode.Range(pos.line, directiveMatch[1].length, pos.line, pos.character);
   keyword.detail     = 'start include directive';
   keyword.sortText   = 'a_include';
+  keyword.command    = { command: 'editor.action.triggerSuggest', title: 'Show include paths' };
   return [keyword];
 }
 
@@ -157,8 +163,8 @@ export function isDictLiteralCtx(prefix: string): boolean {
 export function isControlFlowAwaitingBody(prefix: string): boolean {
   const t = prefix.trimEnd();
   return (
-    /\b(switch|match|if|else|for|while|try|catch|repeat|do|unsafe|parallel|namespace)\s*(\([^)]*\))?\s*$/.test(t) ||
-    /\b(action|entity|struct|enum|hook)\s+[A-Za-z_]\w*\s*(\([^)]*\))?\s*$/.test(t)
+    /\b(switch|match|if|else|for|while|try|catch|repeat|do|unsafe|parallel|namespace)\s*(\([^)\n]{0,200}\))?\s*$/.test(t) ||
+    /\b(action|entity|struct|enum|hook)\s+[A-Za-z_]\w*\s*(\([^)\n]{0,200}\))?\s*$/.test(t)
   );
 }
 
@@ -185,23 +191,11 @@ function memberCompletions(
   const partial = dot[2] ?? '';
   dbgCompletion('member-access', pos, prefix, `obj=${obj}`);
 
-  // ── 1. Module alias completion ──────────────────────────────────────────
-  const imported = collectImports(doc);
-  const modMethods = imported.aliasToActions.get(obj);
-  if (modMethods && modMethods.size > 0) {
-    return [...modMethods]
-      .filter(m => partial.length === 0 || m.startsWith(partial))
-      .map(m => {
-        const ci  = new vscode.CompletionItem(m, vscode.CompletionItemKind.Method);
-        ci.detail = `${obj} module`;
-        return ci;
-      });
-  }
+  const entityMembers = collectEntityMembers(doc);
+  const entityActions = entityMembers.actions;
+  const entityFields  = entityMembers.fields;
 
-  // ── 2. `self` — suggest current entity's fields and actions ────────────
   if (obj === 'self') {
-    const entityActions = collectEntityActions(doc);
-    const entityFields  = collectEntityFields(doc);
     const items: vscode.CompletionItem[] = [];
     for (const [, actions] of entityActions) {
       for (const a of actions) {
@@ -211,8 +205,8 @@ function memberCompletions(
         items.push(ci);
       }
     }
-    for (const [, fields] of entityFields) {
-      for (const f of fields) {
+    for (const [, flds] of entityFields) {
+      for (const f of flds) {
         if (partial.length > 0 && !f.startsWith(partial)) continue;
         const ci  = new vscode.CompletionItem(f, vscode.CompletionItemKind.Field);
         ci.detail = 'self field';
@@ -222,12 +216,8 @@ function memberCompletions(
     return items;
   }
 
-  // ── 3. Entity instance — resolve var → Entity → actions/fields ─────────
-  const varToEntity   = collectEntityInstances(doc, pos.line);
-  const entityName    = varToEntity.get(obj);
+  const entityName = collectEntityInstances(doc).get(obj);
   if (entityName) {
-    const entityActions = collectEntityActions(doc);
-    const entityFields  = collectEntityFields(doc);
     const items: vscode.CompletionItem[] = [];
     for (const a of entityActions.get(entityName) ?? []) {
       if (partial.length > 0 && !a.startsWith(partial)) continue;
@@ -244,6 +234,18 @@ function memberCompletions(
     return items;
   }
 
+  const imported = collectImports(doc);
+  const modMethods = imported.aliasToActions.get(obj);
+  if (modMethods && modMethods.size > 0) {
+    return [...modMethods]
+      .filter(m => partial.length === 0 || m.startsWith(partial))
+      .map(m => {
+        const ci  = new vscode.CompletionItem(m, vscode.CompletionItemKind.Method);
+        ci.detail = `${obj} module`;
+        return ci;
+      });
+  }
+
   return [];
 }
 
@@ -255,24 +257,57 @@ export class ErelangCompletionProvider implements vscode.CompletionItemProvider 
   provideCompletionItems(
     doc: vscode.TextDocument,
     pos: vscode.Position,
-    _token: vscode.CancellationToken,
+    token: vscode.CancellationToken,
     context?: vscode.CompletionContext,
-  ): vscode.CompletionItem[] {
+  ): vscode.ProviderResult<vscode.CompletionItem[]> {
+    try {
+      if (token.isCancellationRequested) return [];
+      // Backspace/refilter: keep the current list. Rebuilding here froze the editor.
+      if (context?.triggerKind === vscode.CompletionTriggerKind.TriggerForIncompleteCompletions) {
+        return undefined;
+      }
+      return this.provideCompletionItemsInner(doc, pos, token, context);
+    } catch {
+      return [];
+    }
+  }
+
+  private provideCompletionItemsInner(
+    doc: vscode.TextDocument,
+    pos: vscode.Position,
+    token: vscode.CancellationToken,
+    context?: vscode.CompletionContext,
+  ): vscode.CompletionItem[] | undefined {
+    if (token.isCancellationRequested) return [];
+
     const prefix   = doc.lineAt(pos.line).text.slice(0, pos.character);
     const fullLine = doc.lineAt(pos.line).text;
-    const col      = collect(doc, pos.line);
 
-    // ── #include directive keyword ─────────────────────────────────────────
+    // Space only offers include paths (so `#include ` pops builtin/…).
+    if (context?.triggerCharacter === ' ') {
+      const incl = includePathCompletions(doc, pos, prefix);
+      return incl && incl.length > 0 ? incl : undefined;
+    }
+
     const includeDirective = includeDirectiveCompletions(pos, prefix);
     if (includeDirective) {
       dbgCompletion('include-directive', pos, prefix, `${includeDirective.length} items`);
       return includeDirective;
     }
 
-    // ── Print / interpolation context ──────────────────────────────────────
+    const incl = includePathCompletions(doc, pos, prefix);
+    if (incl) { dbgCompletion('include-path', pos, prefix, `${incl.length} items`); return incl; }
+
+    // Member access first — do not scan the whole symbol table or touch the filesystem.
+    const memberItems = memberCompletions(doc, pos, prefix);
+    if (memberItems !== null) return memberItems;
+
+    if (token.isCancellationRequested) return [];
+
     const pctx = parsePrintStringContext(fullLine, pos.character);
     if (pctx) {
       dbgCompletion('print-ctx', pos, prefix, 'interpolation');
+      const col = collect(doc, pos.line);
       const names = new Set([...col.locals, ...col.globals, ...col.fields, ...col.actions]);
       const range = new vscode.Range(pos.line, pctx.replaceStart, pos.line, pctx.replaceEnd);
       return [...names]
@@ -286,16 +321,6 @@ export class ErelangCompletionProvider implements vscode.CompletionItemProvider 
         });
     }
 
-    // ── #include path completions ──────────────────────────────────────────
-    const incl = includePathCompletions(doc, pos, prefix);
-    if (incl) { dbgCompletion('include-path', pos, prefix, `${incl.length} items`); return incl; }
-
-    // ── Member access (dot) — handles modules, self, and entity instances ──
-    // null = no dot in prefix; [] = dot found but no known obj → suppress global list
-    const memberItems = memberCompletions(doc, pos, prefix);
-    if (memberItems !== null) return memberItems;
-
-    // ── Global / fallback suggestions ──────────────────────────────────────
     if (isControlFlowAwaitingBody(prefix)) {
       dbgCompletion('control-flow-body-suppressed', pos, prefix);
       return [];
@@ -307,11 +332,16 @@ export class ErelangCompletionProvider implements vscode.CompletionItemProvider 
     const manual     = !context || context.triggerKind === vscode.CompletionTriggerKind.Invoke;
     const triggered  = context?.triggerCharacter && MEANINGFUL_TRIGGERS.has(context.triggerCharacter);
 
-    // Empty prefix: only explicit trigger chars. Block auto-retrigger Invoke dump (Enter → top item).
     if (partial.length === 0 && (fromAutoEdit || (!manual && !triggered))) {
       dbgCompletion('global-fallback-suppressed', pos, prefix);
       return [];
     }
+
+    // Typing a single letter must not dump every builtin/keyword (freezes on `c` then `.`).
+    const light = !manual && partial.length < 2;
+
+    const col = collect(doc, pos.line);
+    if (token.isCancellationRequested) return [];
 
     const replaceRange = partial.length > 0
       ? new vscode.Range(pos.line, pos.character - partial.length, pos.line, pos.character)
@@ -368,38 +398,41 @@ export class ErelangCompletionProvider implements vscode.CompletionItemProvider 
       }
     }
 
-    const imported = collectImports(doc);
+    if (token.isCancellationRequested) return items;
 
-    // Module aliases (e.g. `fs`, `math`) — only shown when declared via #include / import
-    for (const alias of imported.aliasToActions.keys()) {
-      if (!matchesPartial(alias) || seen.has(alias)) continue;
-      seen.add(alias);
-      const ci  = new vscode.CompletionItem(alias, vscode.CompletionItemKind.Module);
-      ci.detail   = 'module alias';
-      ci.sortText = `b_${alias}`;
-      if (replaceRange) ci.range = replaceRange;
-      items.push(ci);
-    }
+    if (!light) {
+      const imported = collectImports(doc);
 
-    for (const n of imported.allActions) {
-      if (!matchesPartial(n) || seen.has(n)) continue;
-      seen.add(n);
-      const ci  = new vscode.CompletionItem(n, vscode.CompletionItemKind.Function);
-      ci.detail   = 'imported action';
-      ci.sortText = `m_${n}`;
-      if (replaceRange) ci.range = replaceRange;
-      items.push(ci);
-    }
+      for (const alias of imported.aliasToActions.keys()) {
+        if (!matchesPartial(alias) || seen.has(alias)) continue;
+        seen.add(alias);
+        const ci  = new vscode.CompletionItem(alias, vscode.CompletionItemKind.Module);
+        ci.detail   = 'module alias';
+        ci.sortText = `b_${alias}`;
+        if (replaceRange) ci.range = replaceRange;
+        items.push(ci);
+      }
 
-    for (const b of BUILT_INS) {
-      if (DEPRECATED_BUILT_INS.has(b) || !matchesPartial(b) || seen.has(b)) continue;
-      seen.add(b);
-      const ci  = new vscode.CompletionItem(b, vscode.CompletionItemKind.Function);
-      ci.detail   = 'builtin';
-      ci.sortText = `z_${b}`;
-      if (replaceRange) ci.range = replaceRange;
-      if (b.toLowerCase() === 'print' && partial.toLowerCase().startsWith('p')) ci.preselect = true;
-      items.push(ci);
+      for (const n of imported.allActions) {
+        if (!matchesPartial(n) || seen.has(n)) continue;
+        seen.add(n);
+        const ci  = new vscode.CompletionItem(n, vscode.CompletionItemKind.Function);
+        ci.detail   = 'imported action';
+        ci.sortText = `m_${n}`;
+        if (replaceRange) ci.range = replaceRange;
+        items.push(ci);
+      }
+
+      for (const b of BUILT_INS) {
+        if (DEPRECATED_BUILT_INS.has(b) || !matchesPartial(b) || seen.has(b)) continue;
+        seen.add(b);
+        const ci  = new vscode.CompletionItem(b, vscode.CompletionItemKind.Function);
+        ci.detail   = 'builtin';
+        ci.sortText = `z_${b}`;
+        if (replaceRange) ci.range = replaceRange;
+        if (b.toLowerCase() === 'print' && partial.toLowerCase().startsWith('p')) ci.preselect = true;
+        items.push(ci);
+      }
     }
 
     if (/\bprint\s*$/.test(prefix)) {

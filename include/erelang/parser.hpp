@@ -7,6 +7,7 @@
 #include <variant>
 #include <memory>
 #include <cstdint>
+#include <atomic>
 #include "erelang/lexer.hpp"
 
 namespace erelang {
@@ -36,6 +37,9 @@ struct FunctionCallExpr {
     std::string name;
     std::vector<ExprPtr> args;
 };
+struct PostfixExpr { ExprPtr operand; bool isInc{true}; };      // x++ / x--
+struct PrefixExpr  { ExprPtr operand; bool isInc{true}; };      // ++x / --x
+struct CompoundAssignExpr { BinOp op; ExprPtr left; ExprPtr right; }; // x += 1, x -= 2, ...
 
 struct ListLiteralExpr {
     std::vector<ExprPtr> elements;
@@ -43,10 +47,6 @@ struct ListLiteralExpr {
 
 struct DictLiteralExpr {
     std::vector<ExprPtr> entries; // alternating key-string, value pairs
-};
-
-struct Expr {
-    std::variant<ExprString, ExprNull, ExprNumber, ExprBool, ExprIdent, BinaryExpr, TernaryExpr, UnaryExpr, NewExpr, MemberExpr, IndexExpr, FunctionCallExpr, ListLiteralExpr, DictLiteralExpr> node;
 };
 
 struct Block; // forward for recursive AST
@@ -81,9 +81,10 @@ struct ForInStmt { std::string var; std::string varType; std::optional<std::stri
 struct TryCatchStmt { std::shared_ptr<Block> tryBlk; std::string catchVar; std::shared_ptr<Block> catchBlk; };
 struct UnsafeStmt { std::shared_ptr<Block> body; };
 struct PointerSetStmt { ExprPtr pointer; ExprPtr value; };
+struct ExprStmt { ExprPtr expr; };
 struct ImportStmt {};
 
-using Statement = std::variant<PrintStmt, SleepStmt, ActionCallStmt, std::shared_ptr<ParallelStmt>, WaitAllStmt, PauseStmt, InputStmt, FireStmt, LetStmt, ReturnStmt, SetStmt, MethodCallStmt, IfStmt, SwitchStmt, WhileStmt, DoWhileStmt, RepeatStmt, ForStmt, ForInStmt, TryCatchStmt, UnsafeStmt, PointerSetStmt, BreakStmt, ContinueStmt, ImportStmt>;
+using Statement = std::variant<PrintStmt, SleepStmt, ActionCallStmt, std::shared_ptr<ParallelStmt>, WaitAllStmt, PauseStmt, InputStmt, FireStmt, LetStmt, ReturnStmt, SetStmt, MethodCallStmt, IfStmt, SwitchStmt, WhileStmt, DoWhileStmt, RepeatStmt, ForStmt, ForInStmt, TryCatchStmt, UnsafeStmt, PointerSetStmt, ExprStmt, BreakStmt, ContinueStmt, ImportStmt>;
 
 struct Block { std::vector<Statement> stmts; };
 
@@ -91,6 +92,21 @@ struct ParallelStmt { Block body; };
 
 struct Param { std::string name; std::string type; };
 struct Attribute { std::string name; std::optional<std::string> value; };
+
+// Lambda expression: lambda(x: int, y: int) -> expr  OR  lambda(x: int) { block }
+struct LambdaExpr {
+    std::vector<Param> params;
+    std::string returnType;   // explicit annotation, or inferred
+    ExprPtr body;             // arrow form: single expression body
+    Block blockBody;          // block form: statement body (mutually exclusive with body)
+    bool isArrow{false};      // true = arrow, false = block
+    std::vector<std::string> capturedVars; // free variable names from enclosing scope
+};
+
+// Now all expression structs are complete — define Expr
+struct Expr {
+    std::variant<ExprString, ExprNull, ExprNumber, ExprBool, ExprIdent, BinaryExpr, TernaryExpr, UnaryExpr, NewExpr, MemberExpr, IndexExpr, FunctionCallExpr, LambdaExpr, ListLiteralExpr, DictLiteralExpr, PostfixExpr, PrefixExpr, CompoundAssignExpr> node;
+};
 
 struct Action {
     std::string name;
@@ -102,6 +118,31 @@ struct Action {
     std::vector<Attribute> attributes;
     std::string sourcePath; // file where declared
     bool isAsync{false};
+};
+
+// Function type for type checking: Func<ParamType..., ReturnType>
+struct FuncType {
+    std::vector<std::string> paramTypes;
+    std::string returnType;
+};
+
+// Captured variable in a closure
+struct ClosedVar {
+    std::string name;
+    std::string value;   // snapshot at creation time
+    std::string type;
+};
+
+// Runtime closure data (reference-counted, stored in g_closures)
+struct ClosureData {
+    Action body;
+    std::vector<ClosedVar> captured;
+    std::atomic<int> refCount{1};
+    std::string sourcePath;
+    int sourceLine{0};
+
+    void addRef() { ++refCount; }
+    void release() { if (--refCount == 0) delete this; }
 };
 
 struct Hook { std::string name; Block body; std::string sourcePath; std::vector<Attribute> attributes; };

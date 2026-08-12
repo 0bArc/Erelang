@@ -213,7 +213,7 @@ switch (s) {
 
 - `fs.glob(dir, pattern)`: glob match, return `List<string>`
 - `fs.walk(dir)`: recursive walk, return `List<string>`
-- `fs.is_dir(path)`: bool
+- ~~`fs.is_dir(path)`: bool~~ (done: also `fs.is_file`, `fs.dirs`, `fs.files`)
 - `fs.copy_dir(src, dst)`: recursive copy
 - `fs.remove_dir(path)`: recursive delete
 - `fs.temp_file()`: create a temp file, return path

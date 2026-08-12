@@ -18,6 +18,7 @@ namespace erelang {
 struct Program;
 struct StructDecl;
 struct Action;
+struct ClosureData;
 
 extern int g_nextListId;
 extern int g_nextDictId;
@@ -26,11 +27,13 @@ extern int g_nextFileId;
 extern int g_nextStrBufId;
 extern int g_nextSetId;
 extern int g_nextQueueId;
+extern int g_nextClosureId;
 extern std::unordered_map<int, std::vector<std::string>> g_lists;
 extern std::unordered_map<int, std::unordered_map<std::string, std::string>> g_dicts;
 extern std::unordered_map<int, std::string> g_ptrs;
 extern std::unordered_map<int, std::unique_ptr<std::fstream>> g_fileStreams;
 extern std::unordered_map<int, std::string> g_strBuffers;
+extern std::unordered_map<int, ClosureData*> g_closures;
 extern std::unordered_set<std::string> g_deprecationWarningsShown;
 extern std::unordered_map<int, std::unordered_set<std::string>> g_sets;
 extern std::unordered_map<int, std::deque<std::string>> g_queues;

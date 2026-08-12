@@ -2,8 +2,8 @@
   "comments": { "lineComment": "//" },
   "brackets": [["{","}"],["(",")"],["[","]"]],
   "indentationRules": {
-    "increaseIndentPattern": "^((?!//).)*(\\{[^}"'`]*|\\([^)"'`]*|\\[[^\]"'`]*)$",
-    "decreaseIndentPattern": "^\\s*[\}\]\)].*$"
+    "increaseIndentPattern": "^[^/]*\\{\\s*$",
+    "decreaseIndentPattern": "^\\s*[}\\]\\)]"
   },
   "onEnterRules": [
     {

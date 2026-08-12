@@ -1,0 +1,6 @@
+@erelang
+
+public action main() {
+}
+
+run main;

@@ -1,0 +1,1 @@
+// empty startup benchmark

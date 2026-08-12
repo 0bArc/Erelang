@@ -3,6 +3,8 @@
 #include <cctype>
 #include <sstream>
 #include <limits>
+#include <algorithm>
+#include <unordered_set>
 
 namespace erelang {
 
@@ -299,7 +301,22 @@ void Parser::skip_separators() {
 
 ExprPtr Parser::parse_expression() {
     ParseDepthGuard guard(parseDepth_);
-    return parse_ternary();
+    auto left = parse_ternary();
+    // Compound assignment: x += expr, x -= expr, etc. (right-associative)
+    BinOp op;
+    bool isCompound = true;
+    if (match(TokenKind::PlusAssign))        op = BinOp::Add;
+    else if (match(TokenKind::MinusAssign))  op = BinOp::Sub;
+    else if (match(TokenKind::StarAssign))   op = BinOp::Mul;
+    else if (match(TokenKind::SlashAssign))  op = BinOp::Div;
+    else if (match(TokenKind::PercentAssign))op = BinOp::Mod;
+    else if (match(TokenKind::PowAssign))    op = BinOp::Pow;
+    else isCompound = false;
+    if (isCompound) {
+        auto right = parse_expression();
+        return std::make_shared<Expr>(Expr{ CompoundAssignExpr{ op, left, right } });
+    }
+    return left;
 }
 
 ExprPtr Parser::parse_ternary() {
@@ -388,6 +405,14 @@ ExprPtr Parser::parse_multiplicative() {
 }
 
 ExprPtr Parser::parse_unary() {
+    if (match(TokenKind::PlusPlus)) {
+        auto e = parse_unary();
+        return std::make_shared<Expr>(Expr{ PrefixExpr{ e, true } });
+    }
+    if (match(TokenKind::MinusMinus)) {
+        auto e = parse_unary();
+        return std::make_shared<Expr>(Expr{ PrefixExpr{ e, false } });
+    }
     if (match(TokenKind::Minus)) {
         auto e = parse_unary();
         return std::make_shared<Expr>(Expr{ UnaryExpr{ UnOp::Neg, e } });
@@ -436,6 +461,14 @@ ExprPtr Parser::parse_primary() {
                 target = std::make_shared<Expr>(Expr{ call });
                 continue;
             }
+            if (match(TokenKind::PlusPlus)) {
+                target = std::make_shared<Expr>(Expr{ PostfixExpr{ target, true } });
+                continue;
+            }
+            if (match(TokenKind::MinusMinus)) {
+                target = std::make_shared<Expr>(Expr{ PostfixExpr{ target, false } });
+                continue;
+            }
             break;
         }
         return target;
@@ -445,6 +478,106 @@ ExprPtr Parser::parse_primary() {
     if ((t.kind == TokenKind::Word || t.kind == TokenKind::Keyword) && t.text == "await") {
         consume();
         return parse_primary();
+    }
+    // Lambda expression: lambda(x: int, y: int) -> expr  OR  lambda(x: int) { block }
+    if ((t.kind == TokenKind::Word || t.kind == TokenKind::Keyword) && t.text == "lambda") {
+        consume();
+        LambdaExpr lambda;
+        // Parse parameter list: (x: int, y: int)
+        expect(TokenKind::LParen, "(");
+        if (!match(TokenKind::RParen)) {
+            do {
+                Param p;
+                const size_t savedPos = pos_;
+                const Token& first = consume();
+                if (!(first.kind == TokenKind::Word || first.kind == TokenKind::Keyword)) {
+                    throw std::runtime_error("Expected parameter name or type in lambda");
+                }
+                const std::string firstText = ident_text(first);
+                if (match(TokenKind::Colon)) {
+                    // name: type
+                    p = Param{ firstText, parse_type_annotation() };
+                } else if (peek().kind == TokenKind::Word || peek().kind == TokenKind::Keyword ||
+                           peek().kind == TokenKind::Less || peek().kind == TokenKind::Scope) {
+                    // Type-first syntax: type name
+                    pos_ = savedPos;
+                    std::string ptype = parse_type_annotation();
+                    const Token& nameTok = consume();
+                    if (!(nameTok.kind == TokenKind::Word || nameTok.kind == TokenKind::Keyword)) {
+                        throw std::runtime_error("Expected parameter name in lambda");
+                    }
+                    p = Param{ ident_text(nameTok), ptype };
+                } else {
+                    throw std::runtime_error("Lambda parameter must have an explicit type: " + firstText);
+                }
+                lambda.params.push_back(p);
+            } while (match(TokenKind::Comma));
+            expect(TokenKind::RParen, ")");
+        }
+        // Optional return type annotation: : type
+        if (match(TokenKind::Colon)) {
+            lambda.returnType = parse_type_annotation();
+        }
+        // Arrow form: -> expression
+        if (match(TokenKind::Arrow) || match(TokenKind::FatArrow)) {
+            lambda.isArrow = true;
+            lambda.body = parse_expression();
+            // Free variable analysis: walk the body to find captured variables
+            // Collect all variable names referenced in the body that are not params
+            std::unordered_set<std::string> paramNames;
+            for (const auto& p : lambda.params) paramNames.insert(p.name);
+            auto walk = [&](auto& self, const Expr& e) -> void {
+                std::visit([&](auto&& arg) {
+                    using T = std::decay_t<decltype(arg)>;
+                    if constexpr (std::is_same_v<T, ExprIdent>) {
+                        if (!paramNames.count(arg.name)) lambda.capturedVars.push_back(arg.name);
+                    } else if constexpr (std::is_same_v<T, BinaryExpr>) {
+                        self(self, *arg.left); self(self, *arg.right);
+                    } else if constexpr (std::is_same_v<T, TernaryExpr>) {
+                        self(self, *arg.cond); self(self, *arg.thenExpr); self(self, *arg.elseExpr);
+                    } else if constexpr (std::is_same_v<T, UnaryExpr>) {
+                        self(self, *arg.expr);
+                    } else if constexpr (std::is_same_v<T, IndexExpr>) {
+                        self(self, *arg.object); self(self, *arg.index);
+                    } else if constexpr (std::is_same_v<T, FunctionCallExpr>) {
+                        for (const auto& a : arg.args) self(self, *a);
+                    } else if constexpr (std::is_same_v<T, MemberExpr>) {
+                        // member expr.objectName is an identifier reference
+                        if (!paramNames.count(arg.objectName)) lambda.capturedVars.push_back(arg.objectName);
+                    }
+                }, e.node);
+            };
+            walk(walk, *lambda.body);
+            // Deduplicate capturedVars
+            std::sort(lambda.capturedVars.begin(), lambda.capturedVars.end());
+            lambda.capturedVars.erase(std::unique(lambda.capturedVars.begin(), lambda.capturedVars.end()), lambda.capturedVars.end());
+        } else {
+            // Block form: { statements }
+            lambda.isArrow = false;
+            lambda.blockBody = parse_block(true);
+            // Free variable analysis for block body
+            std::unordered_set<std::string> paramNames;
+            for (const auto& p : lambda.params) paramNames.insert(p.name);
+            auto walkBlock = [&](auto& self, const Block& blk) -> void {
+                for (const auto& stmt : blk.stmts) {
+                    // Walk expressions in statements for free vars
+                    if (std::holds_alternative<ActionCallStmt>(stmt)) {
+                        const auto& acs = std::get<ActionCallStmt>(stmt);
+                        for (const auto& arg : acs.args) {
+                            if (std::holds_alternative<ExprIdent>(arg->node)) {
+                                const auto& id = std::get<ExprIdent>(arg->node);
+                                if (!paramNames.count(id.name)) lambda.capturedVars.push_back(id.name);
+                            }
+                        }
+                    }
+                    // Handle ReturnStmt etc. — for simplicity, walk all exprs
+                }
+            };
+            walkBlock(walkBlock, lambda.blockBody);
+            std::sort(lambda.capturedVars.begin(), lambda.capturedVars.end());
+            lambda.capturedVars.erase(std::unique(lambda.capturedVars.begin(), lambda.capturedVars.end()), lambda.capturedVars.end());
+        }
+        return std::make_shared<Expr>(Expr{ lambda });
     }
     if ((t.kind == TokenKind::Word || t.kind == TokenKind::Keyword) && t.text == "static_cast") {
         consume();
@@ -1225,7 +1358,6 @@ Statement Parser::parse_statement() {
         }
         return ActionCallStmt{ callName, {} };
     }
-    // member assignment or dotted call like obj.field = expr or a.b.c(...)
     if (peek().kind == TokenKind::Word || peek().kind == TokenKind::Keyword) {
         const Token& objTok = peek();
         if (peek(1).kind == TokenKind::Dot) {
@@ -1272,6 +1404,37 @@ Statement Parser::parse_statement() {
             auto v = parse_expression();
             return SetStmt{ false, ident_text(n), std::string{}, v };
         }
+        // compound assignment: name op= expr
+        if (peek(1).kind == TokenKind::PlusAssign || peek(1).kind == TokenKind::MinusAssign ||
+            peek(1).kind == TokenKind::StarAssign || peek(1).kind == TokenKind::SlashAssign ||
+            peek(1).kind == TokenKind::PercentAssign || peek(1).kind == TokenKind::PowAssign) {
+            const Token& n = consume(); // name
+            BinOp op;
+            if (match(TokenKind::PlusAssign))         op = BinOp::Add;
+            else if (match(TokenKind::MinusAssign))   op = BinOp::Sub;
+            else if (match(TokenKind::StarAssign))    op = BinOp::Mul;
+            else if (match(TokenKind::SlashAssign))   op = BinOp::Div;
+            else if (match(TokenKind::PercentAssign)) op = BinOp::Mod;
+            else { consume(); op = BinOp::Pow; }
+            auto v = parse_expression();
+            auto left = std::make_shared<Expr>(Expr{ ExprIdent{ ident_text(n) } });
+            return ExprStmt{ std::make_shared<Expr>(Expr{ CompoundAssignExpr{ op, left, v } }) };
+        }
+        // postfix inc/dec statement: name++ / name--
+        if (peek(1).kind == TokenKind::PlusPlus || peek(1).kind == TokenKind::MinusMinus) {
+            const Token& n = consume();
+            const bool isInc = (peek().kind == TokenKind::PlusPlus);
+            consume(); // ++ / --
+            auto operand = std::make_shared<Expr>(Expr{ ExprIdent{ ident_text(n) } });
+            return ExprStmt{ std::make_shared<Expr>(Expr{ PostfixExpr{ operand, isInc } }) };
+        }
+    }
+    // prefix inc/dec statement: ++name / --name
+    if (peek().kind == TokenKind::PlusPlus || peek().kind == TokenKind::MinusMinus) {
+        const bool isInc = (peek().kind == TokenKind::PlusPlus);
+        consume(); // ++ / --
+        auto operand = parse_unary();
+        return ExprStmt{ std::make_shared<Expr>(Expr{ PrefixExpr{ operand, isInc } }) };
     }
     if (match_word("await")) {
         const Token& fn = consume();
@@ -1287,6 +1450,8 @@ Statement Parser::parse_statement() {
                 do { call.args.push_back(parse_expression()); } while (match(TokenKind::Comma));
                 expect(TokenKind::RParen, ")");
             }
+        } else {
+            throw std::runtime_error("Action calls require `()` — use `" + call.name + "()` not `" + call.name + "`");
         }
         return call;
     }
@@ -1306,6 +1471,8 @@ Statement Parser::parse_statement() {
                 do { call.args.push_back(parse_expression()); } while (match(TokenKind::Comma));
                 expect(TokenKind::RParen, ")");
             }
+        } else {
+            throw std::runtime_error("Action calls require `()` — use `" + call.name + "()` not `" + call.name + "`");
         }
         return call;
     }
@@ -1776,6 +1943,8 @@ ForStmt Parser::parse_for() {
             }
             if (!typedAccepted) {
                 pos_ = savePos;
+                auto expr = parse_expression();
+                stepBlk->stmts.push_back(ExprStmt{ expr });
             }
         }
         expect(TokenKind::RParen, ")");

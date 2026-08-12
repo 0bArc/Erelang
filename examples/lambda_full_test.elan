@@ -1,0 +1,63 @@
+@erelang
+
+public action main {
+    // ==========================================
+    // Test 1: Basic arrow lambda
+    // ==========================================
+    print("=== Test 1: Arrow lambda ===");
+    string doubleIt = lambda(x: int) -> x * 2;
+    string r1 = doubleIt(21);
+    print("double 21 = ");
+    print(r1);
+
+    // ==========================================
+    // Test 2: Block lambda
+    // ==========================================
+    print("=== Test 2: Block lambda ===");
+    string greet = lambda(name: string): string {
+        string msg = "Hello";
+        msg = msg + ", " + name + "!";
+        return msg;
+    };
+    string r2 = greet("World");
+    print(r2);
+
+    // ==========================================
+    // Test 3: Lambda assigned to variable, called
+    // ==========================================
+    print("=== Test 3: Lambda as variable ===");
+    string add = lambda(a: int, b: int) -> a + b;
+    string r3 = add(10, 32);
+    print("10 + 32 = ");
+    print(r3);
+
+    // ==========================================
+    // Test 4: map builtin
+    // ==========================================
+    print("=== Test 4: map ===");
+    string mapper = lambda(n: int) -> n * n;
+    Array<int> squares = [1, 2, 3, 4, 5];
+    string mapped = map(squares, mapper);
+    print("mapped result: ");
+    print(mapped);
+
+    // ==========================================
+    // Test 5: filter builtin
+    // ==========================================
+    print("=== Test 5: filter ===");
+    string even = lambda(x: int) -> x % 2;
+    Array<int> nums = [1, 2, 3, 4, 5, 6];
+    string filtered = filter(nums, even);
+    print("filtered (even): ");
+    print(filtered);
+
+    // ==========================================
+    // Test 6: reduce builtin
+    // ==========================================
+    print("=== Test 6: reduce ===");
+    string sum = lambda(acc: int, x: int) -> acc + x;
+    Array<int> vals = [10, 20, 30, 40];
+    string reduced = reduce(vals, sum, 0);
+    print("sum: ");
+    print(reduced);
+}

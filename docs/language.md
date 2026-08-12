@@ -122,7 +122,7 @@ entity Counter {
 }
 
 public action main {
-    c = new Counter();
+    Counter c = new Counter();
     c.init(10);
     print c.bump(5);
 }

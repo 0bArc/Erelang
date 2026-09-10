@@ -1,18 +1,13 @@
-// =============================================================================
-// Erelang — Completion provider
-// =============================================================================
-
 import * as vscode from 'vscode';
 import * as fs     from 'fs';
 import * as path   from 'path';
 import {
   LANGUAGE_KEYWORDS, BUILT_INS, DEPRECATED_BUILT_INS,
+  ARRAY_METHODS, DICTIONARY_METHODS, CHAIN_METHODS,
 } from './constants';
 import { PrintStringContext } from './types';
 import { collect, collectEntityInstances, collectEntityMembers } from './symbols';
 import { collectImports } from './imports';
-
-// ─── Debug (lightweight, no circular dep) ────────────────────────────────────
 
 let _debugChannel: vscode.OutputChannel | undefined;
 export function setDebugChannel(ch: vscode.OutputChannel): void { _debugChannel = ch; }
@@ -25,8 +20,6 @@ function dbg(msg: string): void {
 function dbgCompletion(branch: string, pos: vscode.Position, prefix: string, detail?: string): void {
   dbg(`[completion] ${branch} @ ${pos.line + 1}:${pos.character + 1}  prefix="${prefix}"${detail ? '  ' + detail : ''}`);
 }
-
-// ─── Print-String Context ────────────────────────────────────────────────────
 
 function parsePrintStringContext(line: string, cursor: number): PrintStringContext | null {
   const pm = /\bprint\b/.exec(line);
@@ -52,9 +45,12 @@ function parsePrintStringContext(line: string, cursor: number): PrintStringConte
   return null;
 }
 
-// ─── Include Path Completions ────────────────────────────────────────────────
-
-function includePathCompletions(doc: vscode.TextDocument, pos: vscode.Position, prefix: string): vscode.CompletionItem[] | null {
+async function includePathCompletions(
+  doc: vscode.TextDocument,
+  pos: vscode.Position,
+  prefix: string,
+  token: vscode.CancellationToken,
+): Promise<vscode.CompletionItem[] | null> {
   const angleMatch = /^\s*#\s*include\s*<([^>]*)$/.exec(prefix);
   const quoteMatch = /^\s*#\s*include\s*"([^"]*)$/.exec(prefix);
   const bareMatch  = /^\s*#\s*include\s+([A-Za-z0-9_./\\-]*)$/.exec(prefix);
@@ -101,8 +97,9 @@ function includePathCompletions(doc: vscode.TextDocument, pos: vscode.Position, 
 
   const seen = new Set<string>();
   for (const dir of candidateDirs) {
+    if (token.isCancellationRequested) return [];
     let entries: fs.Dirent[] = [];
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+    try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { continue; }
     for (const e of entries) {
       if (!e.name.toLowerCase().startsWith(namePart.toLowerCase())) continue;
       if (e.isDirectory()) {
@@ -149,8 +146,6 @@ function includeDirectiveCompletions(pos: vscode.Position, prefix: string): vsco
   return [keyword];
 }
 
-// ─── Context Helpers ─────────────────────────────────────────────────────────
-
 export function isForeachColonCtx(prefix: string): boolean {
   return /\bfor\s*\([^)]*:\s*[A-Za-z_]*$/.test(prefix);
 }
@@ -159,7 +154,6 @@ export function isDictLiteralCtx(prefix: string): boolean {
   return /[{,]\s*(?:"[^"]*"|'[^']*'|[A-Za-z_]\w*)\s*:\s*[A-Za-z_]*$/.test(prefix);
 }
 
-/** Header complete, body `{` not started — don't pop completions (avoids Enter → `case`). */
 export function isControlFlowAwaitingBody(prefix: string): boolean {
   const t = prefix.trimEnd();
   return (
@@ -168,22 +162,12 @@ export function isControlFlowAwaitingBody(prefix: string): boolean {
   );
 }
 
-/** Set by extension auto-retrigger; suppress empty-prefix dump on Invoke. */
-let _autoSuggestFromEdit = false;
-export function markAutoSuggestFromEdit(): void { _autoSuggestFromEdit = true; }
-export function consumeAutoSuggestFromEdit(): boolean {
-  if (!_autoSuggestFromEdit) return false;
-  _autoSuggestFromEdit = false;
-  return true;
-}
-
-// ─── Dot (Member Access) Completion ──────────────────────────────────────────
-
-function memberCompletions(
+async function memberCompletions(
   doc: vscode.TextDocument,
   pos: vscode.Position,
   prefix: string,
-): vscode.CompletionItem[] | null {
+  token: vscode.CancellationToken,
+): Promise<vscode.CompletionItem[] | null> {
   const dot = /([A-Za-z_]\w*)\.([A-Za-z_]\w*)?$/.exec(prefix);
   if (!dot) return null;
 
@@ -191,7 +175,8 @@ function memberCompletions(
   const partial = dot[2] ?? '';
   dbgCompletion('member-access', pos, prefix, `obj=${obj}`);
 
-  const entityMembers = collectEntityMembers(doc);
+  const memberScanLine = doc.lineCount <= 10_000 ? undefined : pos.line;
+  const entityMembers = collectEntityMembers(doc, memberScanLine);
   const entityActions = entityMembers.actions;
   const entityFields  = entityMembers.fields;
 
@@ -216,7 +201,7 @@ function memberCompletions(
     return items;
   }
 
-  const entityName = collectEntityInstances(doc).get(obj);
+  const entityName = collectEntityInstances(doc, pos.line).get(obj);
   if (entityName) {
     const items: vscode.CompletionItem[] = [];
     for (const a of entityActions.get(entityName) ?? []) {
@@ -234,7 +219,8 @@ function memberCompletions(
     return items;
   }
 
-  const imported = collectImports(doc);
+  if (token.isCancellationRequested) return [];
+  const imported = await collectImports(doc);
   const modMethods = imported.aliasToActions.get(obj);
   if (modMethods && modMethods.size > 0) {
     return [...modMethods]
@@ -246,46 +232,46 @@ function memberCompletions(
       });
   }
 
-  return [];
+  const fallback = [...new Set([...ARRAY_METHODS, ...DICTIONARY_METHODS, ...CHAIN_METHODS])];
+  return fallback
+    .filter(m => partial.length === 0 || m.startsWith(partial))
+    .map(m => {
+      const ci = new vscode.CompletionItem(m, vscode.CompletionItemKind.Method);
+      ci.detail = 'member';
+      return ci;
+    });
 }
-
-// ─── Main Completion Provider ─────────────────────────────────────────────────
 
 const MEANINGFUL_TRIGGERS = new Set(['#', '.', ':', '"', '<', '/', '\\']);
 
 export class ErelangCompletionProvider implements vscode.CompletionItemProvider {
-  provideCompletionItems(
+  async provideCompletionItems(
     doc: vscode.TextDocument,
     pos: vscode.Position,
     token: vscode.CancellationToken,
     context?: vscode.CompletionContext,
-  ): vscode.ProviderResult<vscode.CompletionItem[]> {
+  ): Promise<vscode.CompletionItem[] | undefined> {
     try {
       if (token.isCancellationRequested) return [];
-      // Backspace/refilter: keep the current list. Rebuilding here froze the editor.
-      if (context?.triggerKind === vscode.CompletionTriggerKind.TriggerForIncompleteCompletions) {
-        return undefined;
-      }
-      return this.provideCompletionItemsInner(doc, pos, token, context);
+      return await this.provideCompletionItemsInner(doc, pos, token, context);
     } catch {
       return [];
     }
   }
 
-  private provideCompletionItemsInner(
+  private async provideCompletionItemsInner(
     doc: vscode.TextDocument,
     pos: vscode.Position,
     token: vscode.CancellationToken,
     context?: vscode.CompletionContext,
-  ): vscode.CompletionItem[] | undefined {
+  ): Promise<vscode.CompletionItem[] | undefined> {
     if (token.isCancellationRequested) return [];
 
     const prefix   = doc.lineAt(pos.line).text.slice(0, pos.character);
     const fullLine = doc.lineAt(pos.line).text;
 
-    // Space only offers include paths (so `#include ` pops builtin/…).
     if (context?.triggerCharacter === ' ') {
-      const incl = includePathCompletions(doc, pos, prefix);
+      const incl = await includePathCompletions(doc, pos, prefix, token);
       return incl && incl.length > 0 ? incl : undefined;
     }
 
@@ -295,11 +281,10 @@ export class ErelangCompletionProvider implements vscode.CompletionItemProvider 
       return includeDirective;
     }
 
-    const incl = includePathCompletions(doc, pos, prefix);
+    const incl = await includePathCompletions(doc, pos, prefix, token);
     if (incl) { dbgCompletion('include-path', pos, prefix, `${incl.length} items`); return incl; }
 
-    // Member access first — do not scan the whole symbol table or touch the filesystem.
-    const memberItems = memberCompletions(doc, pos, prefix);
+    const memberItems = await memberCompletions(doc, pos, prefix, token);
     if (memberItems !== null) return memberItems;
 
     if (token.isCancellationRequested) return [];
@@ -326,19 +311,15 @@ export class ErelangCompletionProvider implements vscode.CompletionItemProvider 
       return [];
     }
 
-    const fromAutoEdit = consumeAutoSuggestFromEdit();
     const identMatch = /[A-Za-z_]\w*$/.exec(prefix);
     const partial    = identMatch?.[0] ?? '';
     const manual     = !context || context.triggerKind === vscode.CompletionTriggerKind.Invoke;
     const triggered  = context?.triggerCharacter && MEANINGFUL_TRIGGERS.has(context.triggerCharacter);
 
-    if (partial.length === 0 && (fromAutoEdit || (!manual && !triggered))) {
+    if (partial.length === 0 && !manual && !triggered) {
       dbgCompletion('global-fallback-suppressed', pos, prefix);
       return [];
     }
-
-    // Typing a single letter must not dump every builtin/keyword (freezes on `c` then `.`).
-    const light = !manual && partial.length < 2;
 
     const col = collect(doc, pos.line);
     if (token.isCancellationRequested) return [];
@@ -400,8 +381,20 @@ export class ErelangCompletionProvider implements vscode.CompletionItemProvider 
 
     if (token.isCancellationRequested) return items;
 
-    if (!light) {
-      const imported = collectImports(doc);
+    for (const b of BUILT_INS) {
+      if (DEPRECATED_BUILT_INS.has(b) || !matchesPartial(b) || seen.has(b)) continue;
+      seen.add(b);
+      const ci  = new vscode.CompletionItem(b, vscode.CompletionItemKind.Function);
+      ci.detail   = 'builtin';
+      ci.sortText = `z_${b}`;
+      if (replaceRange) ci.range = replaceRange;
+      if (b.toLowerCase() === 'print' && partial.toLowerCase().startsWith('p')) ci.preselect = true;
+      items.push(ci);
+    }
+
+    const wantImports = manual || triggered || partial.length >= 2;
+    if (wantImports) {
+      const imported = await collectImports(doc);
 
       for (const alias of imported.aliasToActions.keys()) {
         if (!matchesPartial(alias) || seen.has(alias)) continue;
@@ -420,17 +413,6 @@ export class ErelangCompletionProvider implements vscode.CompletionItemProvider 
         ci.detail   = 'imported action';
         ci.sortText = `m_${n}`;
         if (replaceRange) ci.range = replaceRange;
-        items.push(ci);
-      }
-
-      for (const b of BUILT_INS) {
-        if (DEPRECATED_BUILT_INS.has(b) || !matchesPartial(b) || seen.has(b)) continue;
-        seen.add(b);
-        const ci  = new vscode.CompletionItem(b, vscode.CompletionItemKind.Function);
-        ci.detail   = 'builtin';
-        ci.sortText = `z_${b}`;
-        if (replaceRange) ci.range = replaceRange;
-        if (b.toLowerCase() === 'print' && partial.toLowerCase().startsWith('p')) ci.preselect = true;
         items.push(ci);
       }
     }

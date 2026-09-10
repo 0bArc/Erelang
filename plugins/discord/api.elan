@@ -1,0 +1,98 @@
+// Discord REST API for erelang
+// Authenticated HTTP + WebSocket gateway
+
+#include <builtin/network> as net
+#include <builtin/websocket> as ws
+
+global string discord_token = "";
+global string discord_auth = "";
+global string discord_api_base = "https://discord.com/api/v10";
+global string discord_client_id = "";
+global string discord_guild_id = "";
+
+// ── Initialization ─────────────────────────────────────────────────────────
+
+action discord_login(string token) {
+    discord_token = token;
+    string firstChars = string.substr(token, 0, 3);
+    int isKnownFormat = 0;
+    if (firstChars == "MTM" || firstChars == "MTI" || firstChars == "MTA" || firstChars == "OTM" || firstChars == "MTQ") {
+        isKnownFormat = 1;
+    }
+    if (isKnownFormat != 0) {
+        discord_auth = "Authorization: Bot " + token;
+    } else {
+        discord_auth = "Authorization: " + token;
+    }
+    print "Discord: logged in";
+}
+
+action discord_set_client_id(string id) {
+    discord_client_id = id;
+}
+
+action discord_set_guild_id(string id) {
+    discord_guild_id = id;
+}
+
+// ── REST helpers ───────────────────────────────────────────────────────────
+
+action discord_get(string endpoint) -> string {
+    string url = discord_api_base + endpoint;
+    return net.http_get_auth(url, discord_auth);
+}
+
+action discord_post(string endpoint, string body) -> string {
+    string url = discord_api_base + endpoint;
+    return net.http_post_auth(url, body, "application/json", discord_auth);
+}
+
+action discord_patch(string endpoint, string body) -> string {
+    string url = discord_api_base + endpoint;
+    return net.http_post_auth(url, body, "application/json", discord_auth);
+}
+
+// ── Message sending ────────────────────────────────────────────────────────
+
+action discord_send_message(string channel_id, string content) -> string {
+    string body = "{\"content\":\"" + content + "\"}";
+    return discord_post("/channels/" + channel_id + "/messages", body);
+}
+
+action discord_send_embed(string channel_id, string title, string desc, string color) -> string {
+    string c = color;
+    if (c == "") { c = "16711680"; }
+    string body = "{\"embeds\":[{\"title\":\"" + title + "\",\"description\":\"" + desc + "\",\"color\":" + c + "}]}";
+    return discord_post("/channels/" + channel_id + "/messages", body);
+}
+
+// ── Slash command registration ─────────────────────────────────────────────
+
+action discord_create_command(string name, string description, string options_json) -> string {
+    string body = "{\"name\":\"" + name + "\",\"description\":\"" + description + "\",\"type\":1";
+    if (options_json != "") {
+        body = body + ",\"options\":" + options_json;
+    }
+    body = body + "}";
+    return discord_post("/applications/" + discord_client_id + "/commands", body);
+}
+
+// ── Interaction response ───────────────────────────────────────────────────
+
+action discord_respond(string interaction_id, string interaction_token, string content) -> string {
+    string body = "{\"type\":4,\"data\":{\"content\":\"" + content + "\"}}";
+    return discord_post("/interactions/" + interaction_id + "/" + interaction_token + "/callback", body);
+}
+
+// ── Gateway ────────────────────────────────────────────────────────────────
+
+action discord_get_gateway_url() -> string {
+    string result = discord_get("/gateway");
+    int urlStart = string.find(result, "\"url\":\"");
+    if (urlStart < 0) { return ""; }
+    int urlBegin = urlStart + 7;
+    string afterUrl = string.substr(result, urlBegin, 200);
+    int urlEnd = string.find(afterUrl, "\"");
+    if (urlEnd < 0) { return ""; }
+    return string.substr(afterUrl, 0, urlEnd);
+}

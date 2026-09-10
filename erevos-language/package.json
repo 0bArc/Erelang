@@ -39,22 +39,66 @@
       {
         "id": "function",
         "superType": "function",
-        "description": "Style for defined action/function names in Erelang"
+        "description": "Action and function names"
+      },
+      {
+        "id": "method",
+        "superType": "method",
+        "description": "Member method calls"
       },
       {
         "id": "class",
         "superType": "class",
-        "description": "Style for entity, struct, and enum type names in Erelang"
+        "description": "Entity, struct, enum, and type names"
+      },
+      {
+        "id": "parameter",
+        "superType": "parameter",
+        "description": "Function and foreach parameters"
+      },
+      {
+        "id": "variable",
+        "superType": "variable",
+        "description": "Local and global variables"
+      },
+      {
+        "id": "property",
+        "superType": "property",
+        "description": "Fields and member properties"
+      },
+      {
+        "id": "enumMember",
+        "superType": "enumMember",
+        "description": "Enum member names"
+      },
+      {
+        "id": "number",
+        "superType": "number",
+        "description": "Numeric literals"
+      },
+      {
+        "id": "string",
+        "superType": "string",
+        "description": "String literals"
+      },
+      {
+        "id": "keyword",
+        "superType": "keyword",
+        "description": "Language constants such as true/false/null"
       }
     ],
     "semanticTokenModifiers": [
       {
         "id": "declaration",
-        "description": "Style for action/function declarations"
+        "description": "Name at its declaration site"
       },
       {
         "id": "defaultLibrary",
-        "description": "Style for built-in/module functions"
+        "description": "Built-in or standard-library symbol"
+      },
+      {
+        "id": "readonly",
+        "description": "Constant or immutable binding"
       }
     ],
     "semanticTokenScopes": [
@@ -62,7 +106,25 @@
         "scopes": {
           "function": ["entity.name.function", "entity.name.function.erelang"],
           "function.declaration": ["entity.name.function", "entity.name.function.erelang"],
-          "class": ["entity.name.type", "entity.name.class", "entity.name.type.erelang"]
+          "function.defaultLibrary": ["support.function", "support.function.builtin.erelang"],
+          "method": ["entity.name.function.member", "entity.name.function.member.erelang"],
+          "method.defaultLibrary": ["support.function", "support.function.builtin.erelang"],
+          "class": ["entity.name.type", "entity.name.class", "entity.name.type.erelang"],
+          "class.declaration": ["entity.name.type", "entity.name.class", "entity.name.type.erelang"],
+          "class.defaultLibrary": ["support.type", "storage.type.erelang"],
+          "parameter": ["variable.parameter", "variable.parameter.erelang"],
+          "parameter.declaration": ["variable.parameter", "variable.parameter.erelang"],
+          "variable": ["variable.other", "variable.other.erelang"],
+          "variable.declaration": ["variable.other", "variable.other.erelang"],
+          "variable.readonly": ["variable.other.constant", "variable.other.constant.erelang"],
+          "property": ["variable.other.property", "variable.other.property.erelang"],
+          "property.declaration": ["variable.other.property", "variable.other.property.erelang"],
+          "enumMember": ["variable.other.constant", "constant.other", "variable.other.enummember", "variable.other.constant.erelang"],
+          "enumMember.declaration": ["variable.other.constant", "constant.other", "variable.other.enummember", "variable.other.constant.erelang"],
+          "number": ["constant.numeric", "constant.numeric.erelang"],
+          "string": ["string", "string.quoted.double.erelang"],
+          "keyword": ["constant.language", "constant.language.erelang"],
+          "keyword.readonly": ["constant.language", "constant.language.erelang"]
         }
       }
     ],
@@ -151,7 +213,7 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "package": "vsce package --allow-missing-repository -o erelang_language.vsix",
-    "test": "echo No tests",
+    "test": "npm run compile && node --test test/*.test.js",
     "postinstall": "node ./node_modules/vscode/bin/install"
   },
   "devDependencies": {

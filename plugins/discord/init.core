@@ -1,0 +1,5 @@
+token=
+client_id=
+guild_id=
+api_base=https://discord.com/api/v10
+intents=513

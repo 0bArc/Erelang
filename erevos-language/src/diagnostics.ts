@@ -1,11 +1,6 @@
-// =============================================================================
-// Erelang — Diagnostics (semicolons, entity constructors, undefined action calls)
-// =============================================================================
-
 import * as vscode from 'vscode';
 import { BUILT_INS } from './constants';
-import { collectDefinedActions } from './semantic-tokens';
-import { collectUserTypeNames, isInStringLiteral } from './symbols';
+import { collect, isInStringLiteral } from './symbols';
 
 export function needsSemicolon(line: string): boolean {
   const t = line.trim();
@@ -33,6 +28,8 @@ const KEYWORD_CALLS = new Set([
 ]);
 
 const BUILTIN_SET = new Set(BUILT_INS);
+const MAX_VALIDATION_LINES = 50_000;
+const MAX_LINE_LENGTH = 20_000;
 
 function safeRange(doc: vscode.TextDocument, line: number, start: number, end: number): vscode.Range | null {
   if (line < 0 || line >= doc.lineCount) return null;
@@ -46,20 +43,37 @@ function safeRange(doc: vscode.TextDocument, line: number, start: number, end: n
   }
 }
 
-export function validateDocument(doc: vscode.TextDocument, coll: vscode.DiagnosticCollection): void {
+const MAX_DIAGNOSTICS = 500;
+
+export function validateDocument(
+  doc: vscode.TextDocument,
+  coll: vscode.DiagnosticCollection,
+  cancelled: () => boolean = () => false,
+): void {
   try {
     if (doc.isClosed || doc.languageId !== 'erelang') {
       coll.delete(doc.uri);
       return;
     }
+    if (doc.lineCount > MAX_VALIDATION_LINES) {
+      coll.set(doc.uri, []);
+      return;
+    }
 
     const diags: vscode.Diagnostic[] = [];
-    // Use cached version — it was already invalidated by the done handler
-    const defined = collectDefinedActions(doc);
-    const userTypes = collectUserTypeNames(doc);
+    const symbols = collect(doc);
+    const defined = symbols.actions;
+    const userTypes = new Set([
+      ...symbols.entities,
+      ...symbols.structs,
+      ...symbols.enums,
+      ...symbols.typeAliases,
+    ]);
 
     for (let i = 0; i < doc.lineCount; i++) {
+      if ((i & 255) === 0 && cancelled()) return;
       const text = doc.lineAt(i).text;
+      if (text.length > MAX_LINE_LENGTH) continue;
 
       if (needsSemicolon(text)) {
         const len = text.trimEnd().length;
@@ -69,6 +83,7 @@ export function validateDocument(doc: vscode.TextDocument, coll: vscode.Diagnost
           const d = new vscode.Diagnostic(range, 'Missing semicolon (;)', vscode.DiagnosticSeverity.Error);
           d.source = 'erelang';
           diags.push(d);
+          if (diags.length >= MAX_DIAGNOSTICS) break;
         }
       }
 
@@ -88,18 +103,18 @@ export function validateDocument(doc: vscode.TextDocument, coll: vscode.Diagnost
         if (before.includes('//')) continue;
         if (isInStringLiteral(text, m.index)) continue;
 
-        // `new Counter()` is entity construction, not an action call.
         if (/\bnew\s+$/.test(before)) {
           if (!userTypes.has(name)) {
             const range = safeRange(doc, i, m.index, m.index + name.length);
             if (!range) continue;
             const d = new vscode.Diagnostic(
               range,
-              `Unknown entity: '${name}' — not defined in this file`,
+              `Unknown entity: '${name}' - not defined in this file`,
               vscode.DiagnosticSeverity.Error,
             );
             d.source = 'erelang';
             diags.push(d);
+            if (diags.length >= MAX_DIAGNOSTICS) break;
           }
           continue;
         }
@@ -108,22 +123,25 @@ export function validateDocument(doc: vscode.TextDocument, coll: vscode.Diagnost
         if (!range) continue;
         const d = new vscode.Diagnostic(
           range,
-          `Unknown action or function: '${name}' — not defined in this file`,
+          `Unknown action or function: '${name}' - not defined in this file`,
           vscode.DiagnosticSeverity.Error,
         );
         d.source = 'erelang';
         d.code = 'TC001';
         diags.push(d);
+        if (diags.length >= MAX_DIAGNOSTICS) break;
       }
+      if (diags.length >= MAX_DIAGNOSTICS) break;
     }
 
-    coll.set(doc.uri, diags);
+    if (!cancelled()) coll.set(doc.uri, diags);
   } catch {
-    try { coll.set(doc.uri, []); } catch { /* ignore */ }
+    if (!cancelled()) {
+      try { coll.set(doc.uri, []); } catch {}
+    }
   }
 }
 
-/** @deprecated use validateDocument */
 export function validateSemicolons(doc: vscode.TextDocument, coll: vscode.DiagnosticCollection): void {
   validateDocument(doc, coll);
 }

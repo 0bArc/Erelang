@@ -1,0 +1,9 @@
+@erelang
+
+public action plugin_init {
+    
+    return;
+}
+
+
+

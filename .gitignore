@@ -1,8 +1,6 @@
-# Build directories and CMake artifacts
+# Build
 /build/
-/build_fix/
-/build_tmp/
-/build_p1/
+/build_*/
 /build-*/
 .cache/
 CMakeCache.txt
@@ -10,13 +8,9 @@ CMakeFiles/
 cmake_install.cmake
 Makefile
 compile_commands.json
-
-# Dependencies fetched via FetchContent
 _deps/
-build/_deps/
 
 tmp/
-# Binary outputs
 *.exe
 *.dll
 *.dll.a
@@ -28,104 +22,39 @@ tmp/
 *.pch
 *.ipch
 *.exp
-
-# Logs & generated data
 *.log
 *.tmp
 *.cache
-
-# VSCode / IDE
-.vscode/
-
-# Archives & zips not meant for source control
 *.zip
 *.7z
 *.tar
 *.tar.gz
-Workspace.zip
-examples.zip
-Erelang/erelang.zip
+*.dmp
+*.html
+*.code-workspace
 
-# Node modules (VSCode extension project)
+# IDE
+.vscode/
+.idea/
+
+# Extension
+erevos-language/node_modules/
+erevos-language/out/
 erelang-language/node_modules/
 erelang-language/out/
 
-# ImGui INI state (runtime window layout)
+# Local / generated
 imgui.ini
-build/imgui.ini
-
-vscode
-
-# Generated test artifacts
-test_print.0bs
+plugins/*/build/
+plugins/*/bin/
+examples/bench/_tree/
 __demo_download.bin
 *_download.bin
-examples/bench/_tree/
-
-# OS cruft
+test_print.0bs
 Thumbs.db
 Desktop.ini
 
-# Crash dumps
-*.dmp
-
-
-*.html
-
-guide.html
-# Plugin build artifacts
-plugins/*/build/
-plugins/*/bin/
-
-# Language server outputs
-vscode/0bskript-semantic/
-vscode/0bskript-vscode/
-vscode/lang/
-
-# Ignore workspace settings
-*.code-workspace
-
-# Ignore images and large assets
-*.png
-*.jpg
-*.jpeg
-*.gif
-*.bmp
-*.svg
-*.webp
-
-# Policy and config backups
-*.cfg.bak
-
-# Rebranding and temp scripts
-tools/tmp-rebrand-erelang.ps1
-
-# Manifest and implementation logs
-implemented.manifest
-
-# Ignore other temp files
-erevos_full_guide.md
-kick off.md
-LICENSE.md
-
-
-plugins
-BOILERPLATE.md
-
-plugins.md
-syntax.md
-
-# Ignore .github
-.github/
-
-# Ignore .vscode
-.vscode/
-
-
-
-tmp/*.s
-tmp/*.asm
-
-
+dev/
 dev/*
-dev
+.github/
+vscode/

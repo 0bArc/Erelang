@@ -1,0 +1,58 @@
+---
+alwaysApply: true
+---
+# C++ Code Style and AI Avoidance
+
+## Comments
+
+- Do not add comments unless they provide useful information that is not obvious from the code.
+- Never write comments that merely restate what the code does.
+- Do not add AI-style explanatory comments, tutorial comments, or verbose block comments.
+- Do not add comments such as:
+  - `// This function...`
+  - `// Initialize...`
+  - `// Check if...`
+  - `// Loop through...`
+  - `// Create...`
+  when the code already makes the intent obvious.
+- Avoid comments that describe trivial syntax or implementation details.
+- Prefer clear names and simple structure over comments.
+- Preserve existing useful comments unless they are demonstrably incorrect.
+- When a comment is necessary, keep it short and focused on **why**, not **what**.
+- Do not generate TODO comments unless the user explicitly asks for them.
+- Do not generate commented-out code.
+
+## AI-Generated Code
+
+- Do not unnecessarily generate large amounts of code when a small change is requested.
+- Modify only the relevant code and avoid unrelated refactoring.
+- Do not introduce abstractions, helper classes, wrappers, or patterns unless they are actually needed.
+- Do not over-engineer simple C++ code.
+- Prefer straightforward, idiomatic C++ over elaborate solutions.
+- Do not add code solely to demonstrate a concept.
+- Do not invent APIs, classes, functions, or project conventions that are not present in the codebase.
+- Follow the existing project's naming, formatting, architecture, and C++ standard.
+- Before introducing a new dependency, check whether an existing project dependency or standard-library solution is sufficient.
+- Do not silently replace raw pointers, references, containers, or ownership models with different abstractions unless the change is required or requested.
+- Do not add error handling, validation, logging, assertions, or defensive checks that are unrelated to the requested change.
+
+## C++ Practices
+
+- Prefer RAII and automatic storage where appropriate.
+- Prefer the standard library over custom implementations when it clearly fits the existing code.
+- Use raw pointers only when they have a clear semantic purpose, such as non-owning nullable access or an API requirement.
+- Do not use `new`/`delete` directly when RAII or smart pointers are appropriate.
+- Make ownership explicit.
+- Avoid unnecessary copies.
+- Do not use `std::shared_ptr` merely as a default ownership mechanism.
+- Use `const` where it communicates intent without making the code unnecessarily complicated.
+- Avoid premature optimization.
+- Keep functions and types focused and understandable.
+
+## Editing Existing Files
+
+- Preserve the existing style unless the user requests a style change.
+- Do not rewrite surrounding code just to make it look cleaner.
+- Do not add explanatory comments to code you did not need to modify.
+- Keep diffs minimal.
+- If the requested change can be made in a few lines, do not replace the entire file.

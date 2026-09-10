@@ -116,6 +116,9 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
     }
 
     auto argS = [&](size_t i){ return i < args.size() ? eval_string(*args[i], env) : std::string(); };
+    auto argV = [&](size_t i) -> Value {
+        return i < args.size() ? eval_value(*args[i], env) : Value::null_value();
+    };
     auto fsPath = [&](size_t i) -> std::filesystem::path {
         return resolve_filesystem_path(argS(i), scriptDirectory_);
     };
@@ -140,6 +143,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
                     }
                 }
             }
+            prepare_action_slots(calleeEnv, *sa);
             exec_block(sa->body, *currentProgram_, actCtx, calleeEnv);
             // propagate any changed globals back
             for (const auto& kv : calleeEnv.vars) if (globalNames_.count(kv.first)) globalVars_[kv.first] = kv.second;
@@ -282,22 +286,10 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         return std::string(erelang::BuildInfo::version());
     }
     if (nameStr == "language_about" || nameStr == "lang.about") {
-        return std::string(
-            "Erelang (erelang) is a small, batteries-included DSL for desktop scripting.\n"
-            "It focuses on quick GUIs, simple entities, and practical I/O built-ins.\n"
-        );
+        return std::string("Erelang interpreter for .elan programs.\n");
     }
     if (nameStr == "language_limitations" || nameStr == "lang.limitations") {
-        return std::string(
-            "Reasons it leans DSL-like / special-purpose:\n\n"
-            "- Scope is narrow: Bakes in GUI, filesystem, UUIDs, debugging, entities.\n"
-            "  No broad ecosystems (networking libs, math/science packages, or richer\n"
-            "  concurrency beyond parallel{} + wait all).\n"
-            "- Small type system: Only str, int, bool; no floats, generics, or advanced\n"
-            "  memory management.\n"
-            "- Built-in focus: Opinionated first-class concepts (Window, Gui, entity)\n"
-            "  over an open-ended, extensible library ecosystem like Python/C++.\n"
-        );
+        return std::string("Windows-first CLI runtime. No GUI. Most I/O is import-gated.\n");
     }
     // Conversion and type-check helpers
     if (nameStr == "toint" || nameStr == "int") {
@@ -330,15 +322,22 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return out;
     };
-    auto infer_runtime_type = [&](const std::string& value) {
-        if (value.rfind("list:", 0) == 0) return std::string("Array<any>");
-        if (value.rfind("dict:", 0) == 0) return std::string("Map<string, any>");
-        if (value.rfind("struct:", 0) == 0) return value;
-        if (value == "true" || value == "false") return std::string("bool");
-        if (is_int_string(value)) return std::string("int");
-        if (is_float_string(value)) return std::string("double");
-        if (auto it = env.objects.find(value); it != env.objects.end() && it->second) return it->second->typeName;
+    auto infer_runtime_type_value = [&](const Value& value) {
+        if (value_is_handle(value, HandleKind::List)) return std::string("Array<any>");
+        if (value_is_handle(value, HandleKind::Dict)) return std::string("Map<string, any>");
+        if (value.kind == ValueKind::Bool) return std::string("bool");
+        if (value.kind == ValueKind::Int) return std::string("int");
+        if (value.kind == ValueKind::Float) return std::string("double");
+        const std::string text = to_display_string(value);
+        if (text.rfind("struct:", 0) == 0) return text;
+        if (text == "true" || text == "false") return std::string("bool");
+        if (is_int_string(text)) return std::string("int");
+        if (is_float_string(text)) return std::string("double");
+        if (auto it = env.objects.find(text); it != env.objects.end() && it->second) return it->second->typeName;
         return std::string("string");
+    };
+    auto infer_runtime_type = [&](const std::string& value) {
+        return infer_runtime_type_value(value_from_legacy_string(value));
     };
     auto size_of_type = [&](const std::string& typeName) -> int {
         const std::string t = normalize_type_name(typeName);
@@ -363,7 +362,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
     };
     if (nameStr == "__builtin_typeof" || nameStr == "__builtin_decltype") {
         if (args.empty()) return "unknown";
-        return infer_runtime_type(eval_string(*args[0], env));
+        return infer_runtime_type_value(argV(0));
     }
     if (nameStr == "__builtin_sizeof") {
         if (args.empty()) return "0";
@@ -691,9 +690,10 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
     }
     if (nameStr == "to_json" || nameStr == "json.encode") {
         if (args.empty()) return "null";
-        const std::string value = argS(0);
-        if (value.rfind("dict:", 0) == 0) return features::dict_handle_to_json(value);
-        if (value.rfind("list:", 0) == 0) return features::list_handle_to_json(value);
+        const Value valueV = argV(0);
+        const std::string value = to_display_string(valueV);
+        if (value_is_handle(valueV, HandleKind::Dict)) return features::dict_handle_to_json(value);
+        if (value_is_handle(valueV, HandleKind::List)) return features::list_handle_to_json(value);
         auto objIt = env.objects.find(value);
         if (objIt != env.objects.end() && objIt->second) {
             std::ostringstream oss;
@@ -717,7 +717,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
                 const std::string field = k.substr(prefix.size());
                 if (!first) oss << ',';
                 first = false;
-                oss << '"' << features::json_escape(field) << "\":\"" << features::json_escape(v) << '"';
+                oss << '"' << features::json_escape(field) << "\":\"" << features::json_escape(to_display_string(v)) << '"';
             }
             oss << '}';
             return oss.str();
@@ -1316,13 +1316,13 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
     // Level and guard are no-ops at runtime (typechecker enforces)
     if (nameStr == "debug.level.set") { return argS(0); }
     if (nameStr == "debug.guard") { return argS(0); }
-    // Thread helpers (sleep and result — spawn/join/kill are in experimental threads module)
+    // Thread helpers (spawn/join/kill live in experimental threads module)
     if (nameStr == "thread.sleep") {
         int ms = static_cast<int>(to_int(argS(0)));
         std::this_thread::sleep_for(std::chrono::milliseconds(ms));
         return {};
     }
-    // thread.result is a stub — actual thread result tracking requires deep integration
+    // thread.result stub until result tracking is wired deeper
     if (nameStr == "thread.result") {
         return {};
     }
@@ -1592,7 +1592,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         return r;
 #endif
     }
-    // HOF — map: apply func to each element, return new list
+    // map: apply func to each element, return new list
     if (nameStr == "map") {
         if (args.size() < 2) return {};
         std::string listHandle = eval_string(*args[0], env);
@@ -1620,7 +1620,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return std::string("list:") + std::to_string(newListId);
     }
-    // HOF — filter: keep elements where func returns truthy
+    // filter: keep elements where func returns truthy
     if (nameStr == "filter") {
         if (args.size() < 2) return {};
         std::string listHandle = eval_string(*args[0], env);
@@ -1648,7 +1648,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return std::string("list:") + std::to_string(newListId);
     }
-    // HOF — reduce: accumulate values
+    // reduce: accumulate values
     if (nameStr == "reduce") {
         if (args.size() < 3) return {};
         std::string listHandle = eval_string(*args[0], env);
@@ -1681,32 +1681,36 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         for (const auto& a : args) {
             g_lists[id].push_back(eval_string(*a, env));
         }
-        return std::string("list:") + std::to_string(id);
+        return to_display_string(make_handle_value(HandleKind::List, static_cast<uint32_t>(id)));
     }
     if (nameStr == "list_push") {
         warn_deprecated("list_push", "method call list.push(value)");
-        std::string h = argS(0); std::string v = argS(1);
-        if (h.rfind("list:", 0) == 0) {
-            int id = to_int(h.substr(5)); g_lists[id].push_back(v);
+        Value hv = argV(0); std::string v = argS(1);
+        if (value_is_handle(hv, HandleKind::List)) {
+            int id = static_cast<int>(value_handle_id(hv)); g_lists[id].push_back(v);
         }
         return {};
     }
     if (nameStr == "list_get") {
-        std::string h = argS(0); int idx = to_int(argS(1));
-        if (h.rfind("list:", 0) == 0) {
-            int id = to_int(h.substr(5)); auto& vec = g_lists[id];
+        Value hv = argV(0); int idx = to_int(argS(1));
+        if (value_is_handle(hv, HandleKind::List)) {
+            int id = static_cast<int>(value_handle_id(hv)); auto& vec = g_lists[id];
             if (idx >=0 && idx < (int)vec.size()) return vec[idx];
         }
         return {};
     }
     if (nameStr == "list_len") {
-        std::string h = argS(0);
-        if (h.rfind("list:", 0) == 0) { int id = to_int(h.substr(5)); return std::to_string((int)g_lists[id].size()); }
+        Value hv = argV(0);
+        if (value_is_handle(hv, HandleKind::List)) {
+            int id = static_cast<int>(value_handle_id(hv));
+            return std::to_string((int)g_lists[id].size());
+        }
         return "0";
     }
     if (nameStr == "list_join") {
-        std::string h = argS(0); std::string sep = argS(1);
-        if (h.rfind("list:", 0) == 0) { int id = to_int(h.substr(5));
+        Value hv = argV(0); std::string sep = argS(1);
+        if (value_is_handle(hv, HandleKind::List)) {
+            int id = static_cast<int>(value_handle_id(hv));
             std::ostringstream ss; const auto& v = g_lists[id];
             for (size_t i=0;i<v.size();++i) { if (i) ss << sep; ss << v[i]; }
             return ss.str();
@@ -1714,12 +1718,19 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         return {};
     }
     if (nameStr == "list_clear") {
-        std::string h = argS(0); if (h.rfind("list:", 0) == 0) { int id = to_int(h.substr(5)); g_lists[id].clear(); }
+        Value hv = argV(0);
+        if (value_is_handle(hv, HandleKind::List)) {
+            int id = static_cast<int>(value_handle_id(hv)); g_lists[id].clear();
+        }
         return {};
     }
     if (nameStr == "list_remove_at") {
-        std::string h = argS(0); int idx = (int)to_int(argS(1));
-        if (h.rfind("list:", 0) == 0) { int id = to_int(h.substr(5)); auto& v = g_lists[id]; if (idx>=0 && idx<(int)v.size()) v.erase(v.begin()+idx); }
+        Value hv = argV(0); int idx = (int)to_int(argS(1));
+        if (value_is_handle(hv, HandleKind::List)) {
+            int id = static_cast<int>(value_handle_id(hv));
+            auto& v = g_lists[id];
+            if (idx>=0 && idx<(int)v.size()) v.erase(v.begin()+idx);
+        }
         return {};
     }
     if (nameStr == "dict_new") {
@@ -1731,7 +1742,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
             std::string value = eval_string(*args[i + 1], env);
             g_dicts[id][key] = value;
         }
-        return std::string("dict:") + std::to_string(id);
+        return to_display_string(make_handle_value(HandleKind::Dict, static_cast<uint32_t>(id)));
     }
     auto join_builtin_path = [&](size_t from, size_t toExclusive) -> std::string {
         if (toExclusive <= from) return {};
@@ -1744,30 +1755,41 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
     };
     if (nameStr == "dict_set") {
         warn_deprecated("dict_set", "method call dict.set(key, value)");
-        std::string h = argS(0);
+        Value hv = argV(0);
         if (args.size() < 3) return {};
         std::string k = join_builtin_path(1, args.size() - 1);
         std::string v = argS(args.size() - 1);
-        if (h.rfind("dict:", 0) == 0) { int id = to_int(h.substr(5)); g_dicts[id][k] = v; }
+        if (value_is_handle(hv, HandleKind::Dict)) {
+            int id = static_cast<int>(value_handle_id(hv)); g_dicts[id][k] = v;
+        }
         return {};
     }
     if (nameStr == "dict_get") {
-        std::string h = argS(0);
+        Value hv = argV(0);
         if (args.size() < 2) return {};
         std::string k = join_builtin_path(1, args.size());
-        if (h.rfind("dict:", 0) == 0) { int id = to_int(h.substr(5)); auto it = g_dicts[id].find(k); if (it!=g_dicts[id].end()) return it->second; }
+        if (value_is_handle(hv, HandleKind::Dict)) {
+            int id = static_cast<int>(value_handle_id(hv));
+            auto it = g_dicts[id].find(k);
+            if (it!=g_dicts[id].end()) return it->second;
+        }
         return {};
     }
     if (nameStr == "dict_has") {
-        std::string h = argS(0);
+        Value hv = argV(0);
         if (args.size() < 2) return "false";
         std::string k = join_builtin_path(1, args.size());
-        if (h.rfind("dict:", 0) == 0) { int id = to_int(h.substr(5)); return (g_dicts[id].count(k)?"true":"false"); }
+        if (value_is_handle(hv, HandleKind::Dict)) {
+            int id = static_cast<int>(value_handle_id(hv));
+            return (g_dicts[id].count(k)?"true":"false");
+        }
         return "false";
     }
     if (nameStr == "dict_keys") {
-        std::string h = argS(0); if (h.rfind("dict:", 0) != 0) return {};
-        int id = to_int(h.substr(5)); int lid = g_nextListId++; g_lists[lid] = {};
+        Value hv = argV(0);
+        if (!value_is_handle(hv, HandleKind::Dict)) return {};
+        int id = static_cast<int>(value_handle_id(hv));
+        int lid = g_nextListId++; g_lists[lid] = {};
         for (const auto& kv : g_dicts[id]) g_lists[lid].push_back(kv.first);
         std::sort(g_lists[lid].begin(), g_lists[lid].end());
         return std::string("list:") + std::to_string(lid);
@@ -1813,9 +1835,9 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         return {};
     }
     if (nameStr == "dict_size") {
-        std::string h = argS(0);
-        if (h.rfind("dict:", 0) == 0) {
-            int id = to_int(h.substr(5));
+        Value hv = argV(0);
+        if (value_is_handle(hv, HandleKind::Dict)) {
+            int id = static_cast<int>(value_handle_id(hv));
             return std::to_string((int)g_dicts[id].size());
         }
         return "0";

@@ -1,7 +1,3 @@
-// =============================================================================
-// Erelang -- Import / #include resolution
-// =============================================================================
-
 import * as vscode from 'vscode';
 import * as fs     from 'fs';
 import * as path   from 'path';
@@ -9,19 +5,12 @@ import { INCLUDE_ALIAS_RE, IMPORT_ALIAS_RE, MODULE_METHODS } from './constants';
 import { ImportedSymbols } from './types';
 import { ACTION_RE } from './constants';
 
-// ─── Caches (invalidate on document change) ──────────────────────────────────
-
-const _importCache = new Map<string, { version: number; value: ImportedSymbols }>();
-const _actionCache = new Map<string, Set<string>>();
-let   _pluginScriptsCache: string[] | null = null;
-let   _pluginScriptsCacheTime = 0;
-const _pluginCacheTtlMs = 30_000;
+const _importCache = new Map<string, { version: number; value: Promise<ImportedSymbols> }>();
+const _actionCache = new Map<string, { mtimeMs: number; names: Set<string> }>();
 
 export function invalidateImportCache(docUri?: string): void {
   if (docUri) _importCache.delete(docUri); else _importCache.clear();
 }
-
-// ─── Path Normalization ──────────────────────────────────────────────────────
 
 export function normalizeSpec(spec: string): string {
   const t = spec.trim();
@@ -33,8 +22,6 @@ export function normalizeSpec(spec: string): string {
 export function defaultAlias(spec: string): string {
   return normalizeSpec(spec).split('/').pop()!.replace(/[^A-Za-z0-9_]/g, '_');
 }
-
-// ─── Plugin Root Resolution ──────────────────────────────────────────────────
 
 function getPluginRoots(): string[] {
   const roots: string[] = [];
@@ -52,53 +39,15 @@ function getPluginRoots(): string[] {
   return roots;
 }
 
-function parsePluginScripts(elpPath: string): string[] {
-  const scripts: string[] = [];
+async function isFile(filePath: string): Promise<boolean> {
   try {
-    const content = fs.readFileSync(elpPath, 'utf8');
-    const includeRe = /<include>([^<]+)<\/include>/g;
-    let m: RegExpExecArray | null;
-    while ((m = includeRe.exec(content)) !== null) {
-      const rel = m[1].trim();
-      const dir = path.dirname(elpPath);
-      const full = path.resolve(dir, rel);
-      if (fs.existsSync(full)) {
-        scripts.push(full);
-      }
-    }
-  } catch { /* skip */ }
-  return scripts;
+    return (await fs.promises.stat(filePath)).isFile();
+  } catch {
+    return false;
+  }
 }
 
-function findPluginScripts(): string[] {
-  const now = Date.now();
-  if (_pluginScriptsCache !== null && now - _pluginScriptsCacheTime < _pluginCacheTtlMs) {
-    return _pluginScriptsCache;
-  }
-  const scripts: string[] = [];
-  for (const root of getPluginRoots()) {
-    try {
-      if (!fs.existsSync(root)) continue;
-      const entries = fs.readdirSync(root, { withFileTypes: true });
-      for (const entry of entries) {
-        if (!entry.isDirectory()) continue;
-        const elpFile = path.join(root, entry.name, 'project.elp');
-        if (fs.existsSync(elpFile)) {
-          const pluginScripts = parsePluginScripts(elpFile);
-          scripts.push(...pluginScripts);
-        }
-      }
-    } catch { /* skip */ }
-  }
-  _pluginScriptsCache = scripts;
-  _pluginScriptsCacheTime = now;
-  return scripts;
-}
-
-// ─── File Resolution ─────────────────────────────────────────────────────────
-
-/** Resolve an include spec to a concrete file path, or null if not found. */
-export function resolveIncludeFile(doc: vscode.TextDocument, spec: string): string | null {
+export async function resolveIncludeFile(doc: vscode.TextDocument, spec: string): Promise<string | null> {
   const norm = normalizeSpec(spec);
   if (!norm || norm.startsWith('builtin/')) return null;
   const dir  = path.dirname(doc.uri.fsPath);
@@ -112,104 +61,86 @@ export function resolveIncludeFile(doc: vscode.TextDocument, spec: string): stri
       for (const e of ['.elan', '.ere', '.0bs']) bases.push(path.resolve(f.uri.fsPath, norm + e));
     }
     const wsPlugins = path.join(f.uri.fsPath, 'plugins');
-    if (fs.existsSync(wsPlugins)) {
-      bases.push(path.join(wsPlugins, norm));
-      if (!path.extname(norm)) {
-        for (const e of ['.elan', '.ere', '.0bs']) bases.push(path.join(wsPlugins, norm + e));
-      }
+    bases.push(path.join(wsPlugins, norm));
+    if (!path.extname(norm)) {
+      for (const e of ['.elan', '.ere', '.0bs']) bases.push(path.join(wsPlugins, norm + e));
     }
   }
   for (const pluginRoot of getPluginRoots()) {
     const full = path.join(pluginRoot, norm);
-    if (fs.existsSync(full)) { bases.push(full); continue; }
+    bases.push(full);
     if (!path.extname(norm)) {
-      for (const e of ['.elan', '.ere', '.0bs']) {
-        const withExt = path.join(pluginRoot, norm + e);
-        if (fs.existsSync(withExt)) bases.push(withExt);
-      }
+      for (const e of ['.elan', '.ere', '.0bs']) bases.push(path.join(pluginRoot, norm + e));
     }
-    try {
-      if (fs.existsSync(pluginRoot)) {
-        const entries = fs.readdirSync(pluginRoot, { withFileTypes: true });
-        for (const entry of entries) {
-          if (!entry.isDirectory()) continue;
-          const subFile = path.join(pluginRoot, entry.name, norm);
-          if (fs.existsSync(subFile)) bases.push(subFile);
-          if (!path.extname(norm)) {
-            for (const e of ['.elan', '.ere', '.0bs']) {
-              const withExt = path.join(pluginRoot, entry.name, norm + e);
-              if (fs.existsSync(withExt)) bases.push(withExt);
-            }
-          }
-        }
-      }
-    } catch { /* skip */ }
   }
   for (const c of bases) {
-    try { if (fs.existsSync(c) && fs.statSync(c).isFile()) return c; } catch { /* skip */ }
+    if (await isFile(c)) return c;
   }
   return null;
 }
 
-// ─── Action Extraction ───────────────────────────────────────────────────────
-
-export function extractActions(filePath: string): Set<string> {
-  const cached = _actionCache.get(filePath);
-  if (cached) return cached;
-
-  const names = new Set<string>();
+export async function extractActions(filePath: string): Promise<Set<string>> {
   try {
-    for (const line of fs.readFileSync(filePath, 'utf8').split(/\r?\n/)) {
+    const mtimeMs = (await fs.promises.stat(filePath)).mtimeMs;
+    const cached = _actionCache.get(filePath);
+    if (cached?.mtimeMs === mtimeMs) return cached.names;
+    const names = new Set<string>();
+    for (const line of (await fs.promises.readFile(filePath, 'utf8')).split(/\r?\n/)) {
       const m = ACTION_RE.exec(line);
       if (m) names.add(m[1]);
     }
-  } catch { /* skip */ }
-
-  _actionCache.set(filePath, names);
-  return names;
+    _actionCache.set(filePath, { mtimeMs, names });
+    return names;
+  } catch {
+    _actionCache.delete(filePath);
+    return new Set();
+  }
 }
 
-// ─── Import Collection ───────────────────────────────────────────────────────
-
-export function collectImports(doc: vscode.TextDocument): ImportedSymbols {
+export function collectImports(doc: vscode.TextDocument): Promise<ImportedSymbols> {
   const docUri = doc.uri.toString();
   const cached = _importCache.get(docUri);
   if (cached && cached.version === doc.version) return cached.value;
 
-  const aliasToActions = new Map<string, Set<string>>();
-  const allActions     = new Set<string>();
+  const value = (async () => {
+    const aliasToActions = new Map<string, Set<string>>();
+    const allActions = new Set<string>();
+    const scanLines = Math.min(doc.lineCount, 2_000);
+    for (let i = 0; i < scanLines; i++) {
+      const text = doc.lineAt(i).text;
+      let spec: string | null = null;
+      let alias: string | null = null;
 
-  for (let i = 0; i < doc.lineCount; i++) {
-    const text = doc.lineAt(i).text;
-    let spec:  string | null = null;
-    let alias: string | null = null;
-
-    const inc = INCLUDE_ALIAS_RE.exec(text);
-    if (inc) {
-      spec  = inc[1];
-      alias = inc[2] ?? defaultAlias(inc[1]);
-    } else {
-      const imp = IMPORT_ALIAS_RE.exec(text);
-      if (imp) {
-        const rawPath = imp[1] ?? imp[2] ?? imp[3] ?? imp[4] ?? '';
-        spec  = rawPath || null;
-        alias = imp[5] ?? (spec ? defaultAlias(spec) : null);
+      const inc = INCLUDE_ALIAS_RE.exec(text);
+      if (inc) {
+        spec = inc[1];
+        alias = inc[2] ?? defaultAlias(inc[1]);
+      } else {
+        const imp = IMPORT_ALIAS_RE.exec(text);
+        if (imp) {
+          const rawPath = imp[1] ?? imp[2] ?? imp[3] ?? imp[4] ?? '';
+          spec = rawPath || null;
+          alias = imp[5] ?? (spec ? defaultAlias(spec) : null);
+        }
       }
+      if (!spec || !alias) continue;
+
+      const builtinMethods = MODULE_METHODS[normalizeSpec(spec)];
+      if (builtinMethods) {
+        aliasToActions.set(alias, new Set(builtinMethods));
+        continue;
+      }
+
+      const resolved = await resolveIncludeFile(doc, spec);
+      if (!resolved) continue;
+      const actions = await extractActions(resolved);
+      if (actions.size === 0) continue;
+      aliasToActions.set(alias, actions);
+      for (const action of actions) allActions.add(action);
     }
-    if (!spec || !alias) continue;
+    return { aliasToActions, allActions };
+  })();
 
-    const builtinMethods = MODULE_METHODS[normalizeSpec(spec)];
-    if (builtinMethods) { aliasToActions.set(alias, new Set(builtinMethods)); continue; }
-
-    const resolved = resolveIncludeFile(doc, spec);
-    if (!resolved) continue;
-    const acts = extractActions(resolved);
-    if (acts.size === 0) continue;
-    aliasToActions.set(alias, acts);
-    for (const a of acts) allActions.add(a);
-  }
-
-  const result: ImportedSymbols = { aliasToActions, allActions };
-  _importCache.set(docUri, { version: doc.version, value: result });
-  return result;
+  _importCache.set(docUri, { version: doc.version, value });
+  return value;
 }

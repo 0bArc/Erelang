@@ -5,13 +5,15 @@
 #include <string_view>
 #include <unordered_map>
 
+#include "erelang/value.hpp"
+
 namespace erelang {
 
 struct Program;
 
 inline constexpr std::string_view kBuiltinAliasPrefix = "__builtin__:";
 
-void bind_builtin_module_aliases(const Program& program, std::unordered_map<std::string, std::string>& vars);
+void bind_builtin_module_aliases(const Program& program, ValueMap& vars);
 
 [[nodiscard]] std::optional<std::string> resolve_builtin_module_method(
     const Program& program,

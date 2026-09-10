@@ -1,4 +1,5 @@
 #include "erelang/runtime_imports.hpp"
+#include "erelang/value.hpp"
 
 #include "erelang/modules.hpp"
 #include "erelang/parser.hpp"
@@ -289,7 +290,7 @@ std::optional<std::string> resolve_builtin_module_method(
     return std::nullopt;
 }
 
-void bind_builtin_module_aliases(const Program& program, std::unordered_map<std::string, std::string>& vars) {
+void bind_builtin_module_aliases(const Program& program, ValueMap& vars) {
     auto bind_alias = [&](const std::string& alias, const char* method, const char* builtin) {
         vars[alias + "." + method] = std::string(kBuiltinAliasPrefix) + builtin;
     };

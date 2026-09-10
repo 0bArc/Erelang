@@ -1,7 +1,3 @@
-// =============================================================================
-// Erelang — Symbol collection
-// =============================================================================
-
 import * as vscode from 'vscode';
 import {
   ENTITY_RE, ACTION_RE, TYPED_FUNC_RE, FIELD_RE, STRUCT_RE, ENUM_RE,
@@ -11,26 +7,23 @@ import { CollectedSymbols, WordToken, RangeToken } from './types';
 
 const KEYWORD_SET = new Set<string>(LANGUAGE_KEYWORDS);
 
-type Versioned<T> = { version: number; value: T; at: number };
-const STICKY_MS = 250;
+type Versioned<T> = { version: number; value: T };
 const _symbolCache   = new Map<string, Versioned<CollectedSymbols>>();
 const _instanceCache = new Map<string, Versioned<Map<string, string>>>();
 const _typeNameCache = new Map<string, Versioned<Set<string>>>();
 
-function stickyGet<T>(
+function versionedGet<T>(
   cache: Map<string, Versioned<T>>,
   key: string,
   version: number,
   compute: () => T,
 ): T {
   const hit = cache.get(key);
-  if (hit && (hit.version === version || Date.now() - hit.at < STICKY_MS)) return hit.value;
+  if (hit?.version === version) return hit.value;
   const value = compute();
-  cache.set(key, { version, value, at: Date.now() });
+  cache.set(key, { version, value });
   return value;
 }
-
-// ─── Identifier Utilities ────────────────────────────────────────────────────
 
 export function isIdentStart(ch: string): boolean { return /[A-Za-z_]/.test(ch); }
 export function isIdentPart(ch: string):  boolean { return /[A-Za-z0-9_]/.test(ch); }
@@ -46,8 +39,6 @@ export function scanWords(line: string): WordToken[] {
   }
   return words;
 }
-
-// ─── For-Each Header Parsing ─────────────────────────────────────────────────
 
 export function parseForEachHeader(line: string): { loopVars: RangeToken[]; iterable: RangeToken | null } | null {
   const fi = line.indexOf('for');
@@ -99,13 +90,11 @@ export function foreachLocalNames(line: string): string[] {
     .filter(n => n.length > 0);
 }
 
-// ─── Main Symbol Collection ──────────────────────────────────────────────────
-
 export function collect(doc: vscode.TextDocument, uptoLine?: number): CollectedSymbols {
   const end = Math.min(uptoLine ?? doc.lineCount - 1, doc.lineCount - 1);
   const full = end >= doc.lineCount - 1;
   if (full) {
-    return stickyGet(_symbolCache, doc.uri.toString(), doc.version, () => collectRange(doc, end));
+    return versionedGet(_symbolCache, doc.uri.toString(), doc.version, () => collectRange(doc, end));
   }
   return collectRange(doc, end);
 }
@@ -154,7 +143,6 @@ function collectRange(doc: vscode.TextDocument, end: number): CollectedSymbols {
       out.locals.add(vn);
     }
 
-    // User type locals: `Counter c = new Counter();`
     const userTyped = /^\s*(?:public|private|export)?\s*([A-Za-z_]\w*(?:<[^;>\n]{0,80}>)?)\s+([A-Za-z_]\w*)\s*(?:=|;)/.exec(text);
     if (userTyped) {
       const typeName = userTyped[1].replace(/<.*$/, '');
@@ -180,14 +168,11 @@ function collectRange(doc: vscode.TextDocument, end: number): CollectedSymbols {
   return out;
 }
 
-// ─── Entity Instance Tracking ────────────────────────────────────────────────
-
-/** Returns varName → EntityTypeName for all `var = new EntityName(...)` up to uptoLine. */
 export function collectEntityInstances(doc: vscode.TextDocument, uptoLine?: number): Map<string, string> {
   const end = Math.min(uptoLine ?? doc.lineCount - 1, doc.lineCount - 1);
   const full = end >= doc.lineCount - 1;
   if (full) {
-    return stickyGet(_instanceCache, doc.uri.toString(), doc.version, () => scanEntityInstances(doc, end));
+    return versionedGet(_instanceCache, doc.uri.toString(), doc.version, () => scanEntityInstances(doc, end));
   }
   return scanEntityInstances(doc, end);
 }
@@ -196,21 +181,21 @@ function scanEntityInstances(doc: vscode.TextDocument, end: number): Map<string,
   const varToEntity = new Map<string, string>();
   for (let i = 0; i <= end; i++) {
     const text = doc.lineAt(i).text;
+    const typed = /^\s*(?:public|private|export)?\s*([A-Z][A-Za-z0-9_]*)\s+([A-Za-z_]\w*)\b/.exec(text);
+    if (typed) varToEntity.set(typed[2], typed[1]);
     const m = /\b([A-Za-z_]\w*)\s*=\s*new\s+([A-Za-z_]\w*)/.exec(text);
     if (m) varToEntity.set(m[1], m[2]);
   }
   return varToEntity;
 }
 
-/** Entity, struct, enum, and type-alias names declared in this document. */
 export function collectUserTypeNames(doc: vscode.TextDocument): Set<string> {
-  return stickyGet(_typeNameCache, doc.uri.toString(), doc.version, () => {
+  return versionedGet(_typeNameCache, doc.uri.toString(), doc.version, () => {
     const col = collect(doc);
     return new Set([...col.entities, ...col.structs, ...col.enums, ...col.typeAliases]);
   });
 }
 
-/** True when `index` sits inside an unclosed `"..."` or `'...'` on this line. */
 export function isInStringLiteral(line: string, index: number): boolean {
   let inDq = false;
   let inSq = false;
@@ -224,8 +209,6 @@ export function isInStringLiteral(line: string, index: number): boolean {
   return inDq || inSq;
 }
 
-// ─── Combined Entity Member Scan (single pass for both actions + fields) ─────
-
 export interface EntityMembers {
   actions: Map<string, Set<string>>;
   fields:  Map<string, Set<string>>;
@@ -233,7 +216,6 @@ export interface EntityMembers {
 
 const _entityMemberCache = new Map<string, Versioned<EntityMembers>>();
 
-/** Drop versioned caches for a document (optional; version mismatch already misses). */
 export function invalidateEntityMemberCache(docUri?: string): void {
   if (docUri) {
     _entityMemberCache.delete(docUri);
@@ -248,15 +230,15 @@ export function invalidateEntityMemberCache(docUri?: string): void {
   }
 }
 
-/** Returns EntityName → Set<actionName> and EntityName → Set<fieldName> in a single pass. */
-export function collectEntityMembers(doc: vscode.TextDocument): EntityMembers {
-  return stickyGet(_entityMemberCache, doc.uri.toString(), doc.version, () => {
+export function collectEntityMembers(doc: vscode.TextDocument, uptoLine?: number): EntityMembers {
+  const end = Math.min(uptoLine ?? doc.lineCount - 1, doc.lineCount - 1);
+  const scan = () => {
     const actions = new Map<string, Set<string>>();
     const fields  = new Map<string, Set<string>>();
     let currentEntity: string | null = null;
     let braceDepth = 0;
 
-    for (let i = 0; i < doc.lineCount; i++) {
+    for (let i = 0; i <= end; i++) {
       const text = doc.lineAt(i).text;
       const em = ENTITY_RE.exec(text);
       if (em) {
@@ -283,15 +265,17 @@ export function collectEntityMembers(doc: vscode.TextDocument): EntityMembers {
     }
 
     return { actions, fields };
-  });
+  };
+  if (end >= doc.lineCount - 1) {
+    return versionedGet(_entityMemberCache, doc.uri.toString(), doc.version, scan);
+  }
+  return scan();
 }
 
-/** Returns EntityName → Set<actionName> for all entity blocks in the document. */
 export function collectEntityActions(doc: vscode.TextDocument): Map<string, Set<string>> {
   return collectEntityMembers(doc).actions;
 }
 
-/** Returns EntityName → Set<fieldName> for all entity blocks in the document. */
 export function collectEntityFields(doc: vscode.TextDocument): Map<string, Set<string>> {
   return collectEntityMembers(doc).fields;
 }

@@ -1,25 +1,12 @@
-# Erelang Language (erelang)
+# Erelang language (VS Code / Cursor)
 
-VS Code syntax highlighting and language basics for `.0bs` files.
+Syntax highlighting and language basics for `.elan` files.
 
-Features:
-- TextMate grammar for keywords, directives, actions, entities
-- Language config for comments, brackets, and auto-closing
-- Snippets for actions and entities
-- Missing-semicolon diagnostics across statements
-- Context-aware completions for keywords (`run`, loops), symbols, and collection methods (`Array<T>`, `Map<K, V>`)
-- `#include` autosuggest now offers plain `#include` first, then real module/file paths immediately after `#include `, with correct replacement inside `<...>` paths
-- `#include` highlighting support for partial and spaced forms (for example `#inc`, `# include`)
-- Reduced legacy collection completion noise (deprecated `list_*` / `dict_*` entries hidden)
-- Identifier autosuggest retriggers while typing or deleting names, but does not reopen suggestions on plain Enter/newline edits
+```bash
+npm install
+npm run package
+```
 
-Install (local dev):
-1. `npm install`
-2. `npm run build:icon` (writes `erelang.ico` + `icons/` for `.elan` file icons)
-3. `npm run watch`
-4. Press F5 to launch Extension Development Host
+Install the generated `.vsix`, or press F5 from this folder to run an Extension Development Host.
 
-Settings:
-- `erelang.autoSuggestIdentifiers`: keep identifier autosuggest responsive while typing/deleting without forcing popup reopen on Enter.
-- `erelang.debugCompletion`: emit completion context traces to the `Erelang Language Debug` output channel.
-
+Settings: `erelang.autoSuggestIdentifiers`, `erelang.debugCompletion`.

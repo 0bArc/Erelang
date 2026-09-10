@@ -1,18 +1,3 @@
-// =============================================================================
-// Erelang Language Extension — VS Code
-// =============================================================================
-//
-// Entry point: registers providers and hooks defined in the sibling modules.
-//
-//   constants.ts   — regex patterns, keyword/builtin lists
-//   types.ts       — shared TypeScript interfaces
-//   symbols.ts     — AST-free symbol collection + entity instance tracking
-//   imports.ts     — #include / import resolution
-//   diagnostics.ts — semicolon validation
-//   completions.ts — ErelangCompletionProvider (dot, print, include, global)
-//
-// =============================================================================
-
 import * as vscode from 'vscode';
 import { ENTITY_RE, ACTION_RE, FIELD_RE, HOOK_RE } from './constants';
 import { validateDocument } from './diagnostics';
@@ -23,12 +8,13 @@ import { collect, parseForEachHeader, invalidateEntityMemberCache } from './symb
 import { invalidateDefCache } from './semantic-tokens';
 import { invalidateImportCache } from './imports';
 
-// ─── Symbol Providers ───────────────────────────────────────────────────────
+const MAX_SYMBOL_LINES = 8_000;
 
 class ErelangDocumentSymbolProvider implements vscode.DocumentSymbolProvider {
   provideDocumentSymbols(doc: vscode.TextDocument): vscode.SymbolInformation[] {
     const out: vscode.SymbolInformation[] = [];
-    for (let i = 0; i < doc.lineCount; i++) {
+    const limit = Math.min(doc.lineCount, MAX_SYMBOL_LINES);
+    for (let i = 0; i < limit; i++) {
       const line = doc.lineAt(i).text;
       let m: RegExpExecArray | null;
       if      ((m = ENTITY_RE.exec(line))) out.push(new vscode.SymbolInformation(m[1], vscode.SymbolKind.Class,    '', new vscode.Location(doc.uri, new vscode.Position(i, 0))));
@@ -41,13 +27,20 @@ class ErelangDocumentSymbolProvider implements vscode.DocumentSymbolProvider {
 }
 
 class ErelangWorkspaceSymbolProvider implements vscode.WorkspaceSymbolProvider {
-  async provideWorkspaceSymbols(query: string): Promise<vscode.SymbolInformation[]> {
+  async provideWorkspaceSymbols(
+    query: string,
+    token: vscode.CancellationToken,
+  ): Promise<vscode.SymbolInformation[]> {
     const uris = await vscode.workspace.findFiles('**/*.{0bs,ere,elan}', '**/node_modules/**', 40);
     const out: vscode.SymbolInformation[] = [];
     for (const uri of uris) {
-      const doc = await vscode.workspace.openTextDocument(uri);
-      for (let i = 0; i < doc.lineCount; i++) {
-        const line = doc.lineAt(i).text;
+      if (token.isCancellationRequested) break;
+      const bytes = await vscode.workspace.fs.readFile(uri);
+      if (bytes.byteLength > 2 * 1024 * 1024) continue;
+      const lines = Buffer.from(bytes).toString('utf8').split(/\r?\n/);
+      for (let i = 0; i < lines.length; i++) {
+        if ((i & 511) === 0 && token.isCancellationRequested) break;
+        const line = lines[i];
         let m: RegExpExecArray | null;
         if      ((m = ENTITY_RE.exec(line)) && m[1].includes(query)) out.push(new vscode.SymbolInformation(m[1], vscode.SymbolKind.Class,    '', new vscode.Location(uri, new vscode.Position(i, 0))));
         else if ((m = ACTION_RE.exec(line)) && m[1].includes(query)) out.push(new vscode.SymbolInformation(m[1], vscode.SymbolKind.Function, '', new vscode.Location(uri, new vscode.Position(i, 0))));
@@ -59,59 +52,67 @@ class ErelangWorkspaceSymbolProvider implements vscode.WorkspaceSymbolProvider {
   }
 }
 
-// ─── Activation ─────────────────────────────────────────────────────────────
-
 export function activate(ctx: vscode.ExtensionContext) {
-  console.log('Erelang language extension active (v3)');
+  let debugCh: vscode.OutputChannel | undefined;
+  const getDebugCh = () => {
+    if (!debugCh) {
+      debugCh = vscode.window.createOutputChannel('Erelang Language Debug');
+      ctx.subscriptions.push(debugCh);
+      setDebugChannel(debugCh);
+    }
+    return debugCh;
+  };
 
-  // Debug channel
-  const debugCh = vscode.window.createOutputChannel('Erelang Language Debug');
-  ctx.subscriptions.push(debugCh);
-  setDebugChannel(debugCh);
-
-  // Diagnostics — semicolons, entity constructors, undefined action calls
   const semiDiags = vscode.languages.createDiagnosticCollection('erelang');
   ctx.subscriptions.push(semiDiags);
-  const refreshDiags = (d: vscode.TextDocument) => {
+
+  const diagnosticTimers = new Map<string, NodeJS.Timeout>();
+  const diagnosticGeneration = new Map<string, number>();
+  const scheduleDiags = (d: vscode.TextDocument, delay = 1200) => {
     if (d.isClosed || d.languageId !== 'erelang') return;
-    try { validateDocument(d, semiDiags); } catch { /* never crash the host */ }
+    const key = d.uri.toString();
+    const generation = (diagnosticGeneration.get(key) ?? 0) + 1;
+    diagnosticGeneration.set(key, generation);
+    const pending = diagnosticTimers.get(key);
+    if (pending) clearTimeout(pending);
+    diagnosticTimers.set(key, setTimeout(() => {
+      diagnosticTimers.delete(key);
+      if (d.isClosed || d.version < 0) return;
+      try {
+        validateDocument(d, semiDiags, () =>
+          diagnosticGeneration.get(key) !== generation || d.isClosed);
+      } catch {}
+    }, delay));
   };
-  ctx.subscriptions.push(vscode.workspace.onDidOpenTextDocument(refreshDiags));
+
+  const forget = (d: vscode.TextDocument) => {
+    if (d.languageId !== 'erelang') return;
+    const key = d.uri.toString();
+    invalidateImportCache(key);
+    invalidateDefCache(key);
+    invalidateEntityMemberCache(key);
+  };
+
   ctx.subscriptions.push(vscode.workspace.onDidSaveTextDocument(d => {
-    invalidateImportCache(d.uri.toString());
-    invalidateDefCache(d.uri.toString());
-    invalidateEntityMemberCache(d.uri.toString());
-    refreshDiags(d);
+    if (d.languageId === 'erelang') scheduleDiags(d, 300);
   }));
-  for (const d of vscode.workspace.textDocuments) refreshDiags(d);
+  ctx.subscriptions.push(vscode.workspace.onDidCloseTextDocument(d => {
+    const key = d.uri.toString();
+    const pending = diagnosticTimers.get(key);
+    if (pending) clearTimeout(pending);
+    diagnosticTimers.delete(key);
+    diagnosticGeneration.delete(key);
+    semiDiags.delete(d.uri);
+    forget(d);
+  }));
+  ctx.subscriptions.push({ dispose: () => {
+    for (const pending of diagnosticTimers.values()) clearTimeout(pending);
+    diagnosticTimers.clear();
+  }});
 
-  // No-op code action provider — prevents VS Code from stalling searching for one.
-  // The only diagnostic we emit is "Missing semicolon", whose fix is adding a semicolon.
-  // VS Code already handles this via the built-in quick-fix (insert `;`) without us.
-  ctx.subscriptions.push(
-    vscode.languages.registerCodeActionsProvider(
-      { language: 'erelang' },
-      {
-        provideCodeActions(_doc, _range, _ctx, _token): vscode.CodeAction[] {
-          return [];
-        },
-      },
-    ),
-  );
+  const active = vscode.window.activeTextEditor?.document;
+  if (active?.languageId === 'erelang') scheduleDiags(active, 2000);
 
-  // No-op document formatter — prevents VS Code from stalling searching for one on save.
-  ctx.subscriptions.push(
-    vscode.languages.registerDocumentFormattingEditProvider(
-      { language: 'erelang' },
-      {
-        provideDocumentFormattingEdits(_doc, _opts, _token): vscode.TextEdit[] {
-          return [];
-        },
-      },
-    ),
-  );
-
-  // Debug command: dump completion context to output panel
   ctx.subscriptions.push(
     vscode.commands.registerCommand('erelang.debugCompletionContext', () => {
       const editor = vscode.window.activeTextEditor;
@@ -119,33 +120,33 @@ export function activate(ctx: vscode.ExtensionContext) {
         vscode.window.showWarningMessage('Open an Erelang file first.');
         return;
       }
+      const ch = getDebugCh();
       const cur    = editor.selection.active;
       const line   = editor.document.lineAt(cur.line).text;
       const prefix = line.slice(0, cur.character);
       const col    = collect(editor.document, cur.line);
 
-      debugCh.appendLine('═══ Erelang Completion Context ═══');
-      debugCh.appendLine(`cursor:       ${cur.line + 1}:${cur.character + 1}`);
-      debugCh.appendLine(`line:         ${line}`);
-      debugCh.appendLine(`prefix:       ${prefix}`);
-      debugCh.appendLine(`foreach:      ${JSON.stringify(parseForEachHeader(line))}`);
-      debugCh.appendLine(`locals:       ${[...col.locals].join(', ')      || 'none'}`);
-      debugCh.appendLine(`arrays:       ${[...col.arrays].join(', ')      || 'none'}`);
-      debugCh.appendLine(`dictionaries: ${[...col.dictionaries].join(', ') || 'none'}`);
-      debugCh.appendLine(`foreachCtx:   ${isForeachColonCtx(prefix)}`);
-      debugCh.appendLine(`dictLitCtx:   ${isDictLiteralCtx(prefix)}`);
-      debugCh.appendLine('');
-      debugCh.show(true);
+      ch.appendLine('Erelang Completion Context');
+      ch.appendLine(`cursor:       ${cur.line + 1}:${cur.character + 1}`);
+      ch.appendLine(`line:         ${line}`);
+      ch.appendLine(`prefix:       ${prefix}`);
+      ch.appendLine(`foreach:      ${JSON.stringify(parseForEachHeader(line))}`);
+      ch.appendLine(`locals:       ${[...col.locals].join(', ')      || 'none'}`);
+      ch.appendLine(`arrays:       ${[...col.arrays].join(', ')      || 'none'}`);
+      ch.appendLine(`dictionaries: ${[...col.dictionaries].join(', ') || 'none'}`);
+      ch.appendLine(`foreachCtx:   ${isForeachColonCtx(prefix)}`);
+      ch.appendLine(`dictLitCtx:   ${isDictLiteralCtx(prefix)}`);
+      ch.appendLine('');
+      ch.show(true);
       vscode.window.showInformationMessage('Context dumped → Output > Erelang Language Debug');
     })
   );
 
-  // Completions — `.` for members, `#` for includes. No work on backspace.
   ctx.subscriptions.push(
     vscode.languages.registerCompletionItemProvider(
       { language: 'erelang' },
       new ErelangCompletionProvider(),
-      '#', '.', '<', '"', '/', ' ',
+      '#', '.', '<', '"', '/',
     ),
   );
   ctx.subscriptions.push(

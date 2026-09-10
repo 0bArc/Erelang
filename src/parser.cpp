@@ -12,6 +12,12 @@ namespace erelang {
 // call stack; fails with a clear error instead of crashing.
 namespace {
 constexpr int kMaxParseDepth = 2048;
+bool is_special_expr_keyword(std::string_view w) {
+    return w == "static_cast" || w == "dynamic_cast" || w == "reinterpret_cast"
+        || w == "bit_cast" || w == "bitcast"
+        || w == "sizeof" || w == "alignof" || w == "typeof" || w == "decltype"
+        || w == "offsetof" || w == "is_base_of";
+}
 class ParseDepthGuard {
 public:
     explicit ParseDepthGuard(int& depth) : depth_(depth) {
@@ -1459,8 +1465,11 @@ Statement Parser::parse_statement() {
     // action/builtin call like greet("World")
     const Token& id = peek();
     if (id.kind == TokenKind::Word || id.kind == TokenKind::Keyword) {
-    consume();
-    ActionCallStmt call; call.name = ident_text(id);
+        if (is_special_expr_keyword(id.text)) {
+            return ExprStmt{ parse_expression() };
+        }
+        consume();
+        ActionCallStmt call; call.name = ident_text(id);
         while (match(TokenKind::Scope)) {
             const Token& seg = consume();
             if (!(seg.kind == TokenKind::Word || seg.kind == TokenKind::Keyword)) throw std::runtime_error("Expected scoped segment after '::'");

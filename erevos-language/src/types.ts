@@ -1,7 +1,3 @@
-// =============================================================================
-// Erelang — Shared type interfaces
-// =============================================================================
-
 export interface CollectedSymbols {
   entities:     Set<string>;
   actions:      Set<string>;
@@ -21,11 +17,6 @@ export interface CollectedSymbols {
 export interface ImportedSymbols {
   aliasToActions: Map<string, Set<string>>;
   allActions:     Set<string>;
-}
-
-export interface PolicyCacheEntry {
-  mtimeMs: number;
-  values: Map<string, string>;
 }
 
 export type PrintStringContext = {

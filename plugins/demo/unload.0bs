@@ -1,0 +1,5 @@
+@erelang
+
+public action plugin_shutdown {
+    return 
+}

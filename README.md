@@ -9,7 +9,11 @@
   <img alt="Last commit" src="https://img.shields.io/github/last-commit/0bArc/Erelang?style=flat-square" />
 </p>
 
-C++20 interpreter for `.elan` on Windows. Actions, entities, enums, hooks, and import-gated builtins.
+Erelang is a scripting language with its own interpreter (`erelang.exe`). You write `.elan` files: actions, entities, enums, hooks, then `run` an entry point. The runtime is C++20 and targets Windows.
+
+It exists because the usual options were a bad fit. Python and JavaScript pull in a whole ecosystem for a few scripts. Embedding Lua or a custom DSL in C++ still meant fighting someone else's syntax and object model. Erelang is the language and the VM in one tree. You can change both.
+
+Scripts stay small on purpose. There is no GUI in the core. Filesystem, network, math, and the rest are `#include` modules, so a hello-world does not load HTTP. Entities and hooks are there for game-shaped programs (objects with methods, work that runs around `main`) without turning the language into C++.
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug

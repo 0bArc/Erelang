@@ -9,7 +9,7 @@
   <img alt="Last commit" src="https://img.shields.io/github/last-commit/0bArc/Erelang?style=flat-square" />
 </p>
 
-Scripting language and C++20 interpreter for `.elan` programs. Windows-first.
+C++20 interpreter for `.elan` on Windows. Actions, entities, enums, hooks, and import-gated builtins.
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
@@ -17,18 +17,26 @@ cmake --build build --target erelang_runner -j 8
 ./build/bin/Debug/erelang.exe examples/program.elan
 ```
 
-Optional: `-DERELANG_EXPERIMENTAL=ON` for `builtin/threads` and `builtin/monitor`.
+`-DERELANG_EXPERIMENTAL=ON` enables `builtin/threads` and `builtin/monitor`.
 
-<pre style="background:#111111;color:#cdd6f4;padding:16px 18px;border:1px solid #222;border-radius:8px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px;line-height:1.55;overflow-x:auto"><span style="color:#89b4fa">@erelang</span>
-<span style="color:#6c7086">#include</span> <span style="color:#a6e3a1">&lt;builtin/math&gt;</span> <span style="color:#cba6f7">as</span> math
+## Entity
 
-<span style="color:#cba6f7">public</span> <span style="color:#89b4fa">action</span> <span style="color:#89dceb">main</span> {
-    <span style="color:#89b4fa">print</span> math.<span style="color:#89dceb">add</span>(<span style="color:#fab387">2</span>, <span style="color:#fab387">3</span>);
-}
+![Entity](docs/entity.svg)
 
-<span style="color:#cba6f7">run</span> main;
-</pre>
+## Switch
 
-Modules are import-gated (`#include <builtin/fs> as fs`). Language, builtins, and CLI: [docs/](docs/README.md). Editor support: `erevos-language/`.
+![Switch](docs/switch.svg)
 
-Apache-2.0. See [LICENSE](LICENSE).
+## Collections
+
+![Collections](docs/collections.svg)
+
+## Filesystem and hooks
+
+![Filesystem and hooks](docs/fs.svg)
+
+## Include
+
+![Include](docs/include.svg)
+
+Docs: [docs/](docs/README.md). Editor: `erevos-language/`. License: [Apache-2.0](LICENSE).

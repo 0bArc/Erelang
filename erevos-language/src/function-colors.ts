@@ -1,8 +1,3 @@
-// =============================================================================
-// Erelang — Color defined action call sites and entity/type names
-// Decorations are reliable in Cursor; semantic tokens alone often don't paint.
-// =============================================================================
-
 import * as vscode from 'vscode';
 import { collectDefinedActions } from './semantic-tokens';
 import { collectUserTypeNames, isInStringLiteral, scanWords } from './symbols';

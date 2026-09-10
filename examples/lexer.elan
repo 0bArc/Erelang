@@ -1,0 +1,8 @@
+@erelang
+#include <builtin/parser.elan> as binary
+
+public action main() {
+    // parser
+}
+
+run main;

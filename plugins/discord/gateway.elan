@@ -1,0 +1,181 @@
+// Discord Gateway - WebSocket event loop with heartbeat
+
+#include <builtin/websocket> as ws
+
+global int discord_gw_ws = -1;
+global string discord_gw_seq = "null";
+global int discord_gw_interval = 41250;
+global int discord_gw_running = 0;
+
+// ── JSON helpers ───────────────────────────────────────────────────────────
+
+action gw_json_value(string json, string key) -> string {
+    string search = "\"" + key + "\":";
+    int pos = string.find(json, search);
+    if (pos < 0) { return ""; }
+    int start = pos + string.len(search);
+    string rest = string.substr(json, start, string.len(json) - start);
+    // Strip leading whitespace
+    string stripped = string.strip(rest);
+    if (stripped == "") { return ""; }
+    rest = stripped;
+    // Check if string literal
+    if (string.substr(rest, 0, 1) == "\"") {
+        rest = string.substr(rest, 1, string.len(rest) - 1);
+        int quoteEnd = string.find(rest, "\"");
+        if (quoteEnd < 0) { return ""; }
+        return string.substr(rest, 0, quoteEnd);
+    }
+    // Number/bool/null - read until separator
+    string val = "";
+    int i = 0;
+    while (i < string.len(rest)) {
+        if (string.substr(rest, i, 1) == "," || string.substr(rest, i, 1) == "}" || string.substr(rest, i, 1) == " " || string.substr(rest, i, 1) == "]") { break; }
+        val = val + string.substr(rest, i, 1);
+        i = i + 1;
+    }
+    return val;
+}
+
+action gw_json_object(string json, string key) -> string {
+    string search = "\"" + key + "\":";
+    int pos = string.find(json, search);
+    if (pos < 0) { return ""; }
+    int start = pos + string.len(search);
+    string rest = string.substr(json, start, string.len(json) - start);
+    rest = string.strip(rest);
+    if (rest == "" || string.substr(rest, 0, 1) != "{") { return ""; }
+    int depth = 0;
+    int i = 0;
+    while (i < string.len(rest)) {
+        if (string.substr(rest, i, 1) == "{") { depth = depth + 1; }
+        else if (string.substr(rest, i, 1) == "}") { depth = depth - 1; if (depth == 0) { break; } }
+        i = i + 1;
+    }
+    return string.substr(rest, 0, i + 1);
+}
+
+// ── Stub handlers ──────────────────────────────────────────────────────────
+
+action on_discord_event(string type, string data) {
+    print "Discord: event " + type;
+}
+
+action on_discord_ready(string data) {
+    print "Discord: ready!";
+}
+
+// ── Gateway connection ─────────────────────────────────────────────────────
+
+action discord_connect_gateway() -> int {
+    string gwUrl = discord_get_gateway_url();
+    // Discord requires query params on the gateway URL
+    if (string.find(gwUrl, "?") < 0) {
+        gwUrl = gwUrl + "/?v=10&encoding=json";
+    }
+    if (gwUrl == "") {
+        print "Discord: failed to get gateway URL";
+        return -1;
+    }
+    print "Discord: connecting to " + gwUrl;
+    discord_gw_ws = ws_connect(gwUrl);
+    if (discord_gw_ws == -1) {
+        print "Discord: WebSocket connect failed";
+        return -1;
+    }
+    int deadline = now_ms() + 10000;
+    while (now_ms() < deadline) {
+        string msg = ws_recv(discord_gw_ws);
+        if (msg != "") {
+            string op = gw_json_value(msg, "op");
+            if (op == "10") {
+                string d = gw_json_object(msg, "d");
+                string hi = gw_json_value(d, "heartbeat_interval");
+                if (hi != "") { discord_gw_interval = toint(hi); }
+                string t = discord_token;
+                int botPos = string.find(t, "Bot ");
+                if (botPos >= 0) {
+                    t = string.substr(t, 4, string.len(t) - 4);
+                }
+                string idt = "{\"op\":2,\"d\":{\"token\":\"" + t + "\",\"intents\":513,\"properties\":{\"os\":\"windows\",\"browser\":\"erelang\",\"device\":\"erelang\"}}}";
+                ws_send(discord_gw_ws, idt);
+                print "Discord: gateway identified";
+                return discord_gw_ws;
+            }
+        }
+        sleep 10ms;
+    }
+    print "Discord: gateway hello timed out";
+    ws_close(discord_gw_ws);
+    discord_gw_ws = -1;
+    return -1;
+}
+
+// ── Heartbeat ──────────────────────────────────────────────────────────────
+
+action gw_heartbeat() {
+    if (discord_gw_ws == -1) { return; }
+    string hb = "{\"op\":1,\"d\":" + discord_gw_seq + "}";
+    ws_send(discord_gw_ws, hb);
+}
+
+// ── Event loop ─────────────────────────────────────────────────────────────
+
+action discord_start() {
+    if (discord_token == "") {
+        print "Discord: not logged in - call discord_login(token) first";
+        return;
+    }
+    int gwId = discord_connect_gateway();
+    if (gwId == -1) { return; }
+    discord_gw_running = 1;
+    int lastHb = now_ms();
+
+    while (discord_gw_running != 0) {
+        string msg = ws_recv(gwId);
+        if (msg != "") {
+            string s = gw_json_value(msg, "s");
+            if (s != "" && s != "null") { discord_gw_seq = s; }
+
+            string op = gw_json_value(msg, "op");
+            string t = gw_json_value(msg, "t");
+
+            if (op == "0") {
+                if (t == "READY") { on_discord_ready(msg); }
+                else if (t == "INTERACTION_CREATE") {
+                    on_discord_interaction(msg);
+                    on_discord_event(t, gw_json_object(msg, "d"));
+                }
+                else { on_discord_event(t, msg); }
+            }
+            else if (op == "7") {
+                print "Discord: server requested reconnect";
+                ws_close(gwId);
+                sleep 2000ms;
+                gwId = discord_connect_gateway();
+                if (gwId == -1) { discord_gw_running = 0; }
+                lastHb = now_ms();
+                continue;
+            }
+
+            lastHb = now_ms();
+        }
+
+        int sinceHb = now_ms() - lastHb;
+        if (sinceHb >= discord_gw_interval) {
+            gw_heartbeat();
+            lastHb = now_ms();
+        }
+
+        sleep 50ms;
+    }
+}
+
+action discord_stop() {
+    discord_gw_running = 0;
+    if (discord_gw_ws != -1) {
+        ws_close(discord_gw_ws);
+        discord_gw_ws = -1;
+    }
+    print "Discord: stopped";
+}

@@ -1,21 +1,29 @@
 @erelang
 
-hook onStart { }
-hook onEnd { }
+hook onStart {
+  print "[dbg] start";
+}
+
+hook onEnd {
+  print "[dbg] end";
+}
 
 public action breakpoint(label: str) {
-  print "[dbg] breakpoint: {label}"
-  pause
+  print "[dbg] breakpoint: {label}";
 }
 
 public action next(label: str) {
-  print "[dbg] step: {label}"
-  pause
+  print "[dbg] step: {label}";
 }
 
 public action trace(label: str, value: str) {
-  print "[dbg] {label} = {value}"
+  print "[dbg] {label} = {value}";
 }
-// aliases for compatibility
-public action bp(label: str) { breakpoint(label) }
-public action step(label: str) { next(label) }
+
+public action bp(label: str) {
+  breakpoint(label);
+}
+
+public action step(label: str) {
+  next(label);
+}

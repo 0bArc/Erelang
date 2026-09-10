@@ -1,19 +1,9 @@
 @erelang
 
-#include <../lib/debugger.elan>
-
-hook onStart {
-    print "=== Debugger ===";
-}
-
-hook onEnd {
-    print "=== End ===";
-}
+#include "../lib/debugger.elan"
 
 public action debug_main {
-    return;
+  print "[dbg] debug_main";
 }
 
-
 run debug_main;
-

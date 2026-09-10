@@ -4,180 +4,239 @@
 #include "erelang/runtime.hpp"
 #include "erelang/runtime_helpers.hpp"
 #include "erelang/runtime_builtins.hpp"
+#include "erelang/bytecode.hpp"
 #include "erelang/lexer.hpp"
 #include "erelang/parser.hpp"
 
-#include <algorithm>
-#include <cmath>
 #include <cctype>
-#include <iostream>
 #include <memory>
 #include <optional>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <thread>
+#include <type_traits>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 
 namespace erelang {
+namespace {
 
-bool Runtime::try_get_int_var(const Env& env, const std::string& name, int64_t& out) const {
-    if (auto it = env.intVars.find(name); it != env.intVars.end()) {
-        out = it->second;
-        return true;
+void collect_action_slot_names(const Block& block,
+                               std::vector<std::string>& names,
+                               std::unordered_set<std::string>& seen) {
+    auto add = [&](const std::string& name) {
+        if (name.empty()) return;
+        if (!seen.insert(name).second) return;
+        names.push_back(name);
+    };
+
+    for (const auto& stmt : block.stmts) {
+        std::visit([&](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, LetStmt>) {
+                add(node.name);
+            } else if constexpr (std::is_same_v<T, SetStmt>) {
+                if (!node.isMember) add(node.varOrField);
+            } else if constexpr (std::is_same_v<T, InputStmt>) {
+                add(node.name);
+            } else if constexpr (std::is_same_v<T, ForInStmt>) {
+                add(node.var);
+                if (node.valueVar) add(*node.valueVar);
+                if (node.body) collect_action_slot_names(*node.body, names, seen);
+            } else if constexpr (std::is_same_v<T, ForStmt>) {
+                if (node.init) collect_action_slot_names(*node.init, names, seen);
+                if (node.step) collect_action_slot_names(*node.step, names, seen);
+                if (node.body) collect_action_slot_names(*node.body, names, seen);
+            } else if constexpr (std::is_same_v<T, IfStmt>) {
+                if (node.thenBlk) collect_action_slot_names(*node.thenBlk, names, seen);
+                if (node.elseBlk) collect_action_slot_names(*node.elseBlk, names, seen);
+            } else if constexpr (std::is_same_v<T, WhileStmt>) {
+                if (node.body) collect_action_slot_names(*node.body, names, seen);
+            } else if constexpr (std::is_same_v<T, DoWhileStmt>) {
+                if (node.body) collect_action_slot_names(*node.body, names, seen);
+            } else if constexpr (std::is_same_v<T, RepeatStmt>) {
+                if (node.body) collect_action_slot_names(*node.body, names, seen);
+            } else if constexpr (std::is_same_v<T, SwitchStmt>) {
+                for (const auto& c : node.cases) {
+                    if (c.body) collect_action_slot_names(*c.body, names, seen);
+                }
+                if (node.defaultBlk) collect_action_slot_names(*node.defaultBlk, names, seen);
+            } else if constexpr (std::is_same_v<T, TryCatchStmt>) {
+                add(node.catchVar);
+                if (node.tryBlk) collect_action_slot_names(*node.tryBlk, names, seen);
+                if (node.catchBlk) collect_action_slot_names(*node.catchBlk, names, seen);
+            } else if constexpr (std::is_same_v<T, UnsafeStmt>) {
+                if (node.body) collect_action_slot_names(*node.body, names, seen);
+            } else if constexpr (std::is_same_v<T, std::shared_ptr<ParallelStmt>>) {
+                if (node) collect_action_slot_names(node->body, names, seen);
+            }
+        }, stmt);
     }
-    if (auto it = env.vars.find(name); it != env.vars.end()) {
-        if (!is_int_string(it->second)) return false;
-        out = to_int(it->second);
-        return true;
-    }
-    if (auto it = globalIntVars_.find(name); it != globalIntVars_.end()) {
-        out = it->second;
-        return true;
-    }
-    if (auto it = globalVars_.find(name); it != globalVars_.end()) {
-        if (!is_int_string(it->second)) return false;
-        out = to_int(it->second);
-        return true;
-    }
-    return false;
 }
 
-void Runtime::set_var_int(Env& env, const std::string& name, int64_t value) const {
-    env.intVars[name] = value;
-    env.vars.erase(name);
-    if (globalNames_.count(name)) {
-        globalIntVars_[name] = value;
-        globalVars_.erase(name);
+ValueBinOp to_value_bin_op(BinOp op) {
+    switch (op) {
+        case BinOp::Add: return ValueBinOp::Add;
+        case BinOp::Sub: return ValueBinOp::Sub;
+        case BinOp::Mul: return ValueBinOp::Mul;
+        case BinOp::Div: return ValueBinOp::Div;
+        case BinOp::Mod: return ValueBinOp::Mod;
+        case BinOp::Pow: return ValueBinOp::Pow;
+        case BinOp::EQ: return ValueBinOp::Eq;
+        case BinOp::NE: return ValueBinOp::Ne;
+        case BinOp::LT: return ValueBinOp::Lt;
+        case BinOp::LE: return ValueBinOp::Le;
+        case BinOp::GT: return ValueBinOp::Gt;
+        case BinOp::GE: return ValueBinOp::Ge;
+        case BinOp::And: return ValueBinOp::And;
+        case BinOp::Or: return ValueBinOp::Or;
+        case BinOp::Coalesce: return ValueBinOp::Coalesce;
+    }
+    return ValueBinOp::Add;
+}
+
+std::optional<std::pair<int64_t, std::string>> parse_unit_value(const Value& value) {
+    if (value.kind != ValueKind::String) return std::nullopt;
+    const std::string& text = value.string_ref();
+    if (text.empty()) return std::nullopt;
+
+    size_t i = 0;
+    if (text[i] == '-' || text[i] == '+') ++i;
+    const size_t digitsBegin = i;
+    while (i < text.size() && std::isdigit(static_cast<unsigned char>(text[i]))) ++i;
+    if (i == digitsBegin || i >= text.size() ||
+        !std::isalpha(static_cast<unsigned char>(text[i]))) {
+        return std::nullopt;
+    }
+    for (size_t j = i; j < text.size(); ++j) {
+        if (std::isspace(static_cast<unsigned char>(text[j]))) return std::nullopt;
+    }
+    try {
+        return std::make_pair(std::stoll(text.substr(0, i)), text.substr(i));
+    } catch (...) {
+        return std::nullopt;
     }
 }
 
-void Runtime::set_var_str(Env& env, const std::string& name, const std::string& value) const {
-    env.vars[name] = value;
-    env.intVars.erase(name);
-    if (globalNames_.count(name)) {
-        globalVars_[name] = value;
-        globalIntVars_.erase(name);
-    }
-}
+} // namespace
 
-bool Runtime::try_eval_int(const Expr& e, const Env& env, int64_t& out) const {
-    if (std::holds_alternative<ExprNumber>(e.node)) {
-        out = std::get<ExprNumber>(e.node).v;
-        return true;
-    }
-    if (std::holds_alternative<ExprBool>(e.node)) {
-        out = std::get<ExprBool>(e.node).v ? 1 : 0;
-        return true;
-    }
-    if (std::holds_alternative<ExprIdent>(e.node)) {
-        return try_get_int_var(env, std::get<ExprIdent>(e.node).name, out);
-    }
-    if (std::holds_alternative<UnaryExpr>(e.node)) {
-        const auto& u = std::get<UnaryExpr>(e.node);
-        int64_t v = 0;
-        if (!u.expr || !try_eval_int(*u.expr, env, v)) return false;
-        if (u.op == UnOp::Neg) { out = -v; return true; }
-        if (u.op == UnOp::Not) { out = (v == 0) ? 1 : 0; return true; }
-        return false;
-    }
-    if (std::holds_alternative<BinaryExpr>(e.node)) {
-        const auto& b = std::get<BinaryExpr>(e.node);
-        int64_t li = 0, ri = 0;
-        if (!b.left || !b.right) return false;
-        if (!try_eval_int(*b.left, env, li) || !try_eval_int(*b.right, env, ri)) return false;
-        switch (b.op) {
-            case BinOp::Add: out = li + ri; return true;
-            case BinOp::Sub: out = li - ri; return true;
-            case BinOp::Mul: out = li * ri; return true;
-            case BinOp::Div: if (ri == 0) return false; out = li / ri; return true;
-            case BinOp::Mod: if (ri == 0) return false; out = li % ri; return true;
-            case BinOp::LT: out = (li < ri) ? 1 : 0; return true;
-            case BinOp::LE: out = (li <= ri) ? 1 : 0; return true;
-            case BinOp::GT: out = (li > ri) ? 1 : 0; return true;
-            case BinOp::GE: out = (li >= ri) ? 1 : 0; return true;
-            case BinOp::EQ: out = (li == ri) ? 1 : 0; return true;
-            case BinOp::NE: out = (li != ri) ? 1 : 0; return true;
-            default: return false;
+Value Runtime::env_get(const Env& env, const std::string& name) const {
+    if (env.useSlots) {
+        auto slot = env.slotIndex.find(name);
+        if (slot != env.slotIndex.end() && slot->second >= 0 &&
+            static_cast<size_t>(slot->second) < env.slots.size()) {
+            const Value& slotted = env.slots[static_cast<size_t>(slot->second)];
+            if (slotted.kind != ValueKind::Null) return slotted;
+            if (auto it = env.vars.find(name); it != env.vars.end()) return it->second;
+            return slotted;
         }
     }
-    if (std::holds_alternative<PostfixExpr>(e.node)) {
-        // Value of postfix is pre-increment value; mutation handled by ExprStmt.
-        const auto& pe = std::get<PostfixExpr>(e.node);
-        if (!pe.operand || !std::holds_alternative<ExprIdent>(pe.operand->node)) return false;
-        return try_get_int_var(env, std::get<ExprIdent>(pe.operand->node).name, out);
+    if (auto it = env.vars.find(name); it != env.vars.end()) return it->second;
+    if (auto it = globalVars_.find(name); it != globalVars_.end()) return it->second;
+    return Value::null_value();
+}
+
+void Runtime::env_set(Env& env, const std::string& name, Value value) const {
+    if (env.useSlots) {
+        auto slot = env.slotIndex.find(name);
+        if (slot != env.slotIndex.end() && slot->second >= 0) {
+            const size_t index = static_cast<size_t>(slot->second);
+            if (index >= env.slots.size()) env.slots.resize(index + 1);
+            env.slots[index] = value;
+            env.vars[name] = value;
+            if (globalNames_.count(name)) globalVars_[name] = std::move(value);
+            return;
+        }
     }
-    if (std::holds_alternative<PrefixExpr>(e.node)) {
-        const auto& pe = std::get<PrefixExpr>(e.node);
-        if (!pe.operand || !std::holds_alternative<ExprIdent>(pe.operand->node)) return false;
-        int64_t cur = 0;
-        if (!try_get_int_var(env, std::get<ExprIdent>(pe.operand->node).name, cur)) return false;
-        out = cur + (pe.isInc ? 1 : -1);
-        return true;
+    env.vars[name] = value;
+    if (globalNames_.count(name)) globalVars_[name] = std::move(value);
+}
+
+void Runtime::prepare_action_slots(Env& env, const Action& action) const {
+    std::vector<std::string> names;
+    std::unordered_set<std::string> seen;
+    names.reserve(action.params.size() + 8);
+
+    for (const auto& param : action.params) {
+        if (param.name.empty()) continue;
+        if (seen.insert(param.name).second) names.push_back(param.name);
     }
-    return false;
+    collect_action_slot_names(action.body, names, seen);
+
+    if (names.empty()) {
+        env.useSlots = false;
+        env.slotIndex.clear();
+        env.slotNames.clear();
+        env.slots.clear();
+        return;
+    }
+
+    env.slotIndex.clear();
+    env.slotIndex.reserve(names.size());
+    env.slotNames = names;
+    for (int i = 0; i < static_cast<int>(names.size()); ++i) {
+        env.slotIndex.emplace(names[static_cast<size_t>(i)], i);
+    }
+
+    env.slots.assign(names.size(), Value::null_value());
+    for (const auto& name : names) {
+        const int idx = env.slotIndex[name];
+        if (auto it = env.vars.find(name); it != env.vars.end()) {
+            env.slots[static_cast<size_t>(idx)] = it->second;
+        } else if (auto git = globalVars_.find(name); git != globalVars_.end()) {
+            env.slots[static_cast<size_t>(idx)] = git->second;
+        }
+    }
+    env.useSlots = true;
 }
 
 std::optional<ExprPtr> Runtime::parse_interpolation_expr(std::string_view exprText) const {
     const std::string key = trim_copy(exprText);
-    if (key.empty()) {
-        return std::nullopt;
-    }
+    if (key.empty()) return std::nullopt;
 
     {
         std::lock_guard<std::mutex> lock(interpolationExprCacheMutex_);
         auto it = interpolationExprCache_.find(key);
-        if (it != interpolationExprCache_.end()) {
-            return it->second;
-        }
+        if (it != interpolationExprCache_.end()) return it->second;
     }
 
     try {
         std::string script;
         script.reserve(key.size() + 64);
-        script += "@erelang\n";
-        script += "public action __fmt {\n";
-        script += "  return ";
+        script += "@erelang\npublic action __fmt {\n  return ";
         script += key;
         script += ";\n}";
 
-        LexerOptions lxopts;
-        lxopts.enableDurations = true;
-        lxopts.enableUnits = true;
-        lxopts.enablePolyIdentifiers = true;
-        lxopts.emitDocComments = false;
-        lxopts.emitComments = false;
-        Lexer lexer(script, lxopts);
+        LexerOptions options;
+        options.enableDurations = true;
+        options.enableUnits = true;
+        options.enablePolyIdentifiers = true;
+        options.emitDocComments = false;
+        options.emitComments = false;
+        Lexer lexer(script, options);
         Parser parser(lexer.lex());
         Program program = parser.parse();
         for (const auto& action : program.actions) {
-            if (action.name != "__fmt") {
-                continue;
-            }
+            if (action.name != "__fmt") continue;
             for (const auto& stmt : action.body.stmts) {
-                if (!std::holds_alternative<ReturnStmt>(stmt)) {
-                    continue;
-                }
+                if (!std::holds_alternative<ReturnStmt>(stmt)) continue;
                 const auto& ret = std::get<ReturnStmt>(stmt);
-                if (!ret.value.has_value() || !(*ret.value)) {
-                    return std::nullopt;
-                }
+                if (!ret.value.has_value() || !(*ret.value)) return std::nullopt;
                 ExprPtr parsed = *ret.value;
-                {
-                    std::lock_guard<std::mutex> lock(interpolationExprCacheMutex_);
-                    interpolationExprCache_[key] = parsed;
-                }
+                std::lock_guard<std::mutex> lock(interpolationExprCacheMutex_);
+                interpolationExprCache_[key] = parsed;
                 return parsed;
             }
         }
     } catch (...) {
         return std::nullopt;
     }
-
     return std::nullopt;
 }
 
-std::optional<std::string> Runtime::eval_interpolation_expr(std::string_view exprText, const Env& env) const {
+std::optional<std::string> Runtime::eval_interpolation_expr(
+    std::string_view exprText, const Env& env) const {
     auto parsed = parse_interpolation_expr(exprText);
     if (!parsed.has_value() || !(*parsed)) {
         std::string raw = trim_copy(exprText);
@@ -200,508 +259,393 @@ std::optional<std::string> Runtime::eval_interpolation_expr(std::string_view exp
     }
 }
 
-std::string Runtime::eval_string(const Expr& e, const Env& env) const {
+Value Runtime::eval_value(const Expr& e, const Env& env) const {
+    {
+        const bool candidate =
+            std::holds_alternative<BinaryExpr>(e.node) ||
+            std::holds_alternative<UnaryExpr>(e.node) ||
+            std::holds_alternative<ExprNumber>(e.node) ||
+            std::holds_alternative<ExprBool>(e.node) ||
+            std::holds_alternative<ExprString>(e.node) ||
+            std::holds_alternative<ExprNull>(e.node);
+        if (candidate) {
+            Chunk chunk;
+            if (try_compile_expr(e, chunk, &env)) {
+                return run_chunk(chunk, const_cast<Runtime&>(*this), const_cast<Env&>(env));
+            }
+        }
+    }
+
     if (std::holds_alternative<ExprString>(e.node)) {
-        const auto& n = std::get<ExprString>(e.node);
-        std::string out; out.reserve(n.v.size());
-        const std::string& s = n.v;
-        for (size_t i=0;i<s.size();){
-            if (s[i]=='{') {
-                size_t j = s.find('}', i+1);
-                if (j!=std::string::npos) {
-                    std::string key = s.substr(i+1, j-(i+1));
-                    std::string trimmedKey = trim_copy(key);
-                    int64_t iv = 0;
-                    if (try_get_int_var(env, trimmedKey, iv)) {
-                        out += std::to_string(iv);
-                    } else {
-                    auto it = env.vars.find(trimmedKey);
-                    if (it != env.vars.end()) {
-                        out += it->second;
-                    } else {
-                        auto git = globalVars_.find(trimmedKey);
-                        if (git != globalVars_.end()) {
-                            out += git->second;
-                        } else if (auto exprValue = eval_interpolation_expr(trimmedKey, env); exprValue.has_value()) {
-                            out += *exprValue;
-                        } else {
-                            out += '{';
-                            out += key;
-                            out += '}';
-                        }
-                    }
-                    }
-                    i = j+1; continue;
-                }
-            }
-            out.push_back(s[i++]);
-        }
-        return out;
+        return Value::from_string(std::get<ExprString>(e.node).v);
     }
-    if (std::holds_alternative<ExprNull>(e.node)) {
-        return "nullptr";
-    }
+    if (std::holds_alternative<ExprNull>(e.node)) return Value::null_value();
     if (std::holds_alternative<ExprNumber>(e.node)) {
-        const auto& n = std::get<ExprNumber>(e.node);
-        // Preserve the literal spelling only when it round-trips as a plain
-        // decimal int/float (e.g. "42", "2.5"). Non-decimal literals like
-        // hex ("0x1e") must be emitted as their numeric value.
-        if (!n.raw.empty() && (is_int_string(n.raw) || is_float_string(n.raw))) return n.raw;
-        return std::to_string(n.v);
+        const auto& number = std::get<ExprNumber>(e.node);
+        if (number.isFloatLiteral) {
+            try {
+                return Value::from_float(std::stod(number.raw));
+            } catch (...) {
+                return Value::from_float(static_cast<double>(number.v));
+            }
+        }
+        return Value::from_int(number.v);
     }
-    if (std::holds_alternative<ExprBool>(e.node)) return std::get<ExprBool>(e.node).v ? "true" : "false";
+    if (std::holds_alternative<ExprBool>(e.node)) {
+        return Value::from_bool(std::get<ExprBool>(e.node).v);
+    }
     if (std::holds_alternative<ExprIdent>(e.node)) {
-        const auto& n = std::get<ExprIdent>(e.node);
-        int64_t iv = 0;
-        if (try_get_int_var(env, n.name, iv)) {
-            return std::to_string(iv);
-        }
-        auto it = env.vars.find(n.name);
-        if (it!=env.vars.end()) {
-            if (it->second.rfind("struct:", 0) == 0) {
-                int id = g_nextDictId++;
+        const std::string& name = std::get<ExprIdent>(e.node).name;
+        Value value = env_get(env, name);
+        const bool found =
+            (env.useSlots && env.slotIndex.count(name)) ||
+            env.vars.count(name) || globalVars_.count(name);
+        if (found) {
+            if (value.rfind("struct:", 0) == 0) {
+                const int id = g_nextDictId++;
                 auto& dict = g_dicts[id];
-                const std::string prefix = n.name + ".";
+                const std::string prefix = name + ".";
                 for (const auto& kv : env.vars) {
-                    if (kv.first.rfind(prefix, 0) == 0) {
-                        dict[kv.first.substr(prefix.size())] = kv.second;
-                    }
+                    if (kv.first.rfind(prefix, 0) == 0)
+                        dict[kv.first.substr(prefix.size())] = to_display_string(kv.second);
                 }
-                return std::string("dict:") + std::to_string(id);
-            }
-            return it->second;
-        }
-        auto git = globalVars_.find(n.name);
-        if (git != globalVars_.end()) {
-            if (git->second.rfind("struct:", 0) == 0) {
-                int id = g_nextDictId++;
-                auto& dict = g_dicts[id];
-                const std::string prefix = n.name + ".";
                 for (const auto& kv : globalVars_) {
-                    if (kv.first.rfind(prefix, 0) == 0) {
-                        dict[kv.first.substr(prefix.size())] = kv.second;
-                    }
+                    if (kv.first.rfind(prefix, 0) == 0)
+                        dict[kv.first.substr(prefix.size())] = to_display_string(kv.second);
                 }
-                return std::string("dict:") + std::to_string(id);
+                return make_handle_value(HandleKind::Dict, static_cast<uint32_t>(id));
             }
-            return git->second;
+            return value;
         }
-        if (env.objects.find(n.name) != env.objects.end()) return n.name;
-        std::string lowered = n.name;
-        for (auto& ch : lowered) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        if (env.objects.find(name) != env.objects.end()) return Value::from_string(name);
+
+        std::string lowered = name;
+        for (char& ch : lowered)
+            ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
         if (lowered == "array") {
-            int id = g_nextListId++;
+            const int id = g_nextListId++;
             g_lists[id] = {};
-            return std::string("list:") + std::to_string(id);
+            return make_handle_value(HandleKind::List, static_cast<uint32_t>(id));
         }
-        if (lowered == "map" || lowered == "dictionary" || lowered == "dict" || lowered == "hashmap") {
-            int id = g_nextDictId++;
+        if (lowered == "map" || lowered == "dictionary" ||
+            lowered == "dict" || lowered == "hashmap") {
+            const int id = g_nextDictId++;
             g_dicts[id] = {};
-            return std::string("dict:") + std::to_string(id);
+            return make_handle_value(HandleKind::Dict, static_cast<uint32_t>(id));
         }
-        return n.name;
+        return Value::from_string(name);
     }
     if (std::holds_alternative<UnaryExpr>(e.node)) {
-        const auto& u = std::get<UnaryExpr>(e.node);
-        std::string v = eval_string(*u.expr, env);
-        switch (u.op) {
-            case UnOp::Neg: {
-                if (is_float_string(v)) {
-                    const double dv = to_double(v);
-                    return std::to_string(-dv);
-                }
-                return std::to_string(-to_int(v));
+        const auto& unary = std::get<UnaryExpr>(e.node);
+        if (!unary.expr) return Value::null_value();
+        if (unary.op == UnOp::Neg)
+            return apply_unary(ValueUnOp::Neg, eval_value(*unary.expr, env));
+        if (unary.op == UnOp::Not)
+            return apply_unary(ValueUnOp::Not, eval_value(*unary.expr, env));
+
+        Value value = eval_value(*unary.expr, env);
+        const std::string text = to_display_string(value);
+        if (unary.op == UnOp::Deref) {
+            auto dereference_name = [&](const std::string& ref) -> Value {
+                if (ref.rfind("ref:", 0) == 0) return env_get(env, ref.substr(4));
+                return Value::null_value();
+            };
+            if (text.rfind("ref:", 0) == 0) return dereference_name(text);
+            if (auto id = parse_pointer_handle(text); id.has_value()) {
+                auto it = g_ptrs.find(*id);
+                if (it == g_ptrs.end()) return Value::null_value();
+                if (it->second.rfind("ref:", 0) == 0) return dereference_name(it->second);
+                return value_from_legacy_string(it->second);
             }
-            case UnOp::Not: return is_truthy(v) ? "false" : "true";
-            case UnOp::Deref: {
-                if (v.rfind("ref:", 0) == 0) {
-                    const std::string varName = v.substr(4);
-                    if (auto it = env.vars.find(varName); it != env.vars.end()) return it->second;
-                    if (auto git = globalVars_.find(varName); git != globalVars_.end()) return git->second;
-                    return {};
-                }
-                if (auto idOpt = parse_pointer_handle(v); idOpt.has_value()) {
-                    const int id = *idOpt;
-                    auto it = g_ptrs.find(id);
-                    if (it != g_ptrs.end()) {
-                        if (it->second.rfind("ref:", 0) == 0) {
-                            const std::string varName = it->second.substr(4);
-                            if (auto vit = env.vars.find(varName); vit != env.vars.end()) return vit->second;
-                            if (auto git = globalVars_.find(varName); git != globalVars_.end()) return git->second;
-                            return {};
-                        }
-                        return it->second;
-                    }
-                    return {};
-                }
-                return {};
-            }
-            case UnOp::AddressOf: {
-                if (std::holds_alternative<ExprIdent>(u.expr->node)) {
-                    const auto& id = std::get<ExprIdent>(u.expr->node).name;
-                    const int ptrId = g_nextPtrId++;
-                    g_ptrs[ptrId] = std::string("ref:") + id;
-                    return format_pointer_handle(ptrId);
-                }
-                const int id = g_nextPtrId++;
-                g_ptrs[id] = v;
-                return format_pointer_handle(id);
-            }
+            return Value::null_value();
         }
+        if (std::holds_alternative<ExprIdent>(unary.expr->node)) {
+            const std::string& name = std::get<ExprIdent>(unary.expr->node).name;
+            const int id = g_nextPtrId++;
+            g_ptrs[id] = "ref:" + name;
+            return make_handle_value(HandleKind::Ptr, static_cast<uint32_t>(id));
+        }
+        const int id = g_nextPtrId++;
+        g_ptrs[id] = text;
+        return make_handle_value(HandleKind::Ptr, static_cast<uint32_t>(id));
     }
     if (std::holds_alternative<BinaryExpr>(e.node)) {
-        const auto& b = std::get<BinaryExpr>(e.node);
-        // Fast path: pure int arithmetic / compare without string round-trips.
-        {
-            int64_t iv = 0;
-            if (try_eval_int(e, env, iv)) {
-                switch (b.op) {
-                    case BinOp::LT: case BinOp::LE: case BinOp::GT: case BinOp::GE:
-                    case BinOp::EQ: case BinOp::NE:
-                        return iv ? "true" : "false";
-                    default:
-                        return std::to_string(iv);
-                }
+        const auto& binary = std::get<BinaryExpr>(e.node);
+        if (!binary.left || !binary.right) return Value::null_value();
+        Value left = eval_value(*binary.left, env);
+        Value right = eval_value(*binary.right, env);
+        if (binary.op == BinOp::Add || binary.op == BinOp::Sub) {
+            auto leftUnit = parse_unit_value(left);
+            auto rightUnit = parse_unit_value(right);
+            if (leftUnit && rightUnit && leftUnit->second == rightUnit->second) {
+                const int64_t result = binary.op == BinOp::Add
+                    ? leftUnit->first + rightUnit->first
+                    : leftUnit->first - rightUnit->first;
+                return Value::from_string(std::to_string(result) + leftUnit->second);
             }
         }
-        std::string ls = eval_string(*b.left, env);
-        std::string rs = eval_string(*b.right, env);
-        int64_t li = to_int(ls), ri = to_int(rs);
-        auto is_explicit_string_expr = [](const ExprPtr& expr) -> bool {
-            if (!expr) return false;
-            if (std::holds_alternative<ExprString>(expr->node)) return true;
-            if (std::holds_alternative<FunctionCallExpr>(expr->node)) {
-                const auto& fc = std::get<FunctionCallExpr>(expr->node);
-                if (fc.name == "tostr" || fc.name == "toString") return true;
-                if (fc.name.rfind("string.", 0) == 0) return true;
-            }
-            return false;
-        };
-        // Lightweight unit arithmetic: pattern <int><unit>, same unit on both sides
-        auto parseUnit = [](const std::string& s) -> std::optional<std::pair<long long,std::string>> {
-            if (s.empty() || !std::isdigit(static_cast<unsigned char>(s[0]))) return std::nullopt;
-            size_t i = 0; while (i < s.size() && std::isdigit(static_cast<unsigned char>(s[i]))) ++i;
-            if (i == 0 || i >= s.size()) return std::nullopt; // must have unit suffix
-            // Unit must start with a letter
-            if (!std::isalpha(static_cast<unsigned char>(s[i]))) return std::nullopt;
-            std::string unit = s.substr(i);
-            // Basic validation: disallow whitespace
-            for (char ch : unit) { if (std::isspace(static_cast<unsigned char>(ch))) return std::nullopt; }
-            long long value = 0; try { value = std::stoll(s.substr(0,i)); } catch (...) { return std::nullopt; }
-            return std::make_pair(value, unit);
-        };
-        auto lu = parseUnit(ls);
-        auto ru = parseUnit(rs);
-        auto unitAddSub = [&](BinOp op)->std::string {
-            if (lu && ru && lu->second == ru->second) {
-                if (op == BinOp::Add) return std::to_string(lu->first + ru->first) + lu->second;
-                if (op == BinOp::Sub) return std::to_string(lu->first - ru->first) + lu->second;
-            }
-            return std::string();
-        };
-        auto is_char_like = [](const std::string& s) -> bool {
-            return s.size() == 1 && std::isalpha(static_cast<unsigned char>(s[0])) != 0;
-        };
-        auto require_int_operands = [&](const char* opName) {
-            if (!is_int_string(ls) || !is_int_string(rs)) {
-                throw std::runtime_error(std::string("Illegal operation: ") + opName + " requires int operands");
-            }
-        };
-        switch (b.op) {
-            case BinOp::Add: {
-                if (auto r = unitAddSub(BinOp::Add); !r.empty()) return r;
-                const bool leftIsInt = is_int_string(ls);
-                const bool rightIsInt = is_int_string(rs);
-                if ((is_char_like(ls) && rightIsInt) || (leftIsInt && is_char_like(rs))) {
-                    throw std::runtime_error("Illegal operation: char + int");
-                }
-                if (leftIsInt && rightIsInt) {
-                    if (is_explicit_string_expr(b.left) || is_explicit_string_expr(b.right)) return ls + rs;
-                    return std::to_string(li + ri);
-                }
-                if (!leftIsInt && !rightIsInt) return ls + rs;
-                if (!leftIsInt && rightIsInt) return ls + rs;
-                if (leftIsInt && !rightIsInt) return ls + rs;
-            }
-            case BinOp::Sub: {
-                if (auto r = unitAddSub(BinOp::Sub); !r.empty()) return r;
-                require_int_operands("-");
-                return std::to_string(li - ri);
-            }
-            case BinOp::Mul:
-                require_int_operands("*");
-                return std::to_string(li * ri);
-            case BinOp::Div:
-                require_int_operands("/");
-                if (ri == 0) throw std::runtime_error("Division by zero");
-                return std::to_string(li / ri);
-            case BinOp::Mod:
-                require_int_operands("%");
-                if (ri == 0) throw std::runtime_error("Modulo by zero");
-                return std::to_string(li % ri);
-            case BinOp::Pow: {
-                require_int_operands("^");
-                if (ri < 0) return "0";
-                if (ri > 62) throw std::runtime_error("Exponent too large for integer power");
-                int64_t value = 1;
-                for (int64_t i = 0; i < ri; ++i) value *= li;
-                return std::to_string(value);
-            }
-            case BinOp::EQ: return (ls == rs) ? "true" : "false";
-            case BinOp::NE: return (ls != rs) ? "true" : "false";
-            case BinOp::LT: return (is_int_string(ls) && is_int_string(rs) ? (li < ri) : (ls < rs)) ? "true" : "false";
-            case BinOp::LE: return (is_int_string(ls) && is_int_string(rs) ? (li <= ri) : (ls <= rs)) ? "true" : "false";
-            case BinOp::GT: return (is_int_string(ls) && is_int_string(rs) ? (li > ri) : (ls > rs)) ? "true" : "false";
-            case BinOp::GE: return (is_int_string(ls) && is_int_string(rs) ? (li >= ri) : (ls >= rs)) ? "true" : "false";
-            case BinOp::And: return (is_truthy(ls) && is_truthy(rs)) ? "true" : "false";
-            case BinOp::Or: return (is_truthy(ls) || is_truthy(rs)) ? "true" : "false";
-            case BinOp::Coalesce: {
-                const bool leftNullish = ls.empty() || ls == "nullptr";
-                return (!leftNullish ? ls : rs);
-            }
-        }
+        return apply_binary(to_value_bin_op(binary.op), left, right);
     }
     if (std::holds_alternative<TernaryExpr>(e.node)) {
-        const auto& t = std::get<TernaryExpr>(e.node);
-        const std::string cond = eval_string(*t.cond, env);
-        const bool truthy = is_truthy(cond);
-        return truthy ? eval_string(*t.thenExpr, env) : eval_string(*t.elseExpr, env);
+        const auto& ternary = std::get<TernaryExpr>(e.node);
+        if (!ternary.cond) return Value::null_value();
+        return is_truthy(eval_value(*ternary.cond, env))
+            ? eval_value(*ternary.thenExpr, env)
+            : eval_value(*ternary.elseExpr, env);
     }
     if (std::holds_alternative<MemberExpr>(e.node)) {
-        const auto& m = std::get<MemberExpr>(e.node);
-        auto oit = env.objects.find(m.objectName);
-        if (oit != env.objects.end()) {
-            auto fit = oit->second->fields.find(m.field);
-            if (fit != oit->second->fields.end()) return fit->second;
+        const auto& member = std::get<MemberExpr>(e.node);
+        if (auto object = env.objects.find(member.objectName); object != env.objects.end()) {
+            auto field = object->second->fields.find(member.field);
+            if (field != object->second->fields.end())
+                return value_from_legacy_string(field->second);
         }
-        auto sv = env.vars.find(m.objectName);
-        if (sv != env.vars.end() && sv->second.rfind("dict:", 0) == 0) {
-            int id = to_int(sv->second.substr(5));
-            auto dit = g_dicts[id].find(m.field);
-            if (dit != g_dicts[id].end()) return dit->second;
+        Value objectValue = env_get(env, member.objectName);
+        const std::string objectText = to_display_string(objectValue);
+        if (objectText.rfind("dict:", 0) == 0) {
+            const int id = static_cast<int>(to_int(objectText.substr(5)));
+            auto dict = g_dicts.find(id);
+            if (dict != g_dicts.end()) {
+                auto field = dict->second.find(member.field);
+                if (field != dict->second.end()) return value_from_legacy_string(field->second);
+            }
         }
-        if (sv != env.vars.end() && sv->second.rfind("struct:", 0) == 0) {
-            auto fit = env.vars.find(m.objectName + "." + m.field);
-            if (fit != env.vars.end()) return fit->second;
-        }
-        auto it = env.vars.find(m.objectName + "." + m.field);
-        if (it != env.vars.end()) return it->second;
-        return {};
+        return env_get(env, member.objectName + "." + member.field);
     }
     if (std::holds_alternative<IndexExpr>(e.node)) {
-        const auto& ix = std::get<IndexExpr>(e.node);
-        const std::string container = eval_string(*ix.object, env);
-        const std::string indexValue = eval_string(*ix.index, env);
+        const auto& index = std::get<IndexExpr>(e.node);
+        const std::string container = to_display_string(eval_value(*index.object, env));
+        const Value indexValue = eval_value(*index.index, env);
         if (container.rfind("list:", 0) == 0) {
             const int id = static_cast<int>(to_int(container.substr(5)));
-            const int idx = static_cast<int>(to_int(indexValue));
-            auto it = g_lists.find(id);
-            if (it != g_lists.end()) {
-                const auto& vec = it->second;
-                if (idx >= 0 && idx < static_cast<int>(vec.size())) return vec[idx];
+            const int position = static_cast<int>(value_as_int(indexValue));
+            auto list = g_lists.find(id);
+            if (list != g_lists.end() && position >= 0 &&
+                position < static_cast<int>(list->second.size())) {
+                return value_from_legacy_string(list->second[static_cast<size_t>(position)]);
             }
-            return "0";
+            return Value::from_int(0);
         }
         if (container.rfind("dict:", 0) == 0) {
             const int id = static_cast<int>(to_int(container.substr(5)));
-            auto dit = g_dicts.find(id);
-            if (dit != g_dicts.end()) {
-                auto fit = dit->second.find(indexValue);
-                if (fit != dit->second.end()) return fit->second;
+            auto dict = g_dicts.find(id);
+            if (dict != g_dicts.end()) {
+                auto item = dict->second.find(to_display_string(indexValue));
+                if (item != dict->second.end()) return value_from_legacy_string(item->second);
             }
-            return {};
         }
-        return {};
+        return Value::null_value();
     }
     if (std::holds_alternative<FunctionCallExpr>(e.node)) {
-        const auto& fc = std::get<FunctionCallExpr>(e.node);
+        const auto& call = std::get<FunctionCallExpr>(e.node);
         if (currentProgram_) {
-            const auto dot = fc.name.rfind('.');
-            if (dot != std::string::npos && dot > 0 && dot + 1 < fc.name.size()) {
-                const std::string objectName = fc.name.substr(0, dot);
-                const std::string methodName = fc.name.substr(dot + 1);
-                auto invoke_entity_method = [&](ObjPtr obj) -> std::optional<std::string> {
-                    const Entity* ent = find_entity(*currentProgram_, obj->typeName);
-                    if (!ent) return std::nullopt;
-                    const Action* meth = find_entity_method(*ent, methodName);
-                    if (!meth) return std::nullopt;
+            const auto dot = call.name.rfind('.');
+            if (dot != std::string::npos && dot > 0 && dot + 1 < call.name.size()) {
+                const std::string objectName = call.name.substr(0, dot);
+                const std::string methodName = call.name.substr(dot + 1);
+                auto invoke_entity_method = [&](ObjPtr object) -> std::optional<Value> {
+                    const Entity* entity = find_entity(*currentProgram_, object->typeName);
+                    if (!entity) return std::nullopt;
+                    const Action* method = find_entity_method(*entity, methodName);
+                    if (!method) return std::nullopt;
                     Env callEnv;
                     for (const auto& kv : globalVars_) callEnv.vars[kv.first] = kv.second;
-                    for (size_t i = 0; i < meth->params.size() && i < fc.args.size(); ++i) {
-                        callEnv.vars[meth->params[i].name] = eval_string(*fc.args[i], env);
-                    }
-                    callEnv.objects["self"] = obj;
-                    for (const auto& kv : obj->fields) callEnv.vars[kv.first] = kv.second;
+                    for (size_t i = 0; i < method->params.size() && i < call.args.size(); ++i)
+                        callEnv.vars[method->params[i].name] = eval_value(*call.args[i], env);
+                    callEnv.objects["self"] = object;
+                    for (const auto& kv : object->fields) callEnv.vars[kv.first] = kv.second;
                     ExecContext child;
-                    exec_block(meth->body, *currentProgram_, child, callEnv);
-                    for (auto& th : child.threads) if (th.joinable()) th.join();
-                    for (auto& f : obj->fields) {
-                        auto vit = callEnv.vars.find(f.first);
-                        if (vit != callEnv.vars.end()) f.second = vit->second;
+                    exec_block(method->body, *currentProgram_, child, callEnv);
+                    for (auto& thread : child.threads) if (thread.joinable()) thread.join();
+                    for (auto& field : object->fields) {
+                        auto value = callEnv.vars.find(field.first);
+                        if (value != callEnv.vars.end())
+                            field.second = to_display_string(value->second);
                     }
-                    if (child.returned) return child.returnValue;
-                    return std::string{};
+                    return child.returned ? child.returnValue : Value::null_value();
                 };
-                if (auto oit = env.objects.find(objectName); oit != env.objects.end()) {
-                    if (auto ret = invoke_entity_method(oit->second)) return *ret;
+                if (auto object = env.objects.find(objectName); object != env.objects.end()) {
+                    if (auto result = invoke_entity_method(object->second)) return *result;
                 }
                 if (objectName == "self") {
-                    if (auto oit = env.objects.find("self"); oit != env.objects.end()) {
-                        if (auto ret = invoke_entity_method(oit->second)) return *ret;
+                    if (auto object = env.objects.find("self"); object != env.objects.end()) {
+                        if (auto result = invoke_entity_method(object->second)) return *result;
                     }
                 }
-                auto varIt = env.vars.find(objectName);
-                if (varIt != env.vars.end() && varIt->second.rfind("struct:", 0) == 0) {
-                    const std::string structName = varIt->second.substr(7);
-                    const StructDecl* sd = find_struct_decl(*currentProgram_, structName);
-                    const Action* method = sd ? find_struct_method(*sd, methodName) : nullptr;
+                Value objectValue = env_get(env, objectName);
+                if (objectValue.rfind("struct:", 0) == 0) {
+                    const std::string structName = objectValue.substr(7);
+                    const StructDecl* decl = find_struct_decl(*currentProgram_, structName);
+                    const Action* method = decl ? find_struct_method(*decl, methodName) : nullptr;
                     if (method) {
                         Env callEnv;
                         for (const auto& kv : globalVars_) callEnv.vars[kv.first] = kv.second;
-                        for (size_t i = 0; i < method->params.size() && i < fc.args.size(); ++i) {
-                            callEnv.vars[method->params[i].name] = eval_string(*fc.args[i], env);
-                        }
-                        callEnv.vars["self"] = varIt->second;
-                        for (const auto& f : sd->fields) {
-                            const std::string objectField = objectName + "." + f.name;
-                            auto fit = env.vars.find(objectField);
-                            const std::string value = (fit != env.vars.end()) ? fit->second : std::string{};
-                            callEnv.vars[f.name] = value;
-                            callEnv.vars["self." + f.name] = value;
+                        for (size_t i = 0; i < method->params.size() && i < call.args.size(); ++i)
+                            callEnv.vars[method->params[i].name] = eval_value(*call.args[i], env);
+                        callEnv.vars["self"] = objectValue;
+                        for (const auto& field : decl->fields) {
+                            Value value = env_get(env, objectName + "." + field.name);
+                            callEnv.vars[field.name] = value;
+                            callEnv.vars["self." + field.name] = value;
                         }
                         ExecContext child;
                         exec_block(method->body, *currentProgram_, child, callEnv);
-                        for (auto& th : child.threads) if (th.joinable()) th.join();
-                        if (child.returned) return child.returnValue;
-                        return {};
+                        for (auto& thread : child.threads) if (thread.joinable()) thread.join();
+                        return child.returned ? child.returnValue : Value::null_value();
                     }
                 }
             }
-            if (const StructDecl* sd = find_struct_decl(*currentProgram_, fc.name)) {
-                (void)sd;
-                (void)fc;
-                return std::string("struct:") + sd->name;
+            if (const StructDecl* decl = find_struct_decl(*currentProgram_, call.name)) {
+                return Value::from_string("struct:" + decl->name);
             }
-            if (const Action* action = find_action(*currentProgram_, fc.name)) {
-                if (currentProgram_->strict && action->visibility != Visibility::Public) {
+            if (const Action* action = find_action(*currentProgram_, call.name)) {
+                if (currentProgram_->strict && action->visibility != Visibility::Public)
                     throw std::runtime_error("Action not public: " + action->name);
-                }
-                Env calleeEnv;
-                for (const auto& kv : globalVars_) calleeEnv.vars[kv.first] = kv.second;
-                for (size_t i = 0; i < action->params.size() && i < fc.args.size(); ++i) {
-                    const std::string paramName = action->params[i].name;
-                    calleeEnv.vars[paramName] = eval_string(*fc.args[i], env);
-                    if (std::holds_alternative<ExprIdent>(fc.args[i]->node)) {
-                        const auto& id = std::get<ExprIdent>(fc.args[i]->node).name;
-                        auto oit = env.objects.find(id);
-                        if (oit != env.objects.end()) {
-                            calleeEnv.objects[paramName] = oit->second;
-                        }
+                Env callEnv;
+                for (const auto& kv : globalVars_) callEnv.vars[kv.first] = kv.second;
+                for (size_t i = 0; i < action->params.size() && i < call.args.size(); ++i) {
+                    const std::string& parameter = action->params[i].name;
+                    callEnv.vars[parameter] = eval_value(*call.args[i], env);
+                    if (std::holds_alternative<ExprIdent>(call.args[i]->node)) {
+                        const std::string& argument =
+                            std::get<ExprIdent>(call.args[i]->node).name;
+                        auto object = env.objects.find(argument);
+                        if (object != env.objects.end()) callEnv.objects[parameter] = object->second;
                     }
                 }
-                ExecContext calleeCtx;
-                exec_block(action->body, *currentProgram_, calleeCtx, calleeEnv);
-                for (auto& th : calleeCtx.threads) {
-                    if (th.joinable()) th.join();
-                }
-                if (!calleeCtx.returned) return {};
-                return calleeCtx.returnValue;
-            }
-        }
-        // Check if fc.name is a variable holding a func:N handle
-        auto funcVarIt = env.vars.find(fc.name);
-        if (funcVarIt != env.vars.end() && funcVarIt->second.rfind("func:", 0) == 0) {
-            const std::string& handle = funcVarIt->second;
-            const std::string funcIdStr = handle.substr(5);
-            int funcId = 0;
-            try { funcId = std::stoi(funcIdStr); }
-            catch (...) { return {}; }
-            auto cit = g_closures.find(funcId);
-            if (cit != g_closures.end() && cit->second && currentProgram_) {
-                ClosureData* cd = cit->second;
-                Env callEnv;
-                for (const auto& cv : cd->captured) callEnv.vars[cv.name] = cv.value;
-                for (const auto& kv : globalVars_) callEnv.vars[kv.first] = kv.second;
-                for (size_t i = 0; i < cd->body.params.size() && i < fc.args.size(); ++i) {
-                    callEnv.vars[cd->body.params[i].name] = eval_string(*fc.args[i], env);
-                }
+                prepare_action_slots(callEnv, *action);
                 ExecContext child;
-                exec_block(cd->body.body, *currentProgram_, child, callEnv);
-                if (!child.returned) return {};
-                return child.returnValue;
+                exec_block(action->body, *currentProgram_, child, callEnv);
+                for (auto& thread : child.threads) if (thread.joinable()) thread.join();
+                return child.returned ? child.returnValue : Value::null_value();
             }
-            return {};
         }
-        return eval_builtin_call(fc.name, fc.args, env, true);
+
+        Value function = env_get(env, call.name);
+        const std::string handle = to_display_string(function);
+        if (handle.rfind("func:", 0) == 0) {
+            int id = 0;
+            try {
+                id = std::stoi(handle.substr(5));
+            } catch (...) {
+                return Value::null_value();
+            }
+            auto closure = g_closures.find(id);
+            if (closure != g_closures.end() && closure->second && currentProgram_) {
+                ClosureData* data = closure->second;
+                Env callEnv;
+                for (const auto& captured : data->captured)
+                    callEnv.vars[captured.name] = captured.value;
+                for (const auto& kv : globalVars_) callEnv.vars[kv.first] = kv.second;
+                for (size_t i = 0; i < data->body.params.size() && i < call.args.size(); ++i)
+                    callEnv.vars[data->body.params[i].name] = eval_value(*call.args[i], env);
+                prepare_action_slots(callEnv, data->body);
+                ExecContext child;
+                exec_block(data->body.body, *currentProgram_, child, callEnv);
+                return child.returned ? child.returnValue : Value::null_value();
+            }
+            return Value::null_value();
+        }
+        return value_from_legacy_string(eval_builtin_call(call.name, call.args, env, true));
     }
     if (std::holds_alternative<ListLiteralExpr>(e.node)) {
-        const auto& lit = std::get<ListLiteralExpr>(e.node);
-        return eval_builtin_call("list_new", lit.elements, env, true);
+        const auto& literal = std::get<ListLiteralExpr>(e.node);
+        return value_from_legacy_string(eval_builtin_call("list_new", literal.elements, env, true));
     }
     if (std::holds_alternative<DictLiteralExpr>(e.node)) {
-        const auto& lit = std::get<DictLiteralExpr>(e.node);
-        return eval_builtin_call("dict_new", lit.entries, env, true);
+        const auto& literal = std::get<DictLiteralExpr>(e.node);
+        return value_from_legacy_string(eval_builtin_call("dict_new", literal.entries, env, true));
     }
     if (std::holds_alternative<LambdaExpr>(e.node)) {
-        const auto& lam = std::get<LambdaExpr>(e.node);
-        // Create a ClosureData from the LambdaExpr
-        int closureId = g_nextClosureId++;
-        ClosureData* cd = new ClosureData();
-        cd->refCount = 1;
-        cd->sourcePath = "<lambda>";
-        cd->sourceLine = 0;
-        // Build the Action from the lambda
-        cd->body.name = "lambda_" + std::to_string(closureId);
-        cd->body.params = lam.params;
-        cd->body.returnType = lam.returnType;
-        cd->body.visibility = Visibility::Public;
-        cd->body.exported = false;
-        cd->body.isAsync = false;
-        if (lam.isArrow && lam.body) {
-            // Arrow form: wrap single expression in return
-            cd->body.body.stmts.push_back(ReturnStmt{lam.body});
-        } else {
-            cd->body.body = lam.blockBody;
+        const auto& lambda = std::get<LambdaExpr>(e.node);
+        const int closureId = g_nextClosureId++;
+        ClosureData* data = new ClosureData();
+        data->refCount = 1;
+        data->sourcePath = "<lambda>";
+        data->sourceLine = 0;
+        data->body.name = "lambda_" + std::to_string(closureId);
+        data->body.params = lambda.params;
+        data->body.returnType = lambda.returnType;
+        data->body.visibility = Visibility::Public;
+        data->body.exported = false;
+        data->body.isAsync = false;
+        if (lambda.isArrow && lambda.body)
+            data->body.body.stmts.push_back(ReturnStmt{lambda.body});
+        else
+            data->body.body = lambda.blockBody;
+        for (const std::string& name : lambda.capturedVars) {
+            ClosedVar captured;
+            captured.name = name;
+            const bool found =
+                (env.useSlots && env.slotIndex.count(name)) ||
+                env.vars.count(name) || globalVars_.count(name);
+            captured.value = found ? to_display_string(env_get(env, name)) : std::string{};
+            captured.type = found ? "string" : "unknown";
+            data->captured.push_back(std::move(captured));
         }
-        // Capture free variables from current env
-        for (const auto& cv : lam.capturedVars) {
-            ClosedVar capped;
-            capped.name = cv;
-            // Look up in environment
-            auto it = env.vars.find(cv);
-            if (it != env.vars.end()) {
-                capped.value = it->second;
-                capped.type = "string"; // default
-            } else {
-                capped.value = ""; // not found at runtime
-                capped.type = "unknown";
-            }
-            cd->captured.push_back(capped);
-        }
-        g_closures[closureId] = cd;
-        return "func:" + std::to_string(closureId);
+        g_closures[closureId] = data;
+        return make_handle_value(HandleKind::Func, static_cast<uint32_t>(closureId));
     }
     if (std::holds_alternative<NewExpr>(e.node)) {
-        const auto& ne = std::get<NewExpr>(e.node);
-        return std::string{"<new:"} + ne.typeName + ">";
+        return Value::from_string("<new:" + std::get<NewExpr>(e.node).typeName + ">");
     }
     if (std::holds_alternative<PostfixExpr>(e.node)) {
-        // Value context: evaluate operand (mutation handled at statement level).
-        const auto& pe = std::get<PostfixExpr>(e.node);
-        return eval_string(*pe.operand, env);
+        const auto& postfix = std::get<PostfixExpr>(e.node);
+        return postfix.operand ? eval_value(*postfix.operand, env) : Value::null_value();
     }
     if (std::holds_alternative<PrefixExpr>(e.node)) {
-        const auto& pe = std::get<PrefixExpr>(e.node);
-        const std::string cur = eval_string(*pe.operand, env);
-        if (is_int_string(cur)) return std::to_string(to_int(cur) + (pe.isInc ? 1 : -1));
-        return cur;
+        const auto& prefix = std::get<PrefixExpr>(e.node);
+        if (!prefix.operand) return Value::null_value();
+        Value current = eval_value(*prefix.operand, env);
+        if (current.kind == ValueKind::Int)
+            return Value::from_int(current.i + (prefix.isInc ? 1 : -1));
+        if (current.kind == ValueKind::Float)
+            return Value::from_float(current.f + (prefix.isInc ? 1.0 : -1.0));
+        return current;
     }
     if (std::holds_alternative<CompoundAssignExpr>(e.node)) {
-        const auto& ca = std::get<CompoundAssignExpr>(e.node);
-        auto bin = Expr{ BinaryExpr{ ca.op, ca.left, ca.right } };
-        return eval_string(bin, env);
+        const auto& assign = std::get<CompoundAssignExpr>(e.node);
+        if (!assign.left || !assign.right) return Value::null_value();
+        return apply_binary(
+            to_value_bin_op(assign.op),
+            eval_value(*assign.left, env),
+            eval_value(*assign.right, env));
     }
-    return {};
+    return Value::null_value();
+}
+
+std::string Runtime::eval_string(const Expr& e, const Env& env) const {
+    if (!std::holds_alternative<ExprString>(e.node))
+        return to_display_string(eval_value(e, env));
+
+    const std::string& input = std::get<ExprString>(e.node).v;
+    std::string out;
+    out.reserve(input.size());
+    for (size_t i = 0; i < input.size();) {
+        if (input[i] == '{') {
+            const size_t close = input.find('}', i + 1);
+            if (close != std::string::npos) {
+                const std::string raw = input.substr(i + 1, close - i - 1);
+                const std::string key = trim_copy(raw);
+                const bool found =
+                    (env.useSlots && env.slotIndex.count(key)) ||
+                    env.vars.count(key) || globalVars_.count(key);
+                if (found) {
+                    out += to_display_string(env_get(env, key));
+                } else if (auto value = eval_interpolation_expr(key, env); value.has_value()) {
+                    out += *value;
+                } else {
+                    out += '{';
+                    out += raw;
+                    out += '}';
+                }
+                i = close + 1;
+                continue;
+            }
+        }
+        out.push_back(input[i++]);
+    }
+    return out;
 }
 
 } // namespace erelang

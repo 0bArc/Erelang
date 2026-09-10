@@ -1,6 +1,6 @@
 # Automation
 
-Erelang is good for glue work: transform files, run shell commands, download via HTTP, watch folders, persist small state.
+File, process, and HTTP patterns.
 
 ## Skeleton
 

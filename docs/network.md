@@ -243,6 +243,5 @@ Result format: `success=true\nexit_code=0\noutput=...`
 
 ## Related
 
-- [syntax.md](syntax.md)
 - [filesystem.md](filesystem.md)
 - [threads.md](threads.md)

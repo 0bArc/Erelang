@@ -205,6 +205,7 @@ int Runtime::run(const Program& program) const {
         exec_block(s->body, program, ctx, rootEnv);
     }
 
+    prepare_action_slots(rootEnv, *a);
     exec_block(a->body, program, ctx, rootEnv);
     join_threads(ctx.threads);
 
@@ -396,6 +397,7 @@ int Runtime::run_single_action(const Program& program, std::string_view actionNa
     for (const auto& kv : globalVars_) env.vars[kv.first] = kv.second;
     seed_plugin_aliases(program, env);
     bind_builtin_module_aliases(program, env.vars);
+    prepare_action_slots(env, *a);
     exec_block(a->body, program, ctx, env);
     for (auto& th : ctx.threads) if (th.joinable()) th.join();
     // Persist mutated globals
@@ -539,6 +541,7 @@ std::string Runtime::call_action_by_name(std::string_view actionName, const std:
     for (size_t i = 0; i < a->params.size() && i < args.size(); ++i) {
         calleeEnv.vars[a->params[i].name] = args[i];
     }
+    prepare_action_slots(calleeEnv, *a);
     ExecContext calleeCtx;
     exec_block(a->body, *currentProgram_, calleeCtx, calleeEnv);
     for (auto& th : calleeCtx.threads) {

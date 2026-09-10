@@ -24,7 +24,7 @@ run main;
 
 | Builtin | Args | Returns |
 |---------|------|---------|
-| `rand_int(min, max)` | inclusive range | random int as string |
+| `rand_int(min, max)` | inclusive range | random int |
 | `uuid()` | | UUID v4 string |
 
 ```elan

@@ -41,7 +41,7 @@ int y = 10;
 const PI = 3;
 ```
 
-Runtime values are string-backed; numeric operators parse operands as numbers when needed.
+Values are `int`, `float`, `bool`, `string`, `null`, or handles. Numeric operators use the numeric types.
 
 ## Strings
 

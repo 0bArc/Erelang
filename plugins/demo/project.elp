@@ -1,0 +1,22 @@
+<plugin>
+  <erelang_manifest>
+    <id>com.erelang.demo</id>
+    <name>Example Plugin</name>
+    <version>1.0.0</version>
+    <author>Your Name</author>
+    <target>erelang>=1.0.0</target>
+    <description>Fun erelang plugin</description>
+  </erelang_manifest>
+  <dependencies>
+  </dependencies>
+  <content>
+    <include>init.0bs</include>
+    <include>unload.0bs</include>
+    <include>example.core</include>
+  </content>
+  <hooks>
+    <onLoad>plugin_init</onLoad>
+    <onUnload>plugin_shutdown</onUnload>
+  </hooks>
+</plugin>
+

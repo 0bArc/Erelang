@@ -1,0 +1,48 @@
+// SlashCommandBuilder for erelang
+// Direct JSON string building - no collections needed
+
+action slash_option_string(string name, string description, string required) -> string {
+    string r = "{\"name\":\"" + name + "\",\"description\":\"" + description + "\",\"type\":3";
+    if (required == "true") { r = r + ",\"required\":true"; }
+    return r + "}";
+}
+
+action slash_option_integer(string name, string description, string required) -> string {
+    string r = "{\"name\":\"" + name + "\",\"description\":\"" + description + "\",\"type\":4";
+    if (required == "true") { r = r + ",\"required\":true"; }
+    return r + "}";
+}
+
+action slash_option_boolean(string name, string description, string required) -> string {
+    string r = "{\"name\":\"" + name + "\",\"description\":\"" + description + "\",\"type\":5";
+    if (required == "true") { r = r + ",\"required\":true"; }
+    return r + "}";
+}
+
+action slash_option_user(string name, string description, string required) -> string {
+    string r = "{\"name\":\"" + name + "\",\"description\":\"" + description + "\",\"type\":6";
+    if (required == "true") { r = r + ",\"required\":true"; }
+    return r + "}";
+}
+
+action slash_option_channel(string name, string description, string required) -> string {
+    string r = "{\"name\":\"" + name + "\",\"description\":\"" + description + "\",\"type\":7";
+    if (required == "true") { r = r + ",\"required\":true"; }
+    return r + "}";
+}
+
+action slash_option_role(string name, string description, string required) -> string {
+    string r = "{\"name\":\"" + name + "\",\"description\":\"" + description + "\",\"type\":8";
+    if (required == "true") { r = r + ",\"required\":true"; }
+    return r + "}";
+}
+
+// Quick register helpers
+action slash_register_ping() -> string {
+    return discord_create_command("ping", "Replies with pong!", "");
+}
+
+action slash_register_echo() -> string {
+    string opts = "[" + slash_option_string("message", "The message to echo", "true") + "]";
+    return discord_create_command("echo", "Echoes your message", opts);
+}

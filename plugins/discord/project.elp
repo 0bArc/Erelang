@@ -1,0 +1,22 @@
+<plugin>
+    <erelang_manifest>
+        <id>discord</id>
+        <name>Discord Bot Plugin</name>
+        <version>1.0.0</version>
+        <author>erelang</author>
+        <target>erelang>=0.1</target>
+        <description>Discord bot framework with WebSocket gateway and REST API support, including SlashCommandBuilder</description>
+    </erelang_manifest>
+    <dependencies>
+    </dependencies>
+    <content>
+        <include>init.core</include>
+        <include>api.elan</include>
+        <include>gateway.elan</include>
+        <include>slash.elan</include>
+    </content>
+    <hooks>
+        <onLoad>discord_init</onLoad>
+        <onUnload>discord_shutdown</onUnload>
+    </hooks>
+</plugin>

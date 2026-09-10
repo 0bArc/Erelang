@@ -71,6 +71,8 @@ add_library(erelang STATIC
     src/parser.cpp
     src/runtime/core.cpp
     src/runtime/helpers.cpp
+    src/runtime/value.cpp
+    src/runtime/bytecode.cpp
     src/runtime/eval.cpp
     src/runtime/actions.cpp
     src/runtime/imports.cpp
@@ -259,6 +261,8 @@ elseif (BUILD_SHARED_RUNTIME)
     src/codegen_x64.cpp
     src/runtime/core.cpp
     src/runtime/helpers.cpp
+    src/runtime/value.cpp
+    src/runtime/bytecode.cpp
     src/runtime/eval.cpp
     src/runtime/actions.cpp
     src/runtime/imports.cpp

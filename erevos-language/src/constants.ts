@@ -1,9 +1,3 @@
-// =============================================================================
-// Erelang — Constants: regex patterns, keyword lists, method lists
-// =============================================================================
-
-// ─── Declaration Patterns ────────────────────────────────────────────────────
-
 export const ENTITY_RE       = /^\s*(?:public|private|export)?\s*entity\s+([A-Za-z_]\w*)/;
 export const ACTION_RE       = /^\s*(?:public|private|export)?\s*(?:async\s+)?action\s+([A-Za-z_]\w*)/;
 export const TYPED_FUNC_RE   =
@@ -18,8 +12,6 @@ export const GLOBAL_RE       = /^\s*(?:public|private|export)?\s*global\s+([A-Za
 export const INCLUDE_ALIAS_RE = /^\s*#\s*include\s*(<[^>]+>|"[^"]+"|[^\s;]+)\s*(?:as\s+([A-Za-z_]\w*))?\s*;?\s*$/;
 // Matches: import <path> as alias  |  import "path" as alias  |  import 'path' as alias  |  import bareident as alias
 export const IMPORT_ALIAS_RE  = /^\s*import\s+(?:<([^>]+)>|"([^"]+)"|'([^']+)'|([A-Za-z_][\w./-]*))\s*(?:as\s+([A-Za-z_]\w*))?/;
-
-// ─── Method / Keyword Lists ─────────────────────────────────────────────────
 
 const FS_METHODS    = ['read','write','append','exists','is_dir','is_file','mkdir','copy','move','remove','list','dirs','files','size','mtime','cwd','chdir','join','parent','dirname','name','basename','ext'];
 const PATH_METHODS  = ['join','parent','dirname','name','basename','ext','exists'];

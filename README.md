@@ -11,9 +11,11 @@
 
 Erelang is a scripting language with its own interpreter (`erelang.exe`). You write `.elan` files: actions, entities, enums, hooks, then `run` an entry point. The runtime is C++20 and targets Windows.
 
-It exists because the usual options were a bad fit. Python and JavaScript pull in a whole ecosystem for a few scripts. Embedding Lua or a custom DSL in C++ still meant fighting someone else's syntax and object model. Erelang is the language and the VM in one tree. You can change both.
+Python is the default for this kind of work. Use it if you need PyPI, Linux, or a language other people already know. Erelang is for when that is the problem, not the solution: one `.exe`, no venv, no pip, syntax and runtime in the same repo so you can change either.
 
-Scripts stay small on purpose. There is no GUI in the core. Filesystem, network, math, and the rest are `#include` modules, so a hello-world does not load HTTP. Entities and hooks are there for game-shaped programs (objects with methods, work that runs around `main`) without turning the language into C++.
+A script only gets filesystem or HTTP if it `#include`s them. The typechecker fails the compile on bad types instead of waiting until line 400. Entities, hooks, and `run` are the program model. That is closer to a small game or tool than to a Python module.
+
+If you wanted Lua-in-C++, you still do not own the language. Here you do.
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug

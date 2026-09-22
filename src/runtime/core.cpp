@@ -530,6 +530,12 @@ std::string Runtime::load_elan_directory(const std::filesystem::path& dir) const
 }
 
 std::string Runtime::call_action_by_name(std::string_view actionName, const std::vector<std::string>& args) const {
+    static const std::unordered_map<std::string, std::string> empty;
+    return call_action_by_name(actionName, args, empty);
+}
+
+std::string Runtime::call_action_by_name(std::string_view actionName, const std::vector<std::string>& args,
+                                         const std::unordered_map<std::string, std::string>& inject) const {
     if (!currentProgram_) return {};
     const Action* a = find_action(*currentProgram_, actionName);
     if (!a) {
@@ -538,6 +544,7 @@ std::string Runtime::call_action_by_name(std::string_view actionName, const std:
     }
     Env calleeEnv;
     for (const auto& kv : globalVars_) calleeEnv.vars[kv.first] = kv.second;
+    for (const auto& kv : inject) calleeEnv.vars[kv.first] = kv.second;
     for (size_t i = 0; i < a->params.size() && i < args.size(); ++i) {
         calleeEnv.vars[a->params[i].name] = args[i];
     }

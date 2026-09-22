@@ -143,6 +143,8 @@ run main;
 
 Alias: `builtin/ws` works identically.
 
+### Client
+
 | Method | Args | Returns |
 |--------|------|---------|
 | `ws.connect(url)` | WebSocket URL | `ws:N` handle or `"null"` |
@@ -151,19 +153,41 @@ Alias: `builtin/ws` works identically.
 | `ws.recv_timeout(id, ms)` | raw handle id, timeout ms | message string |
 | `ws.close(id)` | raw handle id | `"true"` |
 | `ws.state(id)` | raw handle id | `"open"` / `"closed"` / `"connecting"` |
-| `ws.broadcast(data)` | data to all connections | `"true"` |
+| `ws.broadcast(data)` | data to all client connections | `"true"` |
 | `ws.send_binary(id, data)` | raw handle id, binary data | `"true"` / `"false"` |
+
+### Server (`server.ws`)
+
+`server.ws(path, actionName)` registers an RFC 6455 upgrade route on the HTTP server.
+
+On `GET` with `Upgrade: websocket` and `Sec-WebSocket-Key`, the server:
+
+1. Replies `101 Switching Protocols` with `Sec-WebSocket-Accept`
+2. Keeps the socket open
+3. Echoes each text frame to the sender and broadcasts to other open server sockets
+4. Calls `actionName` on the interpreter thread with `_` = message text and `sock` = `ws:N`
+
+`sock.send`, `sock.broadcast`, `sock.close`, and `sock.state` work on that handle.
+
+```elan
+server.ws("/ws", "ws_handler");
+
+public action ws_handler {
+    print "got: " + _;
+    // optional: sock.send("ack");
+}
+```
 
 ### ws: handle methods
 
-After `ws.connect()`, use the handle directly:
+After `ws.connect()` or a server upgrade, use the handle directly:
 
 | Method | Args | Returns |
 |--------|------|---------|
 | `sock.send(data)` | text data | `"true"` / `"false"` |
 | `sock.send_binary(data)` | binary data | `"true"` / `"false"` |
-| `sock.recv()` | none | message string |
-| `sock.recv_timeout(ms)` | timeout ms | message string |
+| `sock.recv()` | none | message string (client) |
+| `sock.recv_timeout(ms)` | timeout ms | message string (client) |
 | `sock.broadcast(data)` | text data | `"true"` |
 | `sock.close()` | none | `"true"` |
 | `sock.close(code)` | close code (e.g. `1000`) | `"true"` |
@@ -234,7 +258,8 @@ Result format: `success=true\nexit_code=0\noutput=...`
 ## Notes
 
 - HTTP/HTTPS uses Windows WinHTTP.
-- WebSocket uses WinHTTP WebSocket API.
+- WebSocket **clients** use the WinHTTP WebSocket API.
+- WebSocket **servers** (`server.ws`) use Winsock with an RFC 6455 handshake (`101` + `Sec-WebSocket-Accept`), a reader thread per connection, and handler dispatch on the accept loop.
 - TCP uses raw Winsock2 sockets with DNS resolution.
 - SSE routes keep connections open for server-sent events. The `sse:` handle supports `.emit(event, data)` and `.close()`.
 - All handles return `"null"` on failure.

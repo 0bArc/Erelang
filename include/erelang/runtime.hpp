@@ -76,6 +76,8 @@ public:
     std::string load_elan_file(const std::filesystem::path& path) const;
     std::string load_elan_directory(const std::filesystem::path& dir) const;
     std::string call_action_by_name(std::string_view actionName, const std::vector<std::string>& args) const;
+    std::string call_action_by_name(std::string_view actionName, const std::vector<std::string>& args,
+                                    const std::unordered_map<std::string, std::string>& inject) const;
 
     // Env is public to builtins that seed aliases into maps.
     struct Object {

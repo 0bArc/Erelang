@@ -129,6 +129,10 @@ public:
     }
     static bool is_int(const TypeInfo& t) { return t.name == "int"; }
     static bool is_string(const TypeInfo& t) { return t.name == "string"; }
+    bool types_equal(const TypeInfo& a, const TypeInfo& b) const;
+    bool is_assignable(const TypeInfo& from, const TypeInfo& to) const;
+    bool is_convertible(const TypeInfo& from, const TypeInfo& to) const;
+    TypeInfo resolve_type(const std::string& syntax, const Program* program, bool* known) const;
     bool returns_void(const Action& a) const { return a.returnType.empty() || a.returnType == "void"; }
 private:
     friend class ExprChecker; friend class StmtChecker;

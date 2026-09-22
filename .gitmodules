@@ -1,0 +1,3 @@
+[submodule "tools/symcheck"]
+	path = tools/symcheck
+	url = https://github.com/0bArc/symcheck.git

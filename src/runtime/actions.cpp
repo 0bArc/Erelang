@@ -1208,7 +1208,12 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 for (size_t i = 0; i < mc.args.size(); ++i) {
                     args.push_back(eval_string(*mc.args[i], env));
                 }
-                std::string result = __erelang_ws_handle_method(id, wsMethod, args);
+                std::string result;
+                if (__erelang_ws_server_try_method(id, wsMethod, args, result)) {
+                    env.vars["_"] = result;
+                    return;
+                }
+                result = __erelang_ws_handle_method(id, wsMethod, args);
                 env.vars["_"] = result;
                 return;
             }
@@ -1221,7 +1226,7 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 for (size_t i = 0; i < mc.args.size(); ++i) {
                     args.push_back(eval_string(*mc.args[i], env));
                 }
-                std::string result = __erelang_http_handle_method(id, methodName, args);
+                std::string result = __erelang_http_handle_method(const_cast<Runtime*>(this), id, methodName, args);
                 env.vars["_"] = result;
                 return;
             }

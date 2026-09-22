@@ -1,0 +1,17 @@
+@erelang
+
+action takes_int(n: int) {
+    print n;
+}
+
+action ret_int(): int {
+    return "x";
+}
+
+action main() {
+    int bad_bool = true;
+    int bad_unknown = missing;
+    takes_int("x");
+}
+
+run main;

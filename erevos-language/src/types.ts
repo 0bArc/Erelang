@@ -14,6 +14,25 @@ export interface CollectedSymbols {
   enumMembers:  Map<string, Set<string>>;
 }
 
+export interface EntityMembers {
+  actions: Map<string, Set<string>>;
+  fields:  Map<string, Set<string>>;
+}
+
+export interface DocumentIndex {
+  version: number;
+  symbols: CollectedSymbols;
+  entityInstances: Map<string, string>;
+  entityMembers: EntityMembers;
+  outline: OutlineSymbol[];
+}
+
+export interface OutlineSymbol {
+  name: string;
+  kind: 'entity' | 'action' | 'field' | 'hook';
+  line: number;
+}
+
 export interface ImportedSymbols {
   aliasToActions: Map<string, Set<string>>;
   allActions:     Set<string>;

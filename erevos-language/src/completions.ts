@@ -1,13 +1,12 @@
 import * as vscode from 'vscode';
-import * as fs     from 'fs';
 import * as path   from 'path';
 import {
   LANGUAGE_KEYWORDS, BUILT_INS, DEPRECATED_BUILT_INS,
   ARRAY_METHODS, DICTIONARY_METHODS, CHAIN_METHODS,
 } from './constants';
 import { PrintStringContext } from './types';
-import { collect, collectEntityInstances, collectEntityMembers } from './symbols';
-import { collectImports } from './imports';
+import { getDocumentIndex } from './symbols';
+import { collectImports, listDirectoryCached } from './imports';
 
 let _debugChannel: vscode.OutputChannel | undefined;
 export function setDebugChannel(ch: vscode.OutputChannel): void { _debugChannel = ch; }
@@ -20,6 +19,18 @@ function dbg(msg: string): void {
 function dbgCompletion(branch: string, pos: vscode.Position, prefix: string, detail?: string): void {
   dbg(`[completion] ${branch} @ ${pos.line + 1}:${pos.character + 1}  prefix="${prefix}"${detail ? '  ' + detail : ''}`);
 }
+
+const MEMBER_FALLBACK = [...new Set([...ARRAY_METHODS, ...DICTIONARY_METHODS, ...CHAIN_METHODS])];
+
+const BUILTIN_MODULES = [
+  'builtin/fs','builtin/erefs','builtin/path','builtin/erepath',
+  'builtin/regex','builtin/crypto','builtin/network','builtin/net',
+  'builtin/websocket','builtin/ws',
+  'builtin/math','builtin/binary','builtin/threads','builtin/monitor',
+  'builtin/data','builtin/perm','builtin/system',
+  'builtin/process','builtin/proc',
+  'builtin/performance','builtin/perf',
+];
 
 function parsePrintStringContext(line: string, cursor: number): PrintStringContext | null {
   const pm = /\bprint\b/.exec(line);
@@ -64,25 +75,12 @@ async function includePathCompletions(
   const namePart   = slashIdx >= 0 ? partial.slice(slashIdx + 1) : partial;
   const replaceLen = mode === 'bare' ? partial.length : namePart.length;
   const replaceRange = new vscode.Range(pos.line, pos.character - replaceLen, pos.line, pos.character);
-
-  const candidateDirs = new Set<string>();
-  candidateDirs.add(path.resolve(path.dirname(doc.uri.fsPath), dirPart || '.'));
-  for (const folder of vscode.workspace.workspaceFolders ?? []) {
-    candidateDirs.add(path.resolve(folder.uri.fsPath, dirPart || '.'));
-  }
+  const nameLower = namePart.toLowerCase();
+  const partialLower = partial.toLowerCase();
 
   const out: vscode.CompletionItem[] = [];
-  const builtinModules = [
-    'builtin/fs','builtin/erefs','builtin/path','builtin/erepath',
-    'builtin/regex','builtin/crypto','builtin/network','builtin/net',
-    'builtin/websocket','builtin/ws',
-    'builtin/math','builtin/binary','builtin/threads','builtin/monitor',
-    'builtin/data','builtin/perm','builtin/system',
-    'builtin/process','builtin/proc',
-    'builtin/performance','builtin/perf',
-  ];
-  for (const mod of builtinModules) {
-    if (!mod.toLowerCase().startsWith(partial.toLowerCase())) continue;
+  for (const mod of BUILTIN_MODULES) {
+    if (!mod.toLowerCase().startsWith(partialLower)) continue;
     const insert = mode === 'bare'
       ? `<${mod}>;`
       : (dirPart && mod.toLowerCase().startsWith(dirPart.toLowerCase()) ? mod.slice(dirPart.length) : mod);
@@ -95,25 +93,33 @@ async function includePathCompletions(
     out.push(ci);
   }
 
+  if (token.isCancellationRequested) return [];
+
+  const candidateDirs = new Set<string>();
+  candidateDirs.add(path.resolve(path.dirname(doc.uri.fsPath), dirPart || '.'));
+  for (const folder of vscode.workspace.workspaceFolders ?? []) {
+    candidateDirs.add(path.resolve(folder.uri.fsPath, dirPart || '.'));
+  }
+
   const seen = new Set<string>();
   for (const dir of candidateDirs) {
-    if (token.isCancellationRequested) return [];
-    let entries: fs.Dirent[] = [];
-    try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { continue; }
+    if (token.isCancellationRequested) return out;
+    const entries = await listDirectoryCached(dir);
     for (const e of entries) {
-      if (!e.name.toLowerCase().startsWith(namePart.toLowerCase())) continue;
-      if (e.isDirectory()) {
+      if (!e.name.toLowerCase().startsWith(nameLower)) continue;
+      if (e.isDirectory) {
         const insert = dirPart + e.name + '/';
-        if (seen.has(insert)) continue; seen.add(insert);
+        if (seen.has(insert)) continue;
+        seen.add(insert);
         const ci = new vscode.CompletionItem(mode === 'bare' ? `<${insert}` : e.name + '/', vscode.CompletionItemKind.Folder);
         ci.insertText = mode === 'bare' ? `<${insert}` : e.name + '/';
         ci.range      = replaceRange;
         ci.detail     = 'folder';
-        ci.command    = { command: 'editor.action.triggerSuggest', title: 'Show include paths' };
         out.push(ci);
-      } else if (e.isFile() && /\.(elan|ere|0bs)$/i.test(e.name)) {
+      } else if (e.isFile && /\.(elan|ere|0bs)$/i.test(e.name)) {
         const insert = dirPart + e.name;
-        if (seen.has(insert)) continue; seen.add(insert);
+        if (seen.has(insert)) continue;
+        seen.add(insert);
         const ci = new vscode.CompletionItem(mode === 'bare' ? `<${insert}>;` : e.name, vscode.CompletionItemKind.File);
         ci.insertText = mode === 'bare' ? `<${insert}>;` : e.name;
         ci.range      = replaceRange;
@@ -142,7 +148,6 @@ function includeDirectiveCompletions(pos: vscode.Position, prefix: string): vsco
   keyword.range      = new vscode.Range(pos.line, directiveMatch[1].length, pos.line, pos.character);
   keyword.detail     = 'start include directive';
   keyword.sortText   = 'a_include';
-  keyword.command    = { command: 'editor.action.triggerSuggest', title: 'Show include paths' };
   return [keyword];
 }
 
@@ -175,10 +180,9 @@ async function memberCompletions(
   const partial = dot[2] ?? '';
   dbgCompletion('member-access', pos, prefix, `obj=${obj}`);
 
-  const memberScanLine = doc.lineCount <= 10_000 ? undefined : pos.line;
-  const entityMembers = collectEntityMembers(doc, memberScanLine);
-  const entityActions = entityMembers.actions;
-  const entityFields  = entityMembers.fields;
+  const index = getDocumentIndex(doc);
+  const entityActions = index.entityMembers.actions;
+  const entityFields  = index.entityMembers.fields;
 
   if (obj === 'self') {
     const items: vscode.CompletionItem[] = [];
@@ -201,7 +205,7 @@ async function memberCompletions(
     return items;
   }
 
-  const entityName = collectEntityInstances(doc, pos.line).get(obj);
+  const entityName = index.entityInstances.get(obj);
   if (entityName) {
     const items: vscode.CompletionItem[] = [];
     for (const a of entityActions.get(entityName) ?? []) {
@@ -221,6 +225,7 @@ async function memberCompletions(
 
   if (token.isCancellationRequested) return [];
   const imported = await collectImports(doc);
+  if (token.isCancellationRequested) return [];
   const modMethods = imported.aliasToActions.get(obj);
   if (modMethods && modMethods.size > 0) {
     return [...modMethods]
@@ -232,8 +237,7 @@ async function memberCompletions(
       });
   }
 
-  const fallback = [...new Set([...ARRAY_METHODS, ...DICTIONARY_METHODS, ...CHAIN_METHODS])];
-  return fallback
+  return MEMBER_FALLBACK
     .filter(m => partial.length === 0 || m.startsWith(partial))
     .map(m => {
       const ci = new vscode.CompletionItem(m, vscode.CompletionItemKind.Method);
@@ -282,17 +286,22 @@ export class ErelangCompletionProvider implements vscode.CompletionItemProvider 
     }
 
     const incl = await includePathCompletions(doc, pos, prefix, token);
-    if (incl) { dbgCompletion('include-path', pos, prefix, `${incl.length} items`); return incl; }
+    if (incl) {
+      dbgCompletion('include-path', pos, prefix, `${incl.length} items`);
+      return incl;
+    }
 
     const memberItems = await memberCompletions(doc, pos, prefix, token);
     if (memberItems !== null) return memberItems;
 
     if (token.isCancellationRequested) return [];
 
+    const index = getDocumentIndex(doc);
+    const col = index.symbols;
+
     const pctx = parsePrintStringContext(fullLine, pos.character);
     if (pctx) {
       dbgCompletion('print-ctx', pos, prefix, 'interpolation');
-      const col = collect(doc, pos.line);
       const names = new Set([...col.locals, ...col.globals, ...col.fields, ...col.actions]);
       const range = new vscode.Range(pos.line, pctx.replaceStart, pos.line, pctx.replaceEnd);
       return [...names]
@@ -321,7 +330,6 @@ export class ErelangCompletionProvider implements vscode.CompletionItemProvider 
       return [];
     }
 
-    const col = collect(doc, pos.line);
     if (token.isCancellationRequested) return [];
 
     const replaceRange = partial.length > 0
@@ -395,6 +403,7 @@ export class ErelangCompletionProvider implements vscode.CompletionItemProvider 
     const wantImports = manual || triggered || partial.length >= 2;
     if (wantImports) {
       const imported = await collectImports(doc);
+      if (token.isCancellationRequested) return items;
 
       for (const alias of imported.aliasToActions.keys()) {
         if (!matchesPartial(alias) || seen.has(alias)) continue;

@@ -3,30 +3,33 @@ import {
   ENTITY_RE, ACTION_RE, TYPED_FUNC_RE, FIELD_RE, STRUCT_RE, ENUM_RE,
   TYPE_ALIAS_RE, HOOK_RE, LET_RE, GLOBAL_RE, LANGUAGE_KEYWORDS,
 } from './constants';
-import { CollectedSymbols, WordToken, RangeToken } from './types';
+import {
+  CollectedSymbols, DocumentIndex, EntityMembers, OutlineSymbol, WordToken, RangeToken,
+} from './types';
 
 const KEYWORD_SET = new Set<string>(LANGUAGE_KEYWORDS);
 
-type Versioned<T> = { version: number; value: T };
-const _symbolCache   = new Map<string, Versioned<CollectedSymbols>>();
-const _instanceCache = new Map<string, Versioned<Map<string, string>>>();
-const _typeNameCache = new Map<string, Versioned<Set<string>>>();
+const _indexCache = new Map<string, DocumentIndex>();
 
-function versionedGet<T>(
-  cache: Map<string, Versioned<T>>,
-  key: string,
-  version: number,
-  compute: () => T,
-): T {
-  const hit = cache.get(key);
-  if (hit?.version === version) return hit.value;
-  const value = compute();
-  cache.set(key, { version, value });
-  return value;
+function emptySymbols(): CollectedSymbols {
+  return {
+    entities: new Set(), actions: new Set(), fields: new Set(),
+    hooks: new Set(), globals: new Set(), locals: new Set(),
+    arrays: new Set(), dictionaries: new Set(),
+    structs: new Set(), enums: new Set(), typeAliases: new Set(),
+    structFields: new Map(), enumMembers: new Map(),
+  };
 }
 
-export function isIdentStart(ch: string): boolean { return /[A-Za-z_]/.test(ch); }
-export function isIdentPart(ch: string):  boolean { return /[A-Za-z0-9_]/.test(ch); }
+export function isIdentStart(ch: string): boolean {
+  const c = ch.charCodeAt(0);
+  return (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95;
+}
+
+export function isIdentPart(ch: string): boolean {
+  const c = ch.charCodeAt(0);
+  return (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c === 95;
+}
 
 export function scanWords(line: string): WordToken[] {
   const words: WordToken[] = [];
@@ -90,40 +93,66 @@ export function foreachLocalNames(line: string): string[] {
     .filter(n => n.length > 0);
 }
 
-export function collect(doc: vscode.TextDocument, uptoLine?: number): CollectedSymbols {
-  const end = Math.min(uptoLine ?? doc.lineCount - 1, doc.lineCount - 1);
-  const full = end >= doc.lineCount - 1;
-  if (full) {
-    return versionedGet(_symbolCache, doc.uri.toString(), doc.version, () => collectRange(doc, end));
-  }
-  return collectRange(doc, end);
-}
+function buildDocumentIndex(doc: vscode.TextDocument): DocumentIndex {
+  const out = emptySymbols();
+  const entityInstances = new Map<string, string>();
+  const entityActions = new Map<string, Set<string>>();
+  const entityFields = new Map<string, Set<string>>();
+  const outline: OutlineSymbol[] = [];
 
-function collectRange(doc: vscode.TextDocument, end: number): CollectedSymbols {
-  const out: CollectedSymbols = {
-    entities: new Set(), actions: new Set(), fields: new Set(),
-    hooks: new Set(), globals: new Set(), locals: new Set(),
-    arrays: new Set(), dictionaries: new Set(),
-    structs: new Set(), enums: new Set(), typeAliases: new Set(),
-    structFields: new Map(), enumMembers: new Map(),
-  };
   let activeStruct: string | null = null;
-  let activeEnum:   string | null = null;
+  let activeEnum: string | null = null;
+  let currentEntity: string | null = null;
+  let braceDepth = 0;
 
+  const end = doc.lineCount - 1;
   for (let i = 0; i <= end; i++) {
     const text = doc.lineAt(i).text;
     let m: RegExpExecArray | null;
 
-    if ((m = ENTITY_RE.exec(text)))     out.entities.add(m[1]);
-    if ((m = STRUCT_RE.exec(text)))     { out.structs.add(m[1]); activeStruct = m[1]; out.structFields.set(m[1], out.structFields.get(m[1]) ?? new Set()); }
-    if ((m = ENUM_RE.exec(text)))       { out.enums.add(m[1]); activeEnum = m[1]; out.enumMembers.set(m[1], out.enumMembers.get(m[1]) ?? new Set()); }
+    if ((m = ENTITY_RE.exec(text))) {
+      out.entities.add(m[1]);
+      currentEntity = m[1];
+      if (!entityActions.has(currentEntity)) {
+        entityActions.set(currentEntity, new Set());
+        entityFields.set(currentEntity, new Set());
+      }
+      braceDepth = 0;
+      outline.push({ name: m[1], kind: 'entity', line: i });
+    }
+
+    if ((m = STRUCT_RE.exec(text))) {
+      out.structs.add(m[1]);
+      activeStruct = m[1];
+      out.structFields.set(m[1], out.structFields.get(m[1]) ?? new Set());
+    }
+    if ((m = ENUM_RE.exec(text))) {
+      out.enums.add(m[1]);
+      activeEnum = m[1];
+      out.enumMembers.set(m[1], out.enumMembers.get(m[1]) ?? new Set());
+    }
     if ((m = TYPE_ALIAS_RE.exec(text))) out.typeAliases.add(m[1]);
-    if ((m = ACTION_RE.exec(text)))     out.actions.add(m[1]);
-    if ((m = TYPED_FUNC_RE.exec(text))) out.actions.add(m[1]);
-    if ((m = FIELD_RE.exec(text)))      out.fields.add(m[1]);
-    if ((m = HOOK_RE.exec(text)))       out.hooks.add(m[1]);
-    if ((m = GLOBAL_RE.exec(text)))     out.globals.add(m[1]);
-    if ((m = LET_RE.exec(text)))        out.locals.add(m[1]);
+
+    if ((m = ACTION_RE.exec(text))) {
+      out.actions.add(m[1]);
+      outline.push({ name: m[1], kind: 'action', line: i });
+      if (currentEntity) entityActions.get(currentEntity)?.add(m[1]);
+    }
+    if ((m = TYPED_FUNC_RE.exec(text))) {
+      out.actions.add(m[1]);
+      if (currentEntity) entityActions.get(currentEntity)?.add(m[1]);
+    }
+    if ((m = FIELD_RE.exec(text))) {
+      out.fields.add(m[1]);
+      outline.push({ name: m[1], kind: 'field', line: i });
+      if (currentEntity) entityFields.get(currentEntity)?.add(m[1]);
+    }
+    if ((m = HOOK_RE.exec(text))) {
+      out.hooks.add(m[1]);
+      outline.push({ name: m[1], kind: 'hook', line: i });
+    }
+    if ((m = GLOBAL_RE.exec(text))) out.globals.add(m[1]);
+    if ((m = LET_RE.exec(text))) out.locals.add(m[1]);
 
     const decl = /^\s*(let|const|constexpr|static|int|string|str|bool|char|auto|double|float|array|map|dictionary|hashmap)\s+([A-Za-z_]\w*)\s*=\s*(.+)\s*$/.exec(text);
     if (decl) {
@@ -151,6 +180,17 @@ function collectRange(doc: vscode.TextDocument, end: number): CollectedSymbols {
       }
     }
 
+    const typed = /^\s*(?:public|private|export)?\s*([A-Z][A-Za-z0-9_]*)\s+([A-Za-z_]\w*)\b/.exec(text);
+    if (typed) entityInstances.set(typed[2], typed[1]);
+    const neu = /\b([A-Za-z_]\w*)\s*=\s*new\s+([A-Za-z_]\w*)/.exec(text);
+    if (neu) entityInstances.set(neu[1], neu[2]);
+
+    if (currentEntity !== null) {
+      braceDepth += (text.match(/\{/g) ?? []).length;
+      braceDepth -= (text.match(/\}/g) ?? []).length;
+      if (braceDepth <= 0 && text.includes('}')) currentEntity = null;
+    }
+
     if (activeStruct) {
       const sf = /^\s*([A-Za-z_]\w*)\s*:\s*([A-Za-z_][\w<>,]*)/.exec(text);
       if (sf) out.structFields.get(activeStruct)?.add(sf[1]);
@@ -165,35 +205,58 @@ function collectRange(doc: vscode.TextDocument, end: number): CollectedSymbols {
 
     for (const name of foreachLocalNames(text)) out.locals.add(name);
   }
-  return out;
+
+  return {
+    version: doc.version,
+    symbols: out,
+    entityInstances,
+    entityMembers: { actions: entityActions, fields: entityFields },
+    outline,
+  };
 }
 
-export function collectEntityInstances(doc: vscode.TextDocument, uptoLine?: number): Map<string, string> {
-  const end = Math.min(uptoLine ?? doc.lineCount - 1, doc.lineCount - 1);
-  const full = end >= doc.lineCount - 1;
-  if (full) {
-    return versionedGet(_instanceCache, doc.uri.toString(), doc.version, () => scanEntityInstances(doc, end));
-  }
-  return scanEntityInstances(doc, end);
+export function getDocumentIndex(doc: vscode.TextDocument): DocumentIndex {
+  const key = doc.uri.toString();
+  const hit = _indexCache.get(key);
+  if (hit && hit.version === doc.version) return hit;
+  const built = buildDocumentIndex(doc);
+  _indexCache.set(key, built);
+  return built;
 }
 
-function scanEntityInstances(doc: vscode.TextDocument, end: number): Map<string, string> {
-  const varToEntity = new Map<string, string>();
-  for (let i = 0; i <= end; i++) {
-    const text = doc.lineAt(i).text;
-    const typed = /^\s*(?:public|private|export)?\s*([A-Z][A-Za-z0-9_]*)\s+([A-Za-z_]\w*)\b/.exec(text);
-    if (typed) varToEntity.set(typed[2], typed[1]);
-    const m = /\b([A-Za-z_]\w*)\s*=\s*new\s+([A-Za-z_]\w*)/.exec(text);
-    if (m) varToEntity.set(m[1], m[2]);
-  }
-  return varToEntity;
+export function invalidateDocumentIndex(docUri?: string): void {
+  if (docUri) _indexCache.delete(docUri);
+  else _indexCache.clear();
+}
+
+/** @deprecated alias — clears the unified document index */
+export function invalidateEntityMemberCache(docUri?: string): void {
+  invalidateDocumentIndex(docUri);
+}
+
+export function collect(doc: vscode.TextDocument, _uptoLine?: number): CollectedSymbols {
+  return getDocumentIndex(doc).symbols;
+}
+
+export function collectEntityInstances(doc: vscode.TextDocument, _uptoLine?: number): Map<string, string> {
+  return getDocumentIndex(doc).entityInstances;
+}
+
+export function collectEntityMembers(doc: vscode.TextDocument, _uptoLine?: number): EntityMembers {
+  return getDocumentIndex(doc).entityMembers;
 }
 
 export function collectUserTypeNames(doc: vscode.TextDocument): Set<string> {
-  return versionedGet(_typeNameCache, doc.uri.toString(), doc.version, () => {
-    const col = collect(doc);
-    return new Set([...col.entities, ...col.structs, ...col.enums, ...col.typeAliases]);
-  });
+  const col = getDocumentIndex(doc).symbols;
+  return new Set([...col.entities, ...col.structs, ...col.enums, ...col.typeAliases]);
+}
+
+export function collectEntityActions(doc: vscode.TextDocument): Map<string, Set<string>> {
+  return getDocumentIndex(doc).entityMembers.actions;
+}
+
+export function collectEntityFields(doc: vscode.TextDocument): Map<string, Set<string>> {
+  return getDocumentIndex(doc).entityMembers.fields;
 }
 
 export function isInStringLiteral(line: string, index: number): boolean {
@@ -207,75 +270,4 @@ export function isInStringLiteral(line: string, index: number): boolean {
     else if (ch === 39 /* ' */ && !inDq) inSq = !inSq;
   }
   return inDq || inSq;
-}
-
-export interface EntityMembers {
-  actions: Map<string, Set<string>>;
-  fields:  Map<string, Set<string>>;
-}
-
-const _entityMemberCache = new Map<string, Versioned<EntityMembers>>();
-
-export function invalidateEntityMemberCache(docUri?: string): void {
-  if (docUri) {
-    _entityMemberCache.delete(docUri);
-    _symbolCache.delete(docUri);
-    _instanceCache.delete(docUri);
-    _typeNameCache.delete(docUri);
-  } else {
-    _entityMemberCache.clear();
-    _symbolCache.clear();
-    _instanceCache.clear();
-    _typeNameCache.clear();
-  }
-}
-
-export function collectEntityMembers(doc: vscode.TextDocument, uptoLine?: number): EntityMembers {
-  const end = Math.min(uptoLine ?? doc.lineCount - 1, doc.lineCount - 1);
-  const scan = () => {
-    const actions = new Map<string, Set<string>>();
-    const fields  = new Map<string, Set<string>>();
-    let currentEntity: string | null = null;
-    let braceDepth = 0;
-
-    for (let i = 0; i <= end; i++) {
-      const text = doc.lineAt(i).text;
-      const em = ENTITY_RE.exec(text);
-      if (em) {
-        currentEntity = em[1];
-        if (!actions.has(currentEntity)) { actions.set(currentEntity, new Set()); fields.set(currentEntity, new Set()); }
-        braceDepth = 0;
-      }
-
-      if (currentEntity !== null) {
-        braceDepth += (text.match(/\{/g) ?? []).length;
-        braceDepth -= (text.match(/\}/g) ?? []).length;
-
-        const am = ACTION_RE.exec(text);
-        if (am) actions.get(currentEntity)?.add(am[1]);
-
-        const tm = TYPED_FUNC_RE.exec(text);
-        if (tm) actions.get(currentEntity)?.add(tm[1]);
-
-        const fm = FIELD_RE.exec(text);
-        if (fm) fields.get(currentEntity)?.add(fm[1]);
-
-        if (braceDepth <= 0 && text.includes('}')) currentEntity = null;
-      }
-    }
-
-    return { actions, fields };
-  };
-  if (end >= doc.lineCount - 1) {
-    return versionedGet(_entityMemberCache, doc.uri.toString(), doc.version, scan);
-  }
-  return scan();
-}
-
-export function collectEntityActions(doc: vscode.TextDocument): Map<string, Set<string>> {
-  return collectEntityMembers(doc).actions;
-}
-
-export function collectEntityFields(doc: vscode.TextDocument): Map<string, Set<string>> {
-  return collectEntityMembers(doc).fields;
 }

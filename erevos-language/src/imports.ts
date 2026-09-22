@@ -1,15 +1,24 @@
 import * as vscode from 'vscode';
 import * as fs     from 'fs';
 import * as path   from 'path';
-import { INCLUDE_ALIAS_RE, IMPORT_ALIAS_RE, MODULE_METHODS } from './constants';
+import { INCLUDE_ALIAS_RE, IMPORT_ALIAS_RE, MODULE_METHODS, ACTION_RE } from './constants';
 import { ImportedSymbols } from './types';
-import { ACTION_RE } from './constants';
 
 const _importCache = new Map<string, { version: number; value: Promise<ImportedSymbols> }>();
 const _actionCache = new Map<string, { mtimeMs: number; names: Set<string> }>();
+const _dirCache = new Map<string, { mtimeMs: number; entries: DirEntry[] }>();
+const _statCache = new Map<string, { mtimeMs: number; isFile: boolean } | null>();
+
+export type DirEntry = { name: string; isDirectory: boolean; isFile: boolean };
 
 export function invalidateImportCache(docUri?: string): void {
-  if (docUri) _importCache.delete(docUri); else _importCache.clear();
+  if (docUri) _importCache.delete(docUri);
+  else _importCache.clear();
+}
+
+export function invalidateDirCache(): void {
+  _dirCache.clear();
+  _statCache.clear();
 }
 
 export function normalizeSpec(spec: string): string {
@@ -26,31 +35,63 @@ export function defaultAlias(spec: string): string {
 function getPluginRoots(): string[] {
   const roots: string[] = [];
   const localAppData = process.env.LOCALAPPDATA || '';
-  if (localAppData) {
-    roots.push(path.join(localAppData, 'Erelang', 'Plugins'));
-  }
+  if (localAppData) roots.push(path.join(localAppData, 'Erelang', 'Plugins'));
   const appData = process.env.APPDATA || '';
-  if (appData) {
-    roots.push(path.join(appData, 'Erelang', 'Plugins'));
-  }
+  if (appData) roots.push(path.join(appData, 'Erelang', 'Plugins'));
   for (const folder of vscode.workspace.workspaceFolders ?? []) {
     roots.push(path.join(folder.uri.fsPath, 'plugins'));
   }
   return roots;
 }
 
-async function isFile(filePath: string): Promise<boolean> {
+async function cachedIsFile(filePath: string): Promise<boolean> {
+  const hit = _statCache.get(filePath);
+  if (hit !== undefined) {
+    if (hit === null) return false;
+    try {
+      const st = await fs.promises.stat(filePath);
+      if (st.mtimeMs === hit.mtimeMs) return hit.isFile;
+      const isFile = st.isFile();
+      _statCache.set(filePath, { mtimeMs: st.mtimeMs, isFile });
+      return isFile;
+    } catch {
+      _statCache.set(filePath, null);
+      return false;
+    }
+  }
   try {
-    return (await fs.promises.stat(filePath)).isFile();
+    const st = await fs.promises.stat(filePath);
+    const isFile = st.isFile();
+    _statCache.set(filePath, { mtimeMs: st.mtimeMs, isFile });
+    return isFile;
   } catch {
+    _statCache.set(filePath, null);
     return false;
   }
 }
 
-export async function resolveIncludeFile(doc: vscode.TextDocument, spec: string): Promise<string | null> {
-  const norm = normalizeSpec(spec);
-  if (!norm || norm.startsWith('builtin/')) return null;
-  const dir  = path.dirname(doc.uri.fsPath);
+export async function listDirectoryCached(dir: string): Promise<DirEntry[]> {
+  try {
+    const st = await fs.promises.stat(dir);
+    if (!st.isDirectory()) return [];
+    const hit = _dirCache.get(dir);
+    if (hit && hit.mtimeMs === st.mtimeMs) return hit.entries;
+    const raw = await fs.promises.readdir(dir, { withFileTypes: true });
+    const entries: DirEntry[] = raw.map(e => ({
+      name: e.name,
+      isDirectory: e.isDirectory(),
+      isFile: e.isFile(),
+    }));
+    _dirCache.set(dir, { mtimeMs: st.mtimeMs, entries });
+    return entries;
+  } catch {
+    _dirCache.delete(dir);
+    return [];
+  }
+}
+
+function candidatePaths(doc: vscode.TextDocument, norm: string): string[] {
+  const dir = path.dirname(doc.uri.fsPath);
   const bases: string[] = [path.resolve(dir, norm)];
   if (!path.extname(norm)) {
     for (const e of ['.elan', '.ere', '.0bs']) bases.push(path.resolve(dir, norm + e));
@@ -67,14 +108,19 @@ export async function resolveIncludeFile(doc: vscode.TextDocument, spec: string)
     }
   }
   for (const pluginRoot of getPluginRoots()) {
-    const full = path.join(pluginRoot, norm);
-    bases.push(full);
+    bases.push(path.join(pluginRoot, norm));
     if (!path.extname(norm)) {
       for (const e of ['.elan', '.ere', '.0bs']) bases.push(path.join(pluginRoot, norm + e));
     }
   }
-  for (const c of bases) {
-    if (await isFile(c)) return c;
+  return bases;
+}
+
+export async function resolveIncludeFile(doc: vscode.TextDocument, spec: string): Promise<string | null> {
+  const norm = normalizeSpec(spec);
+  if (!norm || norm.startsWith('builtin/')) return null;
+  for (const c of candidatePaths(doc, norm)) {
+    if (await cachedIsFile(c)) return c;
   }
   return null;
 }

@@ -52,38 +52,6 @@ bool parse_map_type(const std::string& typeName, std::string& keyType, std::stri
     return false;
 }
 
-bool generic_type_compatible(const std::string& expected, const std::string& actual) {
-    // "any" is always compatible (explicitly opted-in by programmer)
-    if (expected == "any" || actual == "any") return true;
-    // "unknown" means type inference failure — never silently compatible
-    if (expected == "unknown" || actual == "unknown") return false;
-    return expected == actual;
-}
-
-bool collection_type_compatible(const std::string& expected, const std::string& actual) {
-    if (expected == actual) return true;
-
-    std::string expectedArrayElem;
-    std::string actualArrayElem;
-    if (parse_array_type(expected, expectedArrayElem)) {
-        if (actual == "array<any>") return true;
-        if (!parse_array_type(actual, actualArrayElem)) return false;
-        return generic_type_compatible(expectedArrayElem, actualArrayElem);
-    }
-
-    std::string expectedMapKey;
-    std::string expectedMapValue;
-    std::string actualMapKey;
-    std::string actualMapValue;
-    if (parse_map_type(expected, expectedMapKey, expectedMapValue)) {
-        if (actual == "map<any,any>") return true;
-        if (!parse_map_type(actual, actualMapKey, actualMapValue)) return false;
-        return generic_type_compatible(expectedMapKey, actualMapKey) && generic_type_compatible(expectedMapValue, actualMapValue);
-    }
-
-    return false;
-}
-
 std::optional<std::string> resolve_builtin_module_alias_call(const Program* program, const std::string& callName) {
     if (!program) {
         return std::nullopt;
@@ -132,6 +100,27 @@ void emit_unknown_call(TCResult& result, const std::string& name, const std::str
         b.hint("Check spelling, add `#include <...>` for builtins, or declare `extern action " + name + "(...)`");
     }
     b.emit();
+}
+
+void check_action_arg_types(TypeChecker& tc, TCResult& result, const Action& action,
+                            const std::vector<ExprPtr>& args, ExprChecker& expr, CheckContext& ctx,
+                            const std::string& callName) {
+    if (action.params.size() != args.size()) return;
+    for (size_t i = 0; i < action.params.size(); ++i) {
+        if (action.params[i].type.empty()) continue;
+        bool known = true;
+        TypeInfo expected = tc.resolve_type(action.params[i].type, ctx.program, &known);
+        if (!known) continue;
+        TypeInfo actual = expr.check(args[i], ctx);
+        if (!tc.is_assignable(actual, expected)) {
+            DiagBuilder(result, Severity::Error,
+                "Argument type mismatch calling " + callName + ": param `" + action.params[i].name +
+                "` expects " + expected.name + ", got " + actual.name,
+                "TC022", ctx.actionName())
+                .hint("Pass a value assignable to `" + expected.name + "`")
+                .emit();
+        }
+    }
 }
 
 std::string infer_switch_case_type(const std::string& literal) {
@@ -192,6 +181,113 @@ std::string format_diagnostic(const Diagnostic& d) {
     if (!d.context.empty()) oss << " (" << d.context << ")";
     if (d.line >= 0) oss << " at " << d.line << ":" << d.col;
     return oss.str();
+}
+
+bool TypeChecker::types_equal(const TypeInfo& a, const TypeInfo& b) const {
+    return a.name == b.name;
+}
+
+bool TypeChecker::is_assignable(const TypeInfo& from, const TypeInfo& to) const {
+    if (to.name == "any" || from.name == "any") return true;
+    if (to.name == "unknown" || from.name == "unknown") return false;
+    if (types_equal(from, to)) return true;
+
+    auto element_ok = [](const std::string& expected, const std::string& actual) {
+        if (expected == "any" || actual == "any") return true;
+        if (expected == "unknown" || actual == "unknown") return false;
+        return expected == actual;
+    };
+
+    std::string toArrayElem;
+    std::string fromArrayElem;
+    if (parse_array_type(to.name, toArrayElem)) {
+        if (from.name == "array<any>") return true;
+        if (!parse_array_type(from.name, fromArrayElem)) return false;
+        return element_ok(toArrayElem, fromArrayElem);
+    }
+
+    std::string toMapKey;
+    std::string toMapValue;
+    std::string fromMapKey;
+    std::string fromMapValue;
+    if (parse_map_type(to.name, toMapKey, toMapValue)) {
+        if (from.name == "map<any,any>") return true;
+        if (!parse_map_type(from.name, fromMapKey, fromMapValue)) return false;
+        return element_ok(toMapKey, fromMapKey) && element_ok(toMapValue, fromMapValue);
+    }
+
+    if (to.name.rfind("struct:", 0) == 0 && from.name.rfind("dict:", 0) == 0) return true;
+    if (to.name.rfind("struct:", 0) == 0 && (from.name.rfind("map", 0) == 0 || from.name == "map<any,any>")) return true;
+    return false;
+}
+
+bool TypeChecker::is_convertible(const TypeInfo& from, const TypeInfo& to) const {
+    return to.name == "int" && from.name == "bool";
+}
+
+TypeInfo TypeChecker::resolve_type(const std::string& syntax, const Program* program, bool* known) const {
+    if (known) *known = true;
+    std::string decl = syntax;
+    std::transform(decl.begin(), decl.end(), decl.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+    decl.erase(std::remove_if(decl.begin(), decl.end(), [](unsigned char c){ return std::isspace(c) != 0; }), decl.end());
+
+    if (program) {
+        for (const auto& alias : program->typeAliases) {
+            std::string aliasName = alias.name;
+            std::transform(aliasName.begin(), aliasName.end(), aliasName.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+            aliasName.erase(std::remove_if(aliasName.begin(), aliasName.end(), [](unsigned char c){ return std::isspace(c) != 0; }), aliasName.end());
+            if (aliasName == decl) {
+                decl = alias.targetType;
+                std::transform(decl.begin(), decl.end(), decl.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+                decl.erase(std::remove_if(decl.begin(), decl.end(), [](unsigned char c){ return std::isspace(c) != 0; }), decl.end());
+                break;
+            }
+        }
+    }
+
+    const std::string declNormalized = decl;
+    if (decl == "auto") return TypeInfo{"auto"};
+    if (decl == "any") return TypeInfo{"any"};
+    if (decl == "void") return TypeInfo{"void"};
+    if (decl == "int") return TypeInfo{"int"};
+    if (decl == "u8" || decl == "u16" || decl == "u32" || decl == "u64" ||
+        decl == "i8" || decl == "i16" || decl == "i32" || decl == "i64" ||
+        decl == "uint" || decl == "unsigned" || decl == "unsignedint") {
+        return TypeInfo{"int"};
+    }
+    if (decl == "double" || decl == "float") return TypeInfo{"double"};
+    if (decl == "bool") return TypeInfo{"bool"};
+    if (decl == "pointer") return TypeInfo{"pointer"};
+    if (decl == "string" || decl == "str" || decl == "char") return TypeInfo{"string"};
+    if (decl == "array") return TypeInfo{"array<any>"};
+    if (decl.rfind("array<", 0) == 0) return TypeInfo{decl};
+    if (decl == "map" || decl == "dictionary") return TypeInfo{"map<any,any>"};
+    if (decl.rfind("map<", 0) == 0) return TypeInfo{decl};
+    if (!decl.empty() && (decl.back() == '*' || decl.back() == '&')) return TypeInfo{"pointer"};
+
+    if (program) {
+        for (const auto& sd : program->structs) {
+            std::string structName = sd.name;
+            std::transform(structName.begin(), structName.end(), structName.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+            structName.erase(std::remove_if(structName.begin(), structName.end(), [](unsigned char c){ return std::isspace(c) != 0; }), structName.end());
+            if (structName == declNormalized) return TypeInfo{"struct:" + sd.name};
+        }
+        for (const auto& en : program->entities) {
+            std::string entityName = en.name;
+            std::transform(entityName.begin(), entityName.end(), entityName.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+            entityName.erase(std::remove_if(entityName.begin(), entityName.end(), [](unsigned char c){ return std::isspace(c) != 0; }), entityName.end());
+            if (entityName == declNormalized) return TypeInfo{"entity:" + en.name};
+        }
+        for (const auto& en : program->enums) {
+            std::string enumName = en.name;
+            std::transform(enumName.begin(), enumName.end(), enumName.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+            enumName.erase(std::remove_if(enumName.begin(), enumName.end(), [](unsigned char c){ return std::isspace(c) != 0; }), enumName.end());
+            if (enumName == declNormalized) return TypeInfo{"enum:" + en.name};
+        }
+    }
+
+    if (known) *known = false;
+    return TypeInfo{"unknown"};
 }
 
 // ================= ExprChecker =================
@@ -288,6 +384,7 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
             inferred = {"unknown"};
             if (ctx.scopes) {
                 if (auto* owner = ctx.scopes->lookup(node.objectName)) {
+                    owner->used = true;
                     std::string otype = owner->type.name;
                     const std::string prefix = "struct:";
                     if (otype.rfind(prefix, 0) == 0 && ctx.program) {
@@ -385,8 +482,10 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
                         "TC020", ctx.actionName())
                         .hint("Declare params in `action " + node.name + "(...)` or pass the correct number of arguments")
                         .emit();
+                } else {
+                    check_action_arg_types(tc_, result_, *aIt->second, node.args, *this, ctx, node.name);
                 }
-                inferred = { aIt->second->returnType.empty()?"void":aIt->second->returnType };
+                inferred = { aIt->second->returnType.empty()?"void":tc_.resolve_type(aIt->second->returnType, ctx.program, nullptr).name };
             } else {
                 std::string builtinLookup = node.name;
                 if (auto mapped = resolve_builtin_module_alias_call(ctx.program, node.name)) {
@@ -404,7 +503,15 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
                             if (!importDecl.alias || *importDecl.alias != alias) continue;
                             auto actionIt = tc_.actions_.find(method);
                             if (actionIt != tc_.actions_.end()) {
-                                inferred = { actionIt->second->returnType.empty() ? "void" : actionIt->second->returnType };
+                                if (actionIt->second->params.size() != node.args.size()) {
+                                    DiagBuilder(result_, Severity::Error,
+                                        "Param count mismatch calling action " + node.name + ": got " + std::to_string(node.args.size()) +
+                                        ", expected " + std::to_string(actionIt->second->params.size()),
+                                        "TC020", ctx.actionName()).emit();
+                                } else {
+                                    check_action_arg_types(tc_, result_, *actionIt->second, node.args, *this, ctx, node.name);
+                                }
+                                inferred = { actionIt->second->returnType.empty() ? "void" : tc_.resolve_type(actionIt->second->returnType, ctx.program, nullptr).name };
                                 resolvedModuleAction = true;
                             }
                             break;
@@ -569,10 +676,27 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                 }
             }
             for (auto& a : stmt.args) expr_.check(a, ctx);
+            if (it != tc_.actions_.end() && it->second->params.size() == stmt.args.size()) {
+                check_action_arg_types(tc_, result_, *it->second, stmt.args, expr_, ctx, stmt.name);
+            }
         } else if constexpr (std::is_same_v<T, MethodCallStmt>) {
             for (auto& a : stmt.args) expr_.check(a, ctx);
 
             const std::string callName = stmt.objectName + "." + stmt.method;
+            auto mark_route_action_refs = [&]() {
+                static const std::unordered_set<std::string> kRouteMethods = {
+                    "get", "post", "put", "patch", "del", "ws", "sse", "use",
+                };
+                if (!kRouteMethods.count(stmt.method)) return;
+                for (const auto& arg : stmt.args) {
+                    if (!arg) continue;
+                    if (auto* lit = std::get_if<ExprString>(&arg->node)) {
+                        auto it = tc_.actionUsage_.find(lit->v);
+                        if (it != tc_.actionUsage_.end()) it->second.referenced = true;
+                    }
+                }
+            };
+
             if (auto mapped = resolve_builtin_module_alias_call(ctx.program, callName)) {
                 auto it = tc_.builtins_.find(*mapped);
                 if (it == tc_.builtins_.end()) {
@@ -588,6 +712,7 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                             .emit();
                     }
                 }
+                mark_route_action_refs();
                 return;
             }
 
@@ -609,7 +734,10 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                             "Param count mismatch calling action " + callName + ": got " + std::to_string(stmt.args.size()) +
                             ", expected " + std::to_string(actionIt->second->params.size()),
                             "TC020", ctx.actionName()).emit();
+                    } else {
+                        check_action_arg_types(tc_, result_, *actionIt->second, stmt.args, expr_, ctx, callName);
                     }
+                    mark_route_action_refs();
                     return;
                 }
             }
@@ -617,7 +745,9 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
             // Allow method syntax in manual mode:
             // defer exact receiver/member validation to runtime for now.
             if (ctx.scopes) {
-                if (!ctx.scopes->lookup(stmt.objectName)) {
+                if (auto* recv = ctx.scopes->lookup(stmt.objectName)) {
+                    recv->used = true;
+                } else {
                     DiagBuilder(result_, Severity::Error,
                         "Use before declaration: " + stmt.objectName,
                         "TC010", ctx.actionName())
@@ -625,124 +755,28 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                         .emit();
                 }
             }
+            mark_route_action_refs();
         } else if constexpr (std::is_same_v<T, LetStmt>) {
             if (scopes.lookup(stmt.name)) DiagBuilder(result_, Severity::Error, "Variable redeclaration: " + stmt.name, "TC030", ctx.actionName()).emit();
             VarInfo vi; vi.type = expr_.check(stmt.value, ctx); vi.isConst = stmt.isConst; vi.assigned=true;
             if (!stmt.declaredType.empty()) {
-                std::string decl = stmt.declaredType;
-                std::transform(decl.begin(), decl.end(), decl.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
-                decl.erase(std::remove_if(decl.begin(), decl.end(), [](unsigned char c){ return std::isspace(c) != 0; }), decl.end());
-                if (ctx.program) {
-                    for (const auto& alias : ctx.program->typeAliases) {
-                        std::string aliasName = alias.name;
-                        std::transform(aliasName.begin(), aliasName.end(), aliasName.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
-                        aliasName.erase(std::remove_if(aliasName.begin(), aliasName.end(), [](unsigned char c){ return std::isspace(c) != 0; }), aliasName.end());
-                        if (aliasName == decl) {
-                            decl = alias.targetType;
-                            std::transform(decl.begin(), decl.end(), decl.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
-                            decl.erase(std::remove_if(decl.begin(), decl.end(), [](unsigned char c){ return std::isspace(c) != 0; }), decl.end());
-                            break;
-                        }
-                    }
-                }
-                const std::string declNormalized = decl;
                 bool known = true;
-                std::string expected = "unknown";
-                if (decl == "auto") {
-                    expected = vi.type.name;
-                } else if (decl == "any") {
-                    expected = "any";
-                } else if (decl == "int") {
-                    expected = "int";
-                } else if (decl == "u8" || decl == "u16" || decl == "u32" || decl == "u64" ||
-                           decl == "i8" || decl == "i16" || decl == "i32" || decl == "i64" ||
-                           decl == "uint" || decl == "unsigned" || decl == "unsignedint") {
-                    expected = "int";
-                } else if (decl == "double" || decl == "float") {
-                    expected = "double";
-                } else if (decl == "bool") {
-                    expected = "bool";
-                } else if (decl == "pointer") {
-                    expected = "pointer";
-                } else if (decl == "string" || decl == "str" || decl == "char") {
-                    expected = "string";
-                } else if (decl == "array") {
-                    expected = "array<any>";
-                } else if (decl.rfind("array<", 0) == 0) {
-                    expected = decl;
-                } else if (decl == "map" || decl == "dictionary") {
-                    expected = "map<any,any>";
-                } else if (decl.rfind("map<", 0) == 0) {
-                    expected = decl;
-                } else if (!decl.empty() && (decl.back() == '*' || decl.back() == '&')) {
-                    expected = "pointer";
-                } else if (ctx.program) {
-                    bool matchedType = false;
-                    for (const auto& sd : ctx.program->structs) {
-                        std::string structName = sd.name;
-                        std::transform(structName.begin(), structName.end(), structName.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
-                        structName.erase(std::remove_if(structName.begin(), structName.end(), [](unsigned char c){ return std::isspace(c) != 0; }), structName.end());
-                        if (structName == declNormalized) {
-                            expected = "struct:" + sd.name;
-                            matchedType = true;
-                            break;
-                        }
-                    }
-                    if (!matchedType) {
-                        for (const auto& en : ctx.program->entities) {
-                            std::string entityName = en.name;
-                            std::transform(entityName.begin(), entityName.end(), entityName.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
-                            entityName.erase(std::remove_if(entityName.begin(), entityName.end(), [](unsigned char c){ return std::isspace(c) != 0; }), entityName.end());
-                            if (entityName == declNormalized) {
-                                expected = "entity:" + en.name;
-                                matchedType = true;
-                                break;
-                            }
-                        }
-                    }
-                    if (!matchedType) {
-                        for (const auto& en : ctx.program->enums) {
-                            std::string enumName = en.name;
-                            std::transform(enumName.begin(), enumName.end(), enumName.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
-                            enumName.erase(std::remove_if(enumName.begin(), enumName.end(), [](unsigned char c){ return std::isspace(c) != 0; }), enumName.end());
-                            if (enumName == declNormalized) {
-                                expected = "enum:" + en.name;
-                                matchedType = true;
-                                break;
-                            }
-                        }
-                    }
-                    if (!matchedType) {
-                        known = false;
-                        DiagBuilder(result_, Severity::Error, "Unknown declared type: " + stmt.declaredType, "TC041", ctx.actionName())
-                            .hint("Known primitives: int, string, bool, double, void, pointer, array<T>, map<K,V>, struct:Name, enum:Name")
-                            .emit();
-                    }
-                } else {
-                    known = false;
+                TypeInfo expected = tc_.resolve_type(stmt.declaredType, ctx.program, &known);
+                if (!known) {
                     DiagBuilder(result_, Severity::Error, "Unknown declared type: " + stmt.declaredType, "TC041", ctx.actionName())
                         .hint("Known primitives: int, string, bool, double, void, pointer, array<T>, map<K,V>, struct:Name, enum:Name")
                         .emit();
-                }
-                auto is_compatible = [&](const std::string& exp, const std::string& actual) {
-                    if (exp == "any" || actual == "any") return true;
-                    if (exp == "unknown" || actual == "unknown") return false;
-                    if (exp == actual) return true;
-                    if (exp == "pointer" && actual == "pointer") return true;
-                    if (collection_type_compatible(exp, actual)) return true;
-                    if (exp.rfind("struct:", 0) == 0 && actual.rfind("dict:", 0) == 0) return true;
-                    if (exp.rfind("struct:", 0) == 0 && (actual.rfind("map", 0) == 0 || actual == "map<any,any>")) return true;
-                    return false;
-                };
-                const bool defaultNullInit =
-                    stmt.value && std::holds_alternative<ExprNull>(stmt.value->node) && vi.type.name == "pointer";
-                if (known && !is_compatible(expected, vi.type.name) && !defaultNullInit) {
-                    DiagBuilder(result_, Severity::Error,
-                        "Type mismatch in declaration: " + stmt.name,
-                        "TC042", ctx.actionName()).emit();
-                }
-                if (known && expected != "unknown") {
-                    vi.type = TypeInfo{expected};
+                } else if (expected.name != "auto") {
+                    const bool defaultNullInit =
+                        stmt.value && std::holds_alternative<ExprNull>(stmt.value->node) && vi.type.name == "pointer";
+                    if (!tc_.is_assignable(vi.type, expected) && !defaultNullInit) {
+                        DiagBuilder(result_, Severity::Error,
+                            "Type mismatch in declaration: " + stmt.name,
+                            "TC042", ctx.actionName()).emit();
+                    }
+                    if (expected.name != "unknown") {
+                        vi.type = expected;
+                    }
                 }
             }
             scopes.declare(stmt.name, vi);
@@ -751,12 +785,12 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                 if (stmt.value) expr_.check(*stmt.value, ctx);
             } else {
                 auto t = stmt.value ? expr_.check(*stmt.value, ctx) : TypeInfo{"void"};
-                const bool compatible =
-                    t.name == "any" || t.name == retType ||
-                    (retType == "int" && t.name == "bool");
-                if (!compatible) {
+                bool known = true;
+                TypeInfo expected = tc_.resolve_type(retType, ctx.program, &known);
+                if (!known) expected = TypeInfo{retType};
+                if (!tc_.is_assignable(t, expected) && !tc_.is_convertible(t, expected)) {
                     DiagBuilder(result_, Severity::Error,
-                        "Return type mismatch: expected " + retType + ", got " + t.name,
+                        "Return type mismatch: expected " + expected.name + ", got " + t.name,
                         "TC040", ctx.actionName())
                         .hint("Change return expression type or declare action return type as `" + t.name + "`")
                         .emit();
@@ -777,17 +811,8 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                 } else {
                     if (v->isConst) DiagBuilder(result_, Severity::Error, "Cannot assign to const variable: " + stmt.varOrField, "TC051", ctx.actionName()).emit();
                     auto valT = expr_.check(stmt.value, ctx);
-                    auto assign_compatible = [&](const std::string& target, const std::string& source) {
-                        if (target == "any" || source == "any") return true;
-                        if (target == "unknown" || source == "unknown") return false;
-                        if (target == source) return true;
-                        if (collection_type_compatible(target, source)) return true;
-                        if (target.rfind("struct:", 0) == 0 && source.rfind("dict:", 0) == 0) return true;
-                        if (target.rfind("struct:", 0) == 0 && (source.rfind("map", 0) == 0 || source == "map<any,any>")) return true;
-                        return false;
-                    };
                     if (v->type.name == "unknown") v->type = valT;
-                    else if (!assign_compatible(v->type.name, valT.name)) {
+                    else if (!tc_.is_assignable(valT, v->type)) {
                         DiagBuilder(result_, Severity::Error,
                             "Assignment type mismatch on " + stmt.varOrField + ": variable is " + v->type.name + ", value is " + valT.name,
                             "TC052", ctx.actionName())
@@ -992,19 +1017,35 @@ void TypeChecker::pass_check_program(const Program& program, TCResult& out) {
                     .hint("Add a type: `" + a.name + "(" + p.name + ": int)` or `" + a.name + "(int " + p.name + ")`")
                     .emit();
             }
-            VarInfo vi; vi.type={p.type.empty()?"unknown":p.type}; vi.assigned=true; scopes.declare(p.name, vi);
+            bool known = true;
+            TypeInfo paramType = p.type.empty()
+                ? TypeInfo{"unknown"}
+                : resolve_type(p.type, &program, &known);
+            if (!p.type.empty() && !known) {
+                DiagBuilder(out, Severity::Error,
+                    "Unknown parameter type '" + p.type + "' on '" + p.name + "' in action '" + a.name + "'",
+                    "TC041", a.name)
+                    .hint("Known primitives: int, string, bool, double, void, pointer, array<T>, map<K,V>, struct:Name, enum:Name")
+                    .emit();
+            }
+            VarInfo vi; vi.type = paramType; vi.assigned = true; scopes.declare(p.name, vi);
         }
         // Register globals with explicit type annotations so action bodies can reference them
         for (auto& g : program.globals) {
             if (!g.typeName.empty()) {
-                VarInfo gi; gi.type = {g.typeName}; gi.assigned = true; gi.used = true;
+                bool known = true;
+                VarInfo gi; gi.type = resolve_type(g.typeName, &program, &known); gi.assigned = true; gi.used = true;
                 scopes.declare(g.name, gi);
             }
         }
-        // Implicit runtime result variable (used by handle method call dispatch)
+        // Implicit runtime injectables (handle result + HTTP request/response)
         {
             VarInfo ri; ri.type = {"string"}; ri.assigned = true; ri.used = true;
             scopes.declare("_", ri);
+            VarInfo resInfo; resInfo.type = {"string"}; resInfo.assigned = true; resInfo.used = true;
+            scopes.declare("res", resInfo);
+            VarInfo reqInfo; reqInfo.type = {"string"}; reqInfo.assigned = true; reqInfo.used = true;
+            scopes.declare("req", reqInfo);
         }
         auto rf = stmt.check_block(a.body, ctx, scopes, a.returnType.empty()?"void":a.returnType);
         for (auto& frame : scopes.all()) for (auto& kv : frame) if (!kv.second.used) DiagBuilder(out, Severity::Warning, "Unused variable: " + kv.first, "TC120", a.name).emit();
@@ -1346,6 +1387,7 @@ void TypeChecker::init_builtins() {
     // sse: handle methods
     add("sse.emit",2,2,"void");
     add("sse.close",0,0,"void");
+
 }
 
 } // namespace erelang

@@ -1,0 +1,244 @@
+@erelang
+#include <builtin/network> as net
+
+// ─────────────────────────────────────────────
+//  Dark minimal CSS (shared)
+// ─────────────────────────────────────────────
+public action dark_css: string {
+    return "
+        :root {
+            --bg: #0f0f0f;
+            --surface: #1a1a1a;
+            --border: #2a2a2a;
+            --text: #e8e8e8;
+            --muted: #888;
+            --accent: #7c9cff;
+            --accent-hover: #9bb3ff;
+            --green: #4ade80;
+            --red: #f87171;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            line-height: 1.5;
+        }
+        header {
+            padding: 1.25rem 2rem;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        header h1 {
+            font-size: 1.15rem;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+        }
+        header span {
+            color: var(--muted);
+            font-size: 0.85rem;
+        }
+        main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            max-width: 720px;
+            width: 100%;
+            margin: 0 auto;
+            padding: 2rem 1.5rem;
+        }
+        .status {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            font-size: 0.8rem;
+            color: var(--muted);
+            margin-bottom: 1.5rem;
+        }
+        .dot {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            background: var(--muted);
+        }
+        .dot.online { background: var(--green); box-shadow: 0 0 6px var(--green); }
+        .dot.offline { background: var(--red); }
+        #log {
+            flex: 1;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1.25rem;
+            overflow-y: auto;
+            font-family: 'Cascadia Code', 'Fira Code', monospace;
+            font-size: 0.85rem;
+            min-height: 320px;
+            margin-bottom: 1rem;
+        }
+        .msg {
+            margin-bottom: 0.6rem;
+            padding: 0.35rem 0;
+        }
+        .msg .time { color: var(--muted); margin-right: 0.6rem; }
+        .msg.system { color: var(--accent); }
+        .msg.error { color: var(--red); }
+        .input-row {
+            display: flex;
+            gap: 0.6rem;
+        }
+        input[type=text] {
+            flex: 1;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 0.75rem 1rem;
+            color: var(--text);
+            font-size: 0.95rem;
+            outline: none;
+            transition: border-color 0.15s;
+        }
+        input[type=text]:focus { border-color: var(--accent); }
+        button {
+            background: var(--accent);
+            color: #0f0f0f;
+            border: none;
+            border-radius: 10px;
+            padding: 0.75rem 1.4rem;
+            font-weight: 600;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+        button:hover { background: var(--accent-hover); }
+        button:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+        footer {
+            text-align: center;
+            padding: 1rem;
+            color: var(--muted);
+            font-size: 0.75rem;
+            border-top: 1px solid var(--border);
+        }
+    ";
+}
+
+// ─────────────────────────────────────────────
+//  Pages
+// ─────────────────────────────────────────────
+public action page_home: string {
+    string css = dark_css();
+    return "
+<!DOCTYPE html>
+<html lang='en'>
+<head>
+    <meta charset='UTF-8'>
+    <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+    <title>Erelang · Live</title>
+    <style>" + css + "</style>
+</head>
+<body>
+    <header>
+        <h1>Erelang</h1>
+        <span>WebSocket live demo</span>
+    </header>
+    <main>
+        <div class='status'>
+            <div class='dot' id='dot'></div>
+            <span id='statusText'>Connecting…</span>
+        </div>
+        <div id='log'></div>
+        <div class='input-row'>
+            <input type='text' id='msg' placeholder='Type a message…' autocomplete='off'>
+            <button id='sendBtn' disabled>Send</button>
+        </div>
+    </main>
+    <footer>Powered by Erelang · dark minimal</footer>
+
+    <script>
+        const log = document.getElementById('log');
+        const input = document.getElementById('msg');
+        const btn = document.getElementById('sendBtn');
+        const dot = document.getElementById('dot');
+        const statusText = document.getElementById('statusText');
+
+        function addMsg(text, cls = '') {
+            const d = document.createElement('div');
+            d.className = 'msg ' + cls;
+            const time = new Date().toLocaleTimeString();
+            d.innerHTML = '<span class=\"time\">' + time + '</span>' + text;
+            log.appendChild(d);
+            log.scrollTop = log.scrollHeight;
+        }
+
+        const ws = new WebSocket('ws://' + location.host + '/ws');
+
+        ws.onopen = () => {
+            dot.className = 'dot online';
+            statusText.textContent = 'Connected';
+            btn.disabled = false;
+            addMsg('Connected to server', 'system');
+        };
+
+        ws.onclose = () => {
+            dot.className = 'dot offline';
+            statusText.textContent = 'Disconnected';
+            btn.disabled = true;
+            addMsg('Connection closed', 'error');
+        };
+
+        ws.onerror = () => addMsg('WebSocket error', 'error');
+
+        ws.onmessage = (e) => addMsg(e.data);
+
+        function send() {
+            const text = input.value.trim();
+            if (!text || ws.readyState !== 1) return;
+            ws.send(text);
+            input.value = '';
+        }
+
+        btn.onclick = send;
+        input.onkeydown = (e) => { if (e.key === 'Enter') send(); };
+    </script>
+</body>
+</html>
+    ";
+}
+
+// ─────────────────────────────────────────────
+//  Route handlers
+// ─────────────────────────────────────────────
+public action home {
+    res.html(page_home());
+}
+
+public action ws_handler {
+    print "WS message: " + _;
+}
+
+// ─────────────────────────────────────────────
+//  Server entry
+// ─────────────────────────────────────────────
+public action main {
+    string server = net.create_server("8080");
+
+    server.cors("*");
+    server.get("/", "home");
+    server.ws("/ws", "ws_handler");
+
+    print "----------------------------------";
+    print "  Erelang dark backend running";
+    print "  http://localhost:8080";
+    print "  ws://localhost:8080/ws";
+    print "----------------------------------";
+
+    server.listen();
+}
+
+run main;

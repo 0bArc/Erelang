@@ -1,0 +1,39 @@
+@erelang
+
+struct Point {
+    int x;
+    int y;
+}
+
+action takes_int(n: int) {
+    print n;
+}
+
+action ret_int(): int {
+    return 123;
+}
+
+action ret_bool_as_int(): int {
+    return true;
+}
+
+action main() {
+    int x = 1;
+    any a = "hello";
+    Array<any> loose_arr = [1];
+    Array<int> nums = loose_arr;
+    Map<any, any> loose_map = {"k": 1};
+    Map<string, int> counts = loose_map;
+    Point p = {"x": 1, "y": 2};
+    takes_int(123);
+    int r1 = ret_int();
+    ret_bool_as_int();
+    print x;
+    print r1;
+    print a;
+    print nums;
+    print counts;
+    print p;
+}
+
+run main;

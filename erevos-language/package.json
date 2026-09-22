@@ -3,10 +3,16 @@
   "displayName": "Erelang Language",
   "publisher": "localdev",
   "description": "Syntax highlighting and language basics for Erelang (.ere/.elan)",
-  "version": "0.0.27",
+  "version": "0.0.28",
   "engines": {
     "vscode": "^1.104.0"
   },
+  "activationEvents": [
+    "onLanguage:erelang",
+    "onLanguage:erelangManifest",
+    "onLanguage:erelangCore",
+    "onCommand:erelang.debugCompletionContext"
+  ],
   "icon": "icon.png",
   "categories": [
     "Programming Languages"

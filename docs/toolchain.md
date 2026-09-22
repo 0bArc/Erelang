@@ -7,6 +7,7 @@
 | `erelang.exe` | `src/obs_main.cpp` | Run scripts, the main binary you use |
 | `obc.exe` | `src/main.cpp` | Compiler driver (emit IR, emit ASM) |
 | `erelang` static lib | CMake target `erelang` | Compiler + runtime, linkable |
+| `symcheck.exe` | `tools/symcheck` ([0bArc/symcheck](https://github.com/0bArc/symcheck)) | PE/COFF symbol and linker diagnostics |
 
 ## Pipeline
 
@@ -40,6 +41,7 @@ erelang --help
 | `BUILD_SHARED_RUNTIME=ON` | build `erelang.dll` |
 | `ERELANG_EMBED_PAYLOAD=ON` | embed static lib in runner for portability |
 | `ERELANG_BUNDLE_MINGW_RUNTIME=ON` | copy MinGW DLLs next to exe |
+| `ERELANG_BUILD_SYMCHECK=OFF` | skip the SymCheck CLI under `tools/symcheck` |
 
 ## Plugins
 

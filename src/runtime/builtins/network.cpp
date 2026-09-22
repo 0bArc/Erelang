@@ -19,6 +19,9 @@
 #include <thread>
 #include <functional>
 #include <memory>
+#include <cstring>
+#include <cstdint>
+#include "erelang/runtime.hpp"
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -30,8 +33,10 @@
 #include <winhttp.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <bcrypt.h>
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "bcrypt.lib")
 #endif
 
 namespace erelang {
@@ -633,6 +638,224 @@ static std::unordered_map<int, SseConnection> g_sseConnections;
 static std::mutex g_sseMutex;
 static std::atomic<int> g_sseNextId{1};
 
+// Server-side WebSocket (Winsock, separate from WinHTTP client ids)
+struct WsServerConn {
+    SOCKET sock = INVALID_SOCKET;
+    std::mutex sendMutex;
+    std::atomic<bool> open{true};
+    std::string actionName;
+    std::thread reader;
+};
+
+struct WsServerEvent {
+    int connId = 0;
+    std::string actionName;
+    std::string message;
+};
+
+static std::unordered_map<int, std::shared_ptr<WsServerConn>> g_wsServerConns;
+static std::mutex g_wsServerMutex;
+static std::atomic<int> g_wsServerNextId{1000000};
+static std::deque<WsServerEvent> g_wsServerEvents;
+static std::mutex g_wsServerEventMutex;
+
+static std::string base64_encode(const unsigned char* data, size_t len) {
+    static const char* kTable = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    out.reserve(((len + 2) / 3) * 4);
+    for (size_t i = 0; i < len; i += 3) {
+        unsigned int n = static_cast<unsigned int>(data[i]) << 16;
+        if (i + 1 < len) n |= static_cast<unsigned int>(data[i + 1]) << 8;
+        if (i + 2 < len) n |= static_cast<unsigned int>(data[i + 2]);
+        out.push_back(kTable[(n >> 18) & 63]);
+        out.push_back(kTable[(n >> 12) & 63]);
+        out.push_back((i + 1 < len) ? kTable[(n >> 6) & 63] : '=');
+        out.push_back((i + 2 < len) ? kTable[n & 63] : '=');
+    }
+    return out;
+}
+
+static std::string ws_accept_key(const std::string& clientKey) {
+    const std::string material = clientKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+    BCRYPT_ALG_HANDLE alg = nullptr;
+    BCRYPT_HASH_HANDLE hash = nullptr;
+    DWORD hashLen = 0;
+    DWORD cb = 0;
+    std::string empty;
+    if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA1_ALGORITHM, nullptr, 0) != 0) return empty;
+    if (BCryptGetProperty(alg, BCRYPT_HASH_LENGTH, reinterpret_cast<PUCHAR>(&hashLen), sizeof(hashLen), &cb, 0) != 0) {
+        BCryptCloseAlgorithmProvider(alg, 0);
+        return empty;
+    }
+    std::vector<unsigned char> digest(hashLen);
+    if (BCryptCreateHash(alg, &hash, nullptr, 0, nullptr, 0, 0) != 0) {
+        BCryptCloseAlgorithmProvider(alg, 0);
+        return empty;
+    }
+    if (BCryptHashData(hash, reinterpret_cast<PUCHAR>(const_cast<char*>(material.data())),
+                       static_cast<ULONG>(material.size()), 0) != 0 ||
+        BCryptFinishHash(hash, digest.data(), hashLen, 0) != 0) {
+        BCryptDestroyHash(hash);
+        BCryptCloseAlgorithmProvider(alg, 0);
+        return empty;
+    }
+    BCryptDestroyHash(hash);
+    BCryptCloseAlgorithmProvider(alg, 0);
+    return base64_encode(digest.data(), digest.size());
+}
+
+static bool recv_exact(SOCKET s, char* dest, int n) {
+    int got = 0;
+    while (got < n) {
+        int r = recv(s, dest + got, n - got, 0);
+        if (r <= 0) return false;
+        got += r;
+    }
+    return true;
+}
+
+static bool ws_server_send_frame(WsServerConn& conn, unsigned char opcode, const std::string& payload) {
+    if (!conn.open.load() || conn.sock == INVALID_SOCKET) return false;
+    std::string frame;
+    frame.reserve(payload.size() + 14);
+    frame.push_back(static_cast<char>(0x80 | (opcode & 0x0F)));
+    const size_t len = payload.size();
+    if (len < 126) {
+        frame.push_back(static_cast<char>(len));
+    } else if (len <= 0xFFFF) {
+        frame.push_back(126);
+        frame.push_back(static_cast<char>((len >> 8) & 0xFF));
+        frame.push_back(static_cast<char>(len & 0xFF));
+    } else {
+        frame.push_back(127);
+        for (int i = 7; i >= 0; --i)
+            frame.push_back(static_cast<char>((len >> (8 * i)) & 0xFF));
+    }
+    frame.append(payload);
+    std::lock_guard<std::mutex> lock(conn.sendMutex);
+    int sent = send(conn.sock, frame.data(), static_cast<int>(frame.size()), 0);
+    return sent == static_cast<int>(frame.size());
+}
+
+static void ws_server_broadcast_text(const std::string& text, int exceptId = -1) {
+    std::vector<std::shared_ptr<WsServerConn>> targets;
+    {
+        std::lock_guard<std::mutex> lock(g_wsServerMutex);
+        for (auto& [id, c] : g_wsServerConns) {
+            if (id == exceptId) continue;
+            if (c && c->open.load()) targets.push_back(c);
+        }
+    }
+    for (auto& c : targets) ws_server_send_frame(*c, 0x1, text);
+}
+
+static void ws_server_close_conn(int id) {
+    std::shared_ptr<WsServerConn> conn;
+    {
+        std::lock_guard<std::mutex> lock(g_wsServerMutex);
+        auto it = g_wsServerConns.find(id);
+        if (it == g_wsServerConns.end()) return;
+        conn = it->second;
+        g_wsServerConns.erase(it);
+    }
+    if (!conn) return;
+    conn->open.store(false);
+    if (conn->sock != INVALID_SOCKET) {
+        closesocket(conn->sock);
+        conn->sock = INVALID_SOCKET;
+    }
+}
+
+static void ws_server_reader(int id, std::shared_ptr<WsServerConn> conn) {
+    while (conn->open.load()) {
+        unsigned char hdr[2];
+        if (!recv_exact(conn->sock, reinterpret_cast<char*>(hdr), 2)) break;
+        const unsigned char opcode = hdr[0] & 0x0F;
+        const bool masked = (hdr[1] & 0x80) != 0;
+        uint64_t payloadLen = hdr[1] & 0x7F;
+        if (payloadLen == 126) {
+            unsigned char ext[2];
+            if (!recv_exact(conn->sock, reinterpret_cast<char*>(ext), 2)) break;
+            payloadLen = (static_cast<uint64_t>(ext[0]) << 8) | ext[1];
+        } else if (payloadLen == 127) {
+            unsigned char ext[8];
+            if (!recv_exact(conn->sock, reinterpret_cast<char*>(ext), 8)) break;
+            payloadLen = 0;
+            for (int i = 0; i < 8; ++i) payloadLen = (payloadLen << 8) | ext[i];
+        }
+        if (payloadLen > 8 * 1024 * 1024) break;
+        unsigned char mask[4] = {};
+        if (masked) {
+            if (!recv_exact(conn->sock, reinterpret_cast<char*>(mask), 4)) break;
+        } else {
+            // clients must mask; refuse unmasked
+            break;
+        }
+        std::string payload(static_cast<size_t>(payloadLen), '\0');
+        if (payloadLen > 0) {
+            if (!recv_exact(conn->sock, payload.data(), static_cast<int>(payloadLen))) break;
+            for (size_t i = 0; i < payload.size(); ++i)
+                payload[i] = static_cast<char>(static_cast<unsigned char>(payload[i]) ^ mask[i % 4]);
+        }
+
+        if (opcode == 0x8) { // close
+            ws_server_send_frame(*conn, 0x8, payload);
+            break;
+        }
+        if (opcode == 0x9) { // ping -> pong
+            ws_server_send_frame(*conn, 0xA, payload);
+            continue;
+        }
+        if (opcode == 0xA) continue; // pong
+        if (opcode != 0x1 && opcode != 0x2) continue; // text/binary
+
+        // Echo to sender and broadcast to peers
+        ws_server_send_frame(*conn, 0x1, payload);
+        ws_server_broadcast_text(payload, id);
+
+        {
+            std::lock_guard<std::mutex> lock(g_wsServerEventMutex);
+            g_wsServerEvents.push_back(WsServerEvent{id, conn->actionName, payload});
+        }
+    }
+    conn->open.store(false);
+    if (conn->sock != INVALID_SOCKET) {
+        closesocket(conn->sock);
+        conn->sock = INVALID_SOCKET;
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_wsServerMutex);
+        g_wsServerConns.erase(id);
+    }
+}
+
+static std::string find_ws_action(HttpServer& server, const std::string& path) {
+    for (const auto& [m, p, a] : server.routes) {
+        if (m == "WS_UPGRADE" && p == path) return a;
+    }
+    for (auto& g : server.groups) {
+        std::string action = find_ws_action(*g, path);
+        if (!action.empty()) return action;
+    }
+    return {};
+}
+
+static void drain_ws_server_events(Runtime* rt) {
+    if (!rt) return;
+    std::deque<WsServerEvent> batch;
+    {
+        std::lock_guard<std::mutex> lock(g_wsServerEventMutex);
+        batch.swap(g_wsServerEvents);
+    }
+    for (const auto& ev : batch) {
+        if (ev.actionName.empty()) continue;
+        std::unordered_map<std::string, std::string> inject;
+        inject["_"] = ev.message;
+        inject["sock"] = "ws:" + std::to_string(ev.connId);
+        rt->call_action_by_name(ev.actionName, {}, inject);
+    }
+}
+
 // Upload buffer: request_id -> file data
 static std::unordered_map<int, std::unordered_map<std::string, std::string>> g_uploadBuffers;
 static std::mutex g_uploadMutex;
@@ -860,6 +1083,53 @@ static void handle_http_client(SOCKET client, std::shared_ptr<HttpServer> server
     }
     if (servedStatic) { fprintf(stderr, "  <- 200 (static)\n"); closesocket(client); return; }
 
+    // WebSocket upgrade
+    {
+        std::string wsAction = find_ws_action(*server, uriPath);
+        auto upgIt = headers.find("upgrade");
+        auto keyIt = headers.find("sec-websocket-key");
+        bool wantWs = method == "GET" && !wsAction.empty() &&
+                      upgIt != headers.end() &&
+                      upgIt->second.find("websocket") != std::string::npos &&
+                      keyIt != headers.end() && !keyIt->second.empty();
+        if (wantWs) {
+            std::string accept = ws_accept_key(keyIt->second);
+            if (accept.empty()) {
+                std::string resp = "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                send(client, resp.c_str(), static_cast<int>(resp.size()), 0);
+                closesocket(client);
+                return;
+            }
+            std::ostringstream resp;
+            resp << "HTTP/1.1 101 Switching Protocols\r\n"
+                 << "Upgrade: websocket\r\n"
+                 << "Connection: Upgrade\r\n"
+                 << "Sec-WebSocket-Accept: " << accept << "\r\n";
+            if (!server->corsOrigin.empty())
+                resp << "Access-Control-Allow-Origin: " << server->corsOrigin << "\r\n";
+            resp << "\r\n";
+            std::string respStr = resp.str();
+            if (send(client, respStr.c_str(), static_cast<int>(respStr.size()), 0) != static_cast<int>(respStr.size())) {
+                closesocket(client);
+                return;
+            }
+
+            auto conn = std::make_shared<WsServerConn>();
+            conn->sock = client;
+            conn->actionName = wsAction;
+            conn->open.store(true);
+            int sid = g_wsServerNextId.fetch_add(1);
+            {
+                std::lock_guard<std::mutex> lock(g_wsServerMutex);
+                g_wsServerConns[sid] = conn;
+            }
+            conn->reader = std::thread(ws_server_reader, sid, conn);
+            conn->reader.detach();
+            fprintf(stderr, "  <- 101 (WebSocket upgrade, ws:%d)\n", sid);
+            return;
+        }
+    }
+
     // Find route and generate response inline
     std::string actionName = find_route(*server, method, uriPath);
     
@@ -983,7 +1253,7 @@ static BOOL WINAPI erelang_http_ctrl_handler(DWORD ctrlType) {
 }
 
 // Accept loop — uses select() with 100ms timeout so Ctrl+C is responsive
-static void accept_loop(std::shared_ptr<HttpServer> server) {
+static void accept_loop(std::shared_ptr<HttpServer> server, Runtime* rt) {
     // Register for graceful Ctrl+C shutdown
     {
         std::lock_guard<std::mutex> lock(g_activeServersMutex);
@@ -995,6 +1265,8 @@ static void accept_loop(std::shared_ptr<HttpServer> server) {
     }
 
     while (server->running.load()) {
+        drain_ws_server_events(rt);
+
         fd_set readSet;
         FD_ZERO(&readSet);
         FD_SET(server->listenSocket, &readSet);
@@ -1092,7 +1364,7 @@ static bool http_server_listen_impl(int id) {
         if (server->running.load()) return true;
         server->running.store(true);
     }
-    accept_loop(server);
+    accept_loop(server, nullptr);
     server->running.store(false);
     return true;
 }
@@ -1122,7 +1394,7 @@ static bool http_server_shutdown_impl(int id, int timeoutMs) {
 }
 
 // Handle method calls on http: handles
-std::string __erelang_http_handle_method(int id, const std::string& method, const std::vector<std::string>& args) {
+std::string __erelang_http_handle_method(Runtime* rt, int id, const std::string& method, const std::vector<std::string>& args) {
     auto argS = [&](size_t i) -> const std::string& {
         static const std::string empty;
         return i < args.size() ? args[i] : empty;
@@ -1139,8 +1411,9 @@ std::string __erelang_http_handle_method(int id, const std::string& method, cons
             if (server->running.load()) return "true";
             server->running.store(true);
         }
-        accept_loop(server);
+        accept_loop(server, rt);
         server->running.store(false);
+        drain_ws_server_events(rt);
         return "true";
     }
 
@@ -1222,6 +1495,10 @@ std::string __erelang_http_handle_method(int id, const std::string& method, cons
         return "true";
     }
     return "";
+}
+
+std::string __erelang_http_handle_method(int id, const std::string& method, const std::vector<std::string>& args) {
+    return __erelang_http_handle_method(nullptr, id, method, args);
 }
 
 // Handle method calls on req: handles
@@ -1601,6 +1878,53 @@ static std::string net_dispatch(const std::string& name, const std::vector<std::
 
 std::string __erelang_builtin_network_dispatch(const std::string& name, const std::vector<std::string>& argv) {
     return net_dispatch(name, argv);
+}
+
+bool __erelang_ws_server_try_method(int id, const std::string& method, const std::vector<std::string>& args, std::string& out) {
+#ifdef _WIN32
+    auto argS = [&](size_t i) -> const std::string& {
+        static const std::string empty;
+        return i < args.size() ? args[i] : empty;
+    };
+
+    std::shared_ptr<WsServerConn> conn;
+    {
+        std::lock_guard<std::mutex> lock(g_wsServerMutex);
+        auto it = g_wsServerConns.find(id);
+        if (it == g_wsServerConns.end()) return false;
+        conn = it->second;
+    }
+    if (!conn) return false;
+
+    if (method == "send" || method == "send_binary") {
+        out = ws_server_send_frame(*conn, 0x1, argS(0)) ? "true" : "false";
+        return true;
+    }
+    if (method == "broadcast") {
+        ws_server_broadcast_text(argS(0));
+        out = "true";
+        return true;
+    }
+    if (method == "close") {
+        ws_server_send_frame(*conn, 0x8, {});
+        ws_server_close_conn(id);
+        out = "true";
+        return true;
+    }
+    if (method == "state") {
+        out = conn->open.load() ? "open" : "closed";
+        return true;
+    }
+    if (method == "recv" || method == "recv_timeout") {
+        out = "";
+        return true;
+    }
+    out = "";
+    return true;
+#else
+    (void)id; (void)method; (void)args; (void)out;
+    return false;
+#endif
 }
 
 } // namespace erelang

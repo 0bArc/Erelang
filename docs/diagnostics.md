@@ -9,6 +9,7 @@ The typechecker emits `TC***` codes before the script runs. **Errors** stop exec
 | `TC001` | Unknown action or builtin: missing import, or typo |
 | `TC010` | Variable used before declaration |
 | `TC020` / `TC021` | Parameter count mismatch |
+| `TC022` | Argument type mismatch |
 | `TC030` | Variable redeclared in same scope |
 | `TC100`+ | Duplicate action / entity / struct name |
 | `TC110` | `run` target not found |

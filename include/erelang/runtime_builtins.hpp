@@ -32,9 +32,13 @@ std::string __erelang_ws_handle_method(int id, const std::string& method, const 
 
 // HTTP server handle method dispatch for http:/req:/res:/sse: prefix handles
 std::string __erelang_http_handle_method(int id, const std::string& method, const std::vector<std::string>& args);
+std::string __erelang_http_handle_method(Runtime* rt, int id, const std::string& method, const std::vector<std::string>& args);
 std::string __erelang_req_handle_method(int id, const std::string& method, const std::vector<std::string>& args);
 std::string __erelang_res_handle_method(int id, const std::string& method, const std::vector<std::string>& args);
 std::string __erelang_sse_handle_method(int id, const std::string& method, const std::vector<std::string>& args);
+
+// Server-side WebSocket (Winsock) — checked before WinHTTP client handles
+bool __erelang_ws_server_try_method(int id, const std::string& method, const std::vector<std::string>& args, std::string& out);
 
 // HTTP response handle (resp: prefix) — stores status + body + headers
 std::string __erelang_resp_handle_method(int id, const std::string& method, const std::vector<std::string>& args);

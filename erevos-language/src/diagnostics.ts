@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { BUILT_INS } from './constants';
-import { collect, isInStringLiteral } from './symbols';
+import { getDocumentIndex, isInStringLiteral } from './symbols';
 
 export function needsSemicolon(line: string): boolean {
   const t = line.trim();
@@ -61,7 +61,7 @@ export function validateDocument(
     }
 
     const diags: vscode.Diagnostic[] = [];
-    const symbols = collect(doc);
+    const symbols = getDocumentIndex(doc).symbols;
     const defined = symbols.actions;
     const userTypes = new Set([
       ...symbols.entities,

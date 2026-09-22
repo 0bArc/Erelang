@@ -61,12 +61,16 @@ const {
   SemanticTokenModifier: M,
 } = require('../out/semantic-tokens');
 
+let _docSeq = 0;
+
 function document(lines, version = 1) {
+  _docSeq += 1;
+  const id = `file:///test-${_docSeq}.elan`;
   return {
     isClosed: false,
     languageId: 'erelang',
     lineCount: lines.length,
-    uri: { fsPath: 'test.elan', toString: () => 'file:///test.elan' },
+    uri: { fsPath: `test-${_docSeq}.elan`, toString: () => id },
     version,
     lineAt: index => ({ text: lines[index] }),
   };

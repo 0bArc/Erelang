@@ -1,0 +1,20 @@
+@strict
+
+struct Wrapper<T> {
+    T value;
+}
+
+struct Outer<T> {
+    Wrapper<T> inner;
+}
+
+public action main() {
+    Outer<int> x;
+    Wrapper<int> w;
+    w.value = 99;
+    x.inner = w;
+    print w.value;
+    print "nested-subst-ok";
+}
+
+run main;

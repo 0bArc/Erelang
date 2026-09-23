@@ -48,6 +48,8 @@ struct CheckContext {
     const Action* currentAction{nullptr};
     LoopCtx loop{LoopCtx::NotInLoop};
     class ScopeManager* scopes{nullptr};
+    std::unordered_set<std::string> opaqueTypeParams;
+    std::unordered_map<std::string, std::vector<TypeRef>> typeParamConstraints;
     std::string actionName() const { return currentAction ? currentAction->name : std::string(); }
 };
 
@@ -134,6 +136,15 @@ public:
     bool is_convertible(const TypeInfo& from, const TypeInfo& to) const;
     TypeInfo resolve_type(const std::string& syntax, const Program* program, bool* known) const;
     bool returns_void(const Action& a) const { return a.returnType.empty() || a.returnType == "void"; }
+    bool is_opaque_type(const TypeInfo& t, const CheckContext& ctx) const;
+    bool unify_type_args(const std::string& pattern, const std::string& concrete,
+                         std::unordered_map<std::string, std::string>& out,
+                         const std::vector<TypeParam>& typeParams) const;
+    bool check_constraints(const std::vector<TypeParam>& typeParams,
+                           const std::unordered_map<std::string, std::string>& subst,
+                           const Program* program, TCResult& out, const std::string& ctxName) const;
+    std::string specialize_action_name(const std::string& name, const std::vector<std::string>& typeArgs) const;
+    TypeInfo instantiate_generic_type(const TypeRef& applied, const Program* program, bool* known) const;
 private:
     friend class ExprChecker; friend class StmtChecker;
     void pass_collect(const Program& program);
@@ -141,11 +152,16 @@ private:
     void finalize_unused(const Program& program, TCResult& out);
     void init_builtins();
     void register_imported_module_builtins(const Program& program);
+    void push_opaque_params(CheckContext& ctx, const std::vector<TypeParam>& params) const;
 private:
     struct BuiltinInfo { int minParams; int maxParams; std::string returnType; };
     // symbol tables / caches
     std::unordered_map<std::string, const Action*> actions_;
     std::unordered_map<std::string, const Entity*> entities_;
+    std::unordered_map<std::string, const StructDecl*> structs_;
+    std::unordered_map<std::string, const EnumDecl*> enums_;
+    std::unordered_map<std::string, const TypeAliasDecl*> aliases_;
+    std::unordered_map<std::string, const TraitDecl*> traits_;
     std::unordered_map<std::string, std::unordered_map<std::string, const Action*>> methods_;
     std::unordered_map<std::string, std::unordered_set<std::string>> entityFields_;
     std::unordered_map<std::string, ActionUsage> actionUsage_;
@@ -153,6 +169,7 @@ private:
     std::unordered_map<std::string, std::unordered_map<std::string, MethodUsage>> methodUsage_;
     std::unordered_map<std::string, BuiltinInfo> builtins_;
     std::unordered_set<std::string> externActions_;
+    mutable std::unordered_map<std::string, std::string> specializedTypeCache_;
 };
 
 } // namespace erelang

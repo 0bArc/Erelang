@@ -33,6 +33,40 @@ Declare functions either way:
 - `public` / `private` on actions, entity members, and globals; enforced when `@strict` is enabled.
 - Entry point: `run <actionName>` at file bottom.
 
+## Generics
+
+Parametric types and actions use `<T>` / `<A, B>` with optional constraints `T: Trait` or `T: A & B`. Generic bodies are verified against trait methods only (opaque checking). See [syntax.md](syntax.md#generics) and `examples/generics.elan`.
+
+## Option / Result and match
+
+`Option<T>` and `Result<T, E>` are ordinary generic enums (not builtins):
+
+```elan
+enum Option<T> {
+    Some(T),
+    None
+}
+
+enum Result<T, E> {
+    Ok(T),
+    Error(E)
+}
+
+Option<int> o = Option<int>.Some(42);
+match (o) {
+    case Some(v): { print v; }
+    case None: { print "empty"; }
+}
+```
+
+- Construction: `Type.Variant(payloads...)` / `Type.Variant` for zero-payload.
+- Match binds payload names only inside the case body; types come from specialized enum args.
+- Nested patterns: `case Ok(Some(x)):` when the payload is itself an enum.
+- Multi-payload: `case Values(a, b):` with arity checked at typecheck.
+- No exhaustiveness checking. No match guards. Declaration destructuring (`let Some(x) = ...`) and struct field patterns are not supported yet.
+
+See `examples/match.elan`.
+
 ## Variables
 
 ```elan

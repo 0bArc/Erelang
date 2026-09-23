@@ -66,4 +66,7 @@ void reset_global_container_state();
 [[nodiscard]] const StructDecl* find_struct_decl(const Program& program, std::string_view name);
 [[nodiscard]] const Action* find_struct_method(const StructDecl& decl, std::string_view name);
 
+[[nodiscard]] std::string encode_enum_variant(const std::string& tag, const std::vector<std::string>& payloads);
+[[nodiscard]] bool decode_enum_variant(const std::string& encoded, std::string& tagOut, std::vector<std::string>& payloadsOut);
+
 } // namespace erelang

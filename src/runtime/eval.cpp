@@ -9,6 +9,7 @@
 #include "erelang/parser.hpp"
 
 #include <cctype>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -62,6 +63,24 @@ void collect_action_slot_names(const Block& block,
                     if (c.body) collect_action_slot_names(*c.body, names, seen);
                 }
                 if (node.defaultBlk) collect_action_slot_names(*node.defaultBlk, names, seen);
+            } else if constexpr (std::is_same_v<T, MatchStmt>) {
+                for (const auto& c : node.cases) {
+                    if (c.pattern) {
+                        std::function<void(const PatternPtr&)> walk = [&](const PatternPtr& p) {
+                            if (!p) return;
+                            std::visit([&](const auto& node) {
+                                using N = std::decay_t<decltype(node)>;
+                                if constexpr (std::is_same_v<N, PatBinding>) {
+                                    add(node.name);
+                                } else if constexpr (std::is_same_v<N, PatCtor>) {
+                                    for (const auto& a : node.args) walk(a);
+                                }
+                            }, p->node);
+                        };
+                        walk(c.pattern);
+                    }
+                    if (c.body) collect_action_slot_names(*c.body, names, seen);
+                }
             } else if constexpr (std::is_same_v<T, TryCatchStmt>) {
                 add(node.catchVar);
                 if (node.tryBlk) collect_action_slot_names(*node.tryBlk, names, seen);
@@ -92,6 +111,13 @@ ValueBinOp to_value_bin_op(BinOp op) {
         case BinOp::And: return ValueBinOp::And;
         case BinOp::Or: return ValueBinOp::Or;
         case BinOp::Coalesce: return ValueBinOp::Coalesce;
+        case BinOp::BitAnd: return ValueBinOp::BitAnd;
+        case BinOp::BitXor: return ValueBinOp::BitXor;
+        case BinOp::BitOr: return ValueBinOp::BitOr;
+        case BinOp::Shl: return ValueBinOp::Shl;
+        case BinOp::Shr: return ValueBinOp::Shr;
+        case BinOp::StrictEQ: return ValueBinOp::StrictEq;
+        case BinOp::StrictNE: return ValueBinOp::StrictNe;
     }
     return ValueBinOp::Add;
 }
@@ -342,6 +368,8 @@ Value Runtime::eval_value(const Expr& e, const Env& env) const {
             return apply_unary(ValueUnOp::Neg, eval_value(*unary.expr, env));
         if (unary.op == UnOp::Not)
             return apply_unary(ValueUnOp::Not, eval_value(*unary.expr, env));
+        if (unary.op == UnOp::BitNot)
+            return apply_unary(ValueUnOp::BitNot, eval_value(*unary.expr, env));
 
         Value value = eval_value(*unary.expr, env);
         const std::string text = to_display_string(value);
@@ -395,6 +423,18 @@ Value Runtime::eval_value(const Expr& e, const Env& env) const {
     }
     if (std::holds_alternative<MemberExpr>(e.node)) {
         const auto& member = std::get<MemberExpr>(e.node);
+        if (currentProgram_) {
+            TypeRef applied;
+            try { applied = parse_type_ref_string(member.objectName); } catch (...) { applied = make_type_ref(member.objectName); }
+            for (const auto& en : currentProgram_->enums) {
+                if (en.name != applied.name && member.objectName != en.name) continue;
+                for (const auto& variant : en.variants) {
+                    if (variant.name == member.field && variant.payloads.empty()) {
+                        return Value::from_string(variant.name);
+                    }
+                }
+            }
+        }
         if (auto object = env.objects.find(member.objectName); object != env.objects.end()) {
             auto field = object->second->fields.find(member.field);
             if (field != object->second->fields.end())
@@ -439,6 +479,31 @@ Value Runtime::eval_value(const Expr& e, const Env& env) const {
     if (std::holds_alternative<FunctionCallExpr>(e.node)) {
         const auto& call = std::get<FunctionCallExpr>(e.node);
         if (currentProgram_) {
+            // Enum variant construction: Option<int>.Some(42)
+            {
+                const auto dot = call.name.rfind('.');
+                if (dot != std::string::npos && dot > 0) {
+                    const std::string typePart = call.name.substr(0, dot);
+                    const std::string variantName = call.name.substr(dot + 1);
+                    TypeRef applied;
+                    try { applied = parse_type_ref_string(typePart); } catch (...) { applied = make_type_ref(typePart); }
+                    for (const auto& en : currentProgram_->enums) {
+                        if (en.name != applied.name && typePart != en.name) continue;
+                        for (const auto& variant : en.variants) {
+                            if (variant.name != variantName) continue;
+                            if (variant.payloads.empty() && call.args.empty()) {
+                                return Value::from_string(variantName);
+                            }
+                            std::vector<std::string> payloads;
+                            payloads.reserve(call.args.size());
+                            for (const auto& arg : call.args) {
+                                payloads.push_back(to_display_string(eval_value(*arg, env)));
+                            }
+                            return Value::from_string(encode_enum_variant(variantName, payloads));
+                        }
+                    }
+                }
+            }
             const auto dot = call.name.rfind('.');
             if (dot != std::string::npos && dot > 0 && dot + 1 < call.name.size()) {
                 const std::string objectName = call.name.substr(0, dot);
@@ -480,8 +545,23 @@ Value Runtime::eval_value(const Expr& e, const Env& env) const {
                     if (method) {
                         Env callEnv;
                         for (const auto& kv : globalVars_) callEnv.vars[kv.first] = kv.second;
-                        for (size_t i = 0; i < method->params.size() && i < call.args.size(); ++i)
-                            callEnv.vars[method->params[i].name] = eval_value(*call.args[i], env);
+                        for (size_t i = 0; i < method->params.size() && i < call.args.size(); ++i) {
+                            const std::string& parameter = method->params[i].name;
+                            if (std::holds_alternative<ExprIdent>(call.args[i]->node)) {
+                                const std::string argName = std::get<ExprIdent>(call.args[i]->node).name;
+                                Value argValue = env_get(env, argName);
+                                if (argValue.rfind("struct:", 0) == 0)
+                                    callEnv.vars[parameter] = argValue;
+                                else
+                                    callEnv.vars[parameter] = eval_value(*call.args[i], env);
+                                for (const auto& field : decl->fields) {
+                                    callEnv.vars[parameter + "." + field.name] =
+                                        env_get(env, argName + "." + field.name);
+                                }
+                            } else {
+                                callEnv.vars[parameter] = eval_value(*call.args[i], env);
+                            }
+                        }
                         callEnv.vars["self"] = objectValue;
                         for (const auto& field : decl->fields) {
                             Value value = env_get(env, objectName + "." + field.name);
@@ -491,6 +571,7 @@ Value Runtime::eval_value(const Expr& e, const Env& env) const {
                         ExecContext child;
                         exec_block(method->body, *currentProgram_, child, callEnv);
                         for (auto& thread : child.threads) if (thread.joinable()) thread.join();
+                        lastReturnFields_ = std::move(child.returnFields);
                         return child.returned ? child.returnValue : Value::null_value();
                     }
                 }
@@ -505,18 +586,31 @@ Value Runtime::eval_value(const Expr& e, const Env& env) const {
                 for (const auto& kv : globalVars_) callEnv.vars[kv.first] = kv.second;
                 for (size_t i = 0; i < action->params.size() && i < call.args.size(); ++i) {
                     const std::string& parameter = action->params[i].name;
-                    callEnv.vars[parameter] = eval_value(*call.args[i], env);
                     if (std::holds_alternative<ExprIdent>(call.args[i]->node)) {
                         const std::string& argument =
                             std::get<ExprIdent>(call.args[i]->node).name;
+                        Value argValue = env_get(env, argument);
+                        if (argValue.rfind("struct:", 0) == 0)
+                            callEnv.vars[parameter] = argValue;
+                        else
+                            callEnv.vars[parameter] = eval_value(*call.args[i], env);
                         auto object = env.objects.find(argument);
                         if (object != env.objects.end()) callEnv.objects[parameter] = object->second;
+                        for (const auto& kv : env.vars) {
+                            const std::string prefix = argument + ".";
+                            if (kv.first.rfind(prefix, 0) == 0) {
+                                callEnv.vars[parameter + kv.first.substr(argument.size())] = kv.second;
+                            }
+                        }
+                    } else {
+                        callEnv.vars[parameter] = eval_value(*call.args[i], env);
                     }
                 }
                 prepare_action_slots(callEnv, *action);
                 ExecContext child;
                 exec_block(action->body, *currentProgram_, child, callEnv);
                 for (auto& thread : child.threads) if (thread.joinable()) thread.join();
+                lastReturnFields_ = std::move(child.returnFields);
                 return child.returned ? child.returnValue : Value::null_value();
             }
         }

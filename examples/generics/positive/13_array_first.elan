@@ -1,0 +1,16 @@
+@strict
+
+public action useArray<T>(items: Array<T>) {
+    print "array-ok";
+}
+
+public action main() {
+    Array<int> nums = [10, 20, 30];
+    useArray(nums);
+    print nums[0];
+
+    Map<string, int> m = {"a": 1};
+    print "collections-ok";
+}
+
+run main;

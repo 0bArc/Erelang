@@ -1,0 +1,24 @@
+@strict
+
+trait Comparable<T> {
+    action compare(other: T): int;
+}
+
+struct MissingMethod {
+    int value;
+}
+
+public action needsCompare<T: Comparable<T>>(a: T, b: T): int {
+    return a.compare(b);
+}
+
+public action main() {
+    MissingMethod a;
+    a.value = 1;
+    MissingMethod b;
+    b.value = 2;
+    int r = needsCompare(a, b);
+    print r;
+}
+
+run main;

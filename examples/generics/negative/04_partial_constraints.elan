@@ -1,0 +1,30 @@
+@strict
+
+trait Comparable<T> {
+    action compare(other: T): int;
+}
+
+trait Hashable {
+    action hash(): int;
+}
+
+struct OnlyComparable {
+    int value;
+
+    public action compare(other: OnlyComparable): int {
+        return 0;
+    }
+}
+
+public action foo<T: Comparable<T> & Hashable>(x: T): int {
+    return x.hash();
+}
+
+public action main() {
+    OnlyComparable c;
+    c.value = 1;
+    int r = foo(c);
+    print r;
+}
+
+run main;

@@ -1,0 +1,12 @@
+@strict
+
+public action make<T>(seed: T): T {
+    return seed;
+}
+
+public action main() {
+    int n = make<int>(0);
+    print n;
+}
+
+run main;

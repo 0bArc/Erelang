@@ -1,0 +1,25 @@
+@strict
+
+enum Option<T> {
+    Some(T),
+    None
+}
+
+type StringMap<T> = Map<string, T>;
+type IntList = Array<int>;
+type MaybeList<T> = Option<Array<T>>;
+
+public action main() {
+    StringMap<int> mi;
+    StringMap<string> ms;
+    IntList nums = [1, 2, 3];
+    MaybeList<int> ml = Option<Array<int>>.None;
+    print nums[0];
+    print "aliases-ok";
+    match (ml) {
+        case Some(v): { print "some"; }
+        case None: { print "none"; }
+    }
+}
+
+run main;

@@ -1,0 +1,22 @@
+@strict
+
+enum Option<T> {
+    Some(T),
+    None
+}
+
+enum Result<T, E> {
+    Ok(T),
+    Error(E)
+}
+
+enum PairInt {
+    Values(int, int)
+}
+
+public action main() {
+    Option<int> bad = Option<int>.Some("nope");
+    print bad;
+}
+
+run main;

@@ -297,6 +297,28 @@ Value apply_binary(ValueBinOp op, const Value& left, const Value& right) {
             for (int64_t i = 0; i < b; ++i) value *= a;
             return Value::from_int(value);
         }
+        case ValueBinOp::BitAnd:
+            return Value::from_int(value_as_int(left) & value_as_int(right));
+        case ValueBinOp::BitOr:
+            return Value::from_int(value_as_int(left) | value_as_int(right));
+        case ValueBinOp::BitXor:
+            return Value::from_int(value_as_int(left) ^ value_as_int(right));
+        case ValueBinOp::Shl:
+        case ValueBinOp::Shr: {
+            const int64_t a = value_as_int(left);
+            const int64_t b = value_as_int(right);
+            if (b < 0 || b >= 64) throw std::runtime_error("Shift amount out of range");
+            const auto shift = static_cast<unsigned>(b);
+            if (op == ValueBinOp::Shl) return Value::from_int(a << shift);
+            return Value::from_int(a >> shift);
+        }
+        case ValueBinOp::StrictEq:
+            if (left.kind != right.kind) return Value::from_bool(false);
+            return apply_binary(ValueBinOp::Eq, left, right);
+        case ValueBinOp::StrictNe: {
+            Value eq = apply_binary(ValueBinOp::StrictEq, left, right);
+            return Value::from_bool(!eq.b);
+        }
     }
     return Value::null_value();
 }

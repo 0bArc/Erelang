@@ -1,0 +1,16 @@
+@strict
+
+enum Option<T> {
+    Some(T),
+    None
+}
+
+public action main() {
+    Option<int> o = Option<int>.Some("hello");
+    match (o) {
+        case Some(x): { print x; }
+        case None: { print "none"; }
+    }
+}
+
+run main;

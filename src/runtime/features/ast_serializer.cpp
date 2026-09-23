@@ -68,6 +68,7 @@ constexpr uint8_t ST_WAITALL  = 22;
 constexpr uint8_t ST_PAUSE    = 23;
 constexpr uint8_t ST_IMPORT   = 24;
 constexpr uint8_t ST_EXPR     = 25;
+constexpr uint8_t ST_MATCH    = 26;
 
 class Writer {
 public:
@@ -135,6 +136,45 @@ void writeBlock(Writer& w, const Block* b);
 std::shared_ptr<Block> readBlock(Reader& r);
 void writeStmt(Writer& w, const Statement& s);
 Statement readStmt(Reader& r);
+void writePattern(Writer& w, const Pattern* p);
+PatternPtr readPattern(Reader& r);
+
+constexpr uint8_t PAT_NULL = 0;
+constexpr uint8_t PAT_WILDCARD = 1;
+constexpr uint8_t PAT_BINDING = 2;
+constexpr uint8_t PAT_CTOR = 3;
+
+void writePattern(Writer& w, const Pattern* p) {
+    if (!p) { w.u8(PAT_NULL); return; }
+    std::visit([&](const auto& node) {
+        using T = std::decay_t<decltype(node)>;
+        if constexpr (std::is_same_v<T, PatWildcard>) {
+            w.u8(PAT_WILDCARD);
+        } else if constexpr (std::is_same_v<T, PatBinding>) {
+            w.u8(PAT_BINDING); w.str(node.name);
+        } else if constexpr (std::is_same_v<T, PatCtor>) {
+            w.u8(PAT_CTOR); w.str(node.name);
+            w.u32(static_cast<uint32_t>(node.args.size()));
+            for (const auto& a : node.args) writePattern(w, a.get());
+        }
+    }, p->node);
+}
+
+PatternPtr readPattern(Reader& r) {
+    const uint8_t tag = r.u8();
+    if (tag == PAT_NULL) return nullptr;
+    if (tag == PAT_WILDCARD) return std::make_shared<Pattern>(Pattern{PatWildcard{}});
+    if (tag == PAT_BINDING) return std::make_shared<Pattern>(Pattern{PatBinding{r.str()}});
+    if (tag == PAT_CTOR) {
+        PatCtor ctor;
+        ctor.name = r.str();
+        const uint32_t n = r.u32();
+        ctor.args.reserve(n);
+        for (uint32_t i = 0; i < n; ++i) ctor.args.push_back(readPattern(r));
+        return std::make_shared<Pattern>(Pattern{std::move(ctor)});
+    }
+    return nullptr;
+}
 
 // ─── Expr ────────────────────────────────────────────────────────────────────
 
@@ -152,6 +192,8 @@ void writeExpr(Writer& w, const Expr* e) {
         else if constexpr (std::is_same_v<T, FunctionCallExpr>) {
             w.u8(EX_CALL); w.str(v.name); w.u32(static_cast<uint32_t>(v.args.size()));
             for (auto& a : v.args) writeExpr(w, a.get());
+            w.u32(static_cast<uint32_t>(v.typeArgs.size()));
+            for (auto& t : v.typeArgs) w.str(t);
         }
         else if constexpr (std::is_same_v<T, MemberExpr>) { w.u8(EX_MEMBER); w.str(v.objectName); w.str(v.field); }
         else if constexpr (std::is_same_v<T, IndexExpr>)  { w.u8(EX_INDEX); writeExpr(w, v.object.get()); writeExpr(w, v.index.get()); }
@@ -201,7 +243,10 @@ ExprPtr readExpr(Reader& r) {
         case EX_CALL:    {
             auto name = r.str(); auto n = r.u32(); std::vector<ExprPtr> args; args.reserve(n);
             for (uint32_t i = 0; i < n; ++i) args.push_back(readExpr(r));
-            return std::make_shared<Expr>(Expr{FunctionCallExpr{name, std::move(args)}});
+            FunctionCallExpr call{name, std::move(args), {}};
+            auto nta = r.u32(); call.typeArgs.reserve(nta);
+            for (uint32_t i = 0; i < nta; ++i) call.typeArgs.push_back(r.str());
+            return std::make_shared<Expr>(Expr{std::move(call)});
         }
         case EX_MEMBER:  { auto on = r.str(); auto f = r.str(); return std::make_shared<Expr>(Expr{MemberExpr{on, f}}); }
         case EX_INDEX:   { auto obj = readExpr(r); auto idx = readExpr(r); return std::make_shared<Expr>(Expr{IndexExpr{obj, idx}}); }
@@ -274,6 +319,8 @@ void writeStmt(Writer& w, const Statement& s) {
         else if constexpr (std::is_same_v<T, ActionCallStmt>) {
             w.u8(ST_ACTION); w.str(v.name); w.u32(static_cast<uint32_t>(v.args.size()));
             for (auto& a : v.args) writeExpr(w, a.get());
+            w.u32(static_cast<uint32_t>(v.typeArgs.size()));
+            for (auto& t : v.typeArgs) w.str(t);
         }
         else if constexpr (std::is_same_v<T, LetStmt>) {
             w.u8(ST_LET); w.u8(v.isConst ? 1 : 0); w.str(v.name); w.str(v.declaredType); writeExpr(w, v.value.get());
@@ -299,6 +346,14 @@ void writeStmt(Writer& w, const Statement& s) {
             w.u32(static_cast<uint32_t>(v.cases.size()));
             for (auto& c : v.cases) { w.str(c.value); w.u8(c.body ? 1 : 0); if (c.body) writeBlock(w, c.body.get()); }
             w.u8(v.defaultBlk ? 1 : 0); if (v.defaultBlk) writeBlock(w, v.defaultBlk.get());
+        }
+        else if constexpr (std::is_same_v<T, MatchStmt>) {
+            w.u8(ST_MATCH); writeExpr(w, v.selector.get());
+            w.u32(static_cast<uint32_t>(v.cases.size()));
+            for (auto& c : v.cases) {
+                writePattern(w, c.pattern.get());
+                w.u8(c.body ? 1 : 0); if (c.body) writeBlock(w, c.body.get());
+            }
         }
         else if constexpr (std::is_same_v<T, WhileStmt>) {
             w.u8(ST_WHILE); writeExpr(w, v.cond.get());
@@ -366,7 +421,10 @@ Statement readStmt(Reader& r) {
             auto name = r.str(); auto n = r.u32();
             std::vector<ExprPtr> args; args.reserve(n);
             for (uint32_t i = 0; i < n; ++i) args.push_back(readExpr(r));
-            return ActionCallStmt{name, std::move(args)};
+            ActionCallStmt call{name, std::move(args), {}};
+            auto nta = r.u32(); call.typeArgs.reserve(nta);
+            for (uint32_t i = 0; i < nta; ++i) call.typeArgs.push_back(r.str());
+            return call;
         }
         case ST_LET: { auto isC = r.u8() != 0; auto name = r.str(); auto dt = r.str(); auto v = readExpr(r); return LetStmt{isC, name, v, dt}; }
         case ST_RETURN: { if (r.u8()) { auto v = readExpr(r); return ReturnStmt{v}; } return ReturnStmt{}; }
@@ -393,6 +451,17 @@ Statement readStmt(Reader& r) {
             }
             auto def = r.u8() ? readBlock(r) : nullptr;
             return SwitchStmt{sel, std::move(cases), def};
+        }
+        case ST_MATCH: {
+            auto sel = readExpr(r); auto n = r.u32();
+            std::vector<MatchCase> cases; cases.reserve(n);
+            for (uint32_t i = 0; i < n; ++i) {
+                MatchCase mc;
+                mc.pattern = readPattern(r);
+                mc.body = r.u8() ? readBlock(r) : nullptr;
+                cases.push_back(std::move(mc));
+            }
+            return MatchStmt{sel, std::move(cases)};
         }
         case ST_WHILE: { auto c = readExpr(r); auto b = r.u8() ? readBlock(r) : nullptr; return WhileStmt{c, b}; }
         case ST_FOR: {
@@ -441,8 +510,30 @@ Param readParam(Reader& r) { return {r.str(), r.str()}; }
 void writeAttr(Writer& w, const Attribute& a) { w.str(a.name); w.optStr(a.value); }
 Attribute readAttr(Reader& r) { Attribute a; a.name = r.str(); a.value = r.optStr(); return a; }
 
+void writeTypeParams(Writer& w, const std::vector<TypeParam>& params) {
+    w.u32(static_cast<uint32_t>(params.size()));
+    for (const auto& tp : params) {
+        w.str(tp.name);
+        w.u32(static_cast<uint32_t>(tp.constraints.size()));
+        for (const auto& c : tp.constraints) w.str(type_ref_canonical(c));
+    }
+}
+std::vector<TypeParam> readTypeParams(Reader& r) {
+    std::vector<TypeParam> params;
+    auto n = r.u32(); params.reserve(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        TypeParam tp; tp.name = r.str();
+        auto nc = r.u32(); tp.constraints.reserve(nc);
+        for (uint32_t j = 0; j < nc; ++j) tp.constraints.push_back(parse_type_ref_string(r.str()));
+        params.push_back(std::move(tp));
+    }
+    return params;
+}
+
 void writeAction(Writer& w, const Action& a) {
-    w.str(a.name); w.u32(static_cast<uint32_t>(a.params.size()));
+    w.str(a.name);
+    writeTypeParams(w, a.typeParams);
+    w.u32(static_cast<uint32_t>(a.params.size()));
     for (auto& p : a.params) writeParam(w, p);
     writeBlock(w, &a.body);
     w.str(a.returnType); w.u8(static_cast<uint8_t>(a.visibility)); w.u8(a.exported ? 1 : 0);
@@ -452,6 +543,7 @@ void writeAction(Writer& w, const Action& a) {
 }
 Action readAction(Reader& r) {
     Action a; a.name = r.str();
+    a.typeParams = readTypeParams(r);
     auto np = r.u32(); a.params.reserve(np);
     for (uint32_t i = 0; i < np; ++i) a.params.push_back(readParam(r));
     a.body = *readBlock(r);
@@ -463,7 +555,9 @@ Action readAction(Reader& r) {
 }
 
 void writeEntity(Writer& w, const Entity& e) {
-    w.str(e.name); w.str(e.baseType);
+    w.str(e.name);
+    writeTypeParams(w, e.typeParams);
+    w.str(e.baseType);
     w.u32(static_cast<uint32_t>(e.fields.size()));
     for (auto& f : e.fields) {
         w.str(f.name); w.str(f.type);
@@ -480,7 +574,9 @@ void writeEntity(Writer& w, const Entity& e) {
     w.str(e.sourcePath);
 }
 Entity readEntity(Reader& r) {
-    Entity e; e.name = r.str(); e.baseType = r.str();
+    Entity e; e.name = r.str();
+    e.typeParams = readTypeParams(r);
+    e.baseType = r.str();
     auto nf = r.u32(); e.fields.reserve(nf);
     for (uint32_t i = 0; i < nf; ++i) {
         Field f; f.name = r.str(); f.type = r.str();
@@ -538,13 +634,16 @@ ImportDecl readImport(Reader& r) {
 }
 
 void writeStruct(Writer& w, const StructDecl& s) {
-    w.str(s.name); w.u32(static_cast<uint32_t>(s.fields.size()));
+    w.str(s.name);
+    writeTypeParams(w, s.typeParams);
+    w.u32(static_cast<uint32_t>(s.fields.size()));
     for (auto& f : s.fields) { w.str(f.name); w.str(f.type); }
     w.u32(static_cast<uint32_t>(s.methods.size()));
     for (auto& m : s.methods) writeAction(w, m);
 }
 StructDecl readStruct(Reader& r) {
     StructDecl s; s.name = r.str();
+    s.typeParams = readTypeParams(r);
     auto nf = r.u32(); s.fields.reserve(nf);
     for (uint32_t i = 0; i < nf; ++i) s.fields.push_back({r.str(), r.str()});
     auto nm = r.u32(); s.methods.reserve(nm);
@@ -553,18 +652,61 @@ StructDecl readStruct(Reader& r) {
 }
 
 void writeEnum(Writer& w, const EnumDecl& e) {
-    w.str(e.name); w.u32(static_cast<uint32_t>(e.members.size()));
-    for (auto& m : e.members) w.str(m);
+    w.str(e.name);
+    w.u32(static_cast<uint32_t>(e.typeParams.size()));
+    for (const auto& tp : e.typeParams) {
+        w.str(tp.name);
+        w.u32(static_cast<uint32_t>(tp.constraints.size()));
+        for (const auto& c : tp.constraints) w.str(type_ref_canonical(c));
+    }
+    w.u32(static_cast<uint32_t>(e.variants.size()));
+    for (const auto& m : e.variants) {
+        w.str(m.name);
+        w.u32(static_cast<uint32_t>(m.payloads.size()));
+        for (const auto& p : m.payloads) w.str(type_ref_canonical(p));
+    }
 }
 EnumDecl readEnum(Reader& r) {
     EnumDecl e; e.name = r.str();
-    auto n = r.u32(); e.members.reserve(n);
-    for (uint32_t i = 0; i < n; ++i) e.members.push_back(r.str());
+    auto ntp = r.u32(); e.typeParams.reserve(ntp);
+    for (uint32_t i = 0; i < ntp; ++i) {
+        TypeParam tp; tp.name = r.str();
+        auto nc = r.u32(); tp.constraints.reserve(nc);
+        for (uint32_t j = 0; j < nc; ++j) tp.constraints.push_back(parse_type_ref_string(r.str()));
+        e.typeParams.push_back(std::move(tp));
+    }
+    auto n = r.u32(); e.variants.reserve(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        EnumVariant v; v.name = r.str();
+        auto np = r.u32(); v.payloads.reserve(np);
+        for (uint32_t j = 0; j < np; ++j) v.payloads.push_back(parse_type_ref_string(r.str()));
+        e.variants.push_back(std::move(v));
+    }
     return e;
 }
 
-void writeTypeAlias(Writer& w, const TypeAliasDecl& t) { w.str(t.name); w.str(t.targetType); }
-TypeAliasDecl readTypeAlias(Reader& r) { return {r.str(), r.str()}; }
+void writeTypeAlias(Writer& w, const TypeAliasDecl& t) {
+    w.str(t.name);
+    w.u32(static_cast<uint32_t>(t.typeParams.size()));
+    for (const auto& tp : t.typeParams) {
+        w.str(tp.name);
+        w.u32(static_cast<uint32_t>(tp.constraints.size()));
+        for (const auto& c : tp.constraints) w.str(type_ref_canonical(c));
+    }
+    w.str(t.targetType);
+}
+TypeAliasDecl readTypeAlias(Reader& r) {
+    TypeAliasDecl t; t.name = r.str();
+    auto ntp = r.u32(); t.typeParams.reserve(ntp);
+    for (uint32_t i = 0; i < ntp; ++i) {
+        TypeParam tp; tp.name = r.str();
+        auto nc = r.u32(); tp.constraints.reserve(nc);
+        for (uint32_t j = 0; j < nc; ++j) tp.constraints.push_back(parse_type_ref_string(r.str()));
+        t.typeParams.push_back(std::move(tp));
+    }
+    t.targetType = r.str();
+    return t;
+}
 
 void writeExtern(Writer& w, const ExternDecl& e) {
     w.str(e.name); w.u32(static_cast<uint32_t>(e.params.size()));
@@ -589,7 +731,7 @@ std::vector<uint8_t> serialize_program(const Program& prog) {
 
     // Magic + version
     out.insert(out.end(), {'E','R','A','S'}); // "ERAS" = ERelang AST Serialized
-    w.u32(1); // format version
+    w.u32(2); // format version
 
     w.u8(prog.strict ? 1 : 0);
     w.u8(prog.debug ? 1 : 0);
@@ -616,6 +758,19 @@ std::vector<uint8_t> serialize_program(const Program& prog) {
     w.u32(static_cast<uint32_t>(prog.typeAliases.size()));
     for (auto& t : prog.typeAliases) writeTypeAlias(w, t);
 
+    w.u32(static_cast<uint32_t>(prog.traits.size()));
+    for (auto& tr : prog.traits) {
+        w.str(tr.name);
+        writeTypeParams(w, tr.typeParams);
+        w.u32(static_cast<uint32_t>(tr.methods.size()));
+        for (auto& m : tr.methods) {
+            w.str(m.name);
+            w.u32(static_cast<uint32_t>(m.params.size()));
+            for (auto& p : m.params) writeParam(w, p);
+            w.str(m.returnType);
+        }
+    }
+
     w.u32(static_cast<uint32_t>(prog.externs.size()));
     for (auto& xt : prog.externs) writeExtern(w, xt);
 
@@ -639,7 +794,7 @@ std::optional<Program> deserialize_program(const uint8_t* data, size_t size) {
 
         // Magic
         if (r.u8() != 'E' || r.u8() != 'R' || r.u8() != 'A' || r.u8() != 'S') return std::nullopt;
-        if (r.u32() != 1) return std::nullopt; // version
+        if (r.u32() != 2) return std::nullopt; // version
 
         Program prog;
         prog.strict = r.u8() != 0;
@@ -666,6 +821,23 @@ std::optional<Program> deserialize_program(const uint8_t* data, size_t size) {
 
         auto nt = r.u32(); prog.typeAliases.reserve(nt);
         for (uint32_t i = 0; i < nt; ++i) prog.typeAliases.push_back(readTypeAlias(r));
+
+        auto ntr = r.u32(); prog.traits.reserve(ntr);
+        for (uint32_t i = 0; i < ntr; ++i) {
+            TraitDecl tr;
+            tr.name = r.str();
+            tr.typeParams = readTypeParams(r);
+            auto nm = r.u32(); tr.methods.reserve(nm);
+            for (uint32_t j = 0; j < nm; ++j) {
+                TraitMethodSig m;
+                m.name = r.str();
+                auto np = r.u32(); m.params.reserve(np);
+                for (uint32_t k = 0; k < np; ++k) m.params.push_back(readParam(r));
+                m.returnType = r.str();
+                tr.methods.push_back(std::move(m));
+            }
+            prog.traits.push_back(std::move(tr));
+        }
 
         auto nxt = r.u32(); prog.externs.reserve(nxt);
         for (uint32_t i = 0; i < nxt; ++i) prog.externs.push_back(readExtern(r));

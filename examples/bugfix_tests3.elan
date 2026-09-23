@@ -1,9 +1,0 @@
-@erelang
-
-#include "unterminated";
-
-action include_test {
-    print "survived";
-}
-
-run include_test;

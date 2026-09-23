@@ -231,37 +231,71 @@ TypeInfo TypeChecker::resolve_type(const std::string& syntax, const Program* pro
     std::transform(decl.begin(), decl.end(), decl.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
     decl.erase(std::remove_if(decl.begin(), decl.end(), [](unsigned char c){ return std::isspace(c) != 0; }), decl.end());
 
+    // Preserve original casing for generic application via TypeRef.
+    TypeRef applied;
+    try {
+        applied = parse_type_ref_string(syntax);
+    } catch (...) {
+        applied = make_type_ref(syntax);
+    }
+    std::string baseName = applied.name;
+    std::string baseLower = baseName;
+    std::transform(baseLower.begin(), baseLower.end(), baseLower.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+    baseLower.erase(std::remove_if(baseLower.begin(), baseLower.end(), [](unsigned char c){ return std::isspace(c) != 0; }), baseLower.end());
+
     if (program) {
         for (const auto& alias : program->typeAliases) {
             std::string aliasName = alias.name;
             std::transform(aliasName.begin(), aliasName.end(), aliasName.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
             aliasName.erase(std::remove_if(aliasName.begin(), aliasName.end(), [](unsigned char c){ return std::isspace(c) != 0; }), aliasName.end());
-            if (aliasName == decl) {
-                decl = alias.targetType;
-                std::transform(decl.begin(), decl.end(), decl.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
-                decl.erase(std::remove_if(decl.begin(), decl.end(), [](unsigned char c){ return std::isspace(c) != 0; }), decl.end());
-                break;
+            if (aliasName == baseLower) {
+                if (!alias.typeParams.empty()) {
+                    if (applied.args.size() != alias.typeParams.size()) {
+                        if (known) *known = false;
+                        return TypeInfo{"unknown"};
+                    }
+                    std::unordered_map<std::string, std::string> subst;
+                    for (size_t i = 0; i < alias.typeParams.size(); ++i) {
+                        subst[alias.typeParams[i].name] = type_ref_canonical(applied.args[i]);
+                    }
+                    return resolve_type(substitute_type_string(alias.targetType, subst), program, known);
+                }
+                if (applied.args.empty()) {
+                    return resolve_type(alias.targetType, program, known);
+                }
             }
         }
     }
 
-    const std::string declNormalized = decl;
-    if (decl == "auto") return TypeInfo{"auto"};
-    if (decl == "any") return TypeInfo{"any"};
-    if (decl == "void") return TypeInfo{"void"};
-    if (decl == "int") return TypeInfo{"int"};
-    if (decl == "u8" || decl == "u16" || decl == "u32" || decl == "u64" ||
-        decl == "i8" || decl == "i16" || decl == "i32" || decl == "i64" ||
-        decl == "uint" || decl == "unsigned" || decl == "unsignedint") {
+    const std::string declNormalized = baseLower;
+    if (declNormalized == "auto") return TypeInfo{"auto"};
+    if (declNormalized == "any") return TypeInfo{"any"};
+    if (declNormalized == "void") return TypeInfo{"void"};
+    if (declNormalized == "int") return TypeInfo{"int"};
+    if (declNormalized == "u8" || declNormalized == "u16" || declNormalized == "u32" || declNormalized == "u64" ||
+        declNormalized == "i8" || declNormalized == "i16" || declNormalized == "i32" || declNormalized == "i64" ||
+        declNormalized == "uint" || declNormalized == "unsigned" || declNormalized == "unsignedint") {
         return TypeInfo{"int"};
     }
-    if (decl == "double" || decl == "float") return TypeInfo{"double"};
-    if (decl == "bool") return TypeInfo{"bool"};
-    if (decl == "pointer") return TypeInfo{"pointer"};
-    if (decl == "string" || decl == "str" || decl == "char") return TypeInfo{"string"};
-    if (decl == "array") return TypeInfo{"array<any>"};
+    if (declNormalized == "double" || declNormalized == "float") return TypeInfo{"double"};
+    if (declNormalized == "bool") return TypeInfo{"bool"};
+    if (declNormalized == "pointer") return TypeInfo{"pointer"};
+    if (declNormalized == "string" || declNormalized == "str" || declNormalized == "char") return TypeInfo{"string"};
+    if (declNormalized == "array") return TypeInfo{"array<any>"};
+    if (baseLower == "array" || baseLower == "Array") {
+        if (applied.args.empty()) return TypeInfo{"array<any>"};
+        TypeInfo elem = resolve_type(type_ref_canonical(applied.args[0]), program, known);
+        return TypeInfo{"array<" + elem.name + ">"};
+    }
     if (decl.rfind("array<", 0) == 0) return TypeInfo{decl};
-    if (decl == "map" || decl == "dictionary") return TypeInfo{"map<any,any>"};
+    if (declNormalized == "map" || declNormalized == "dictionary" || declNormalized == "hashmap") {
+        if (applied.args.size() >= 2) {
+            TypeInfo k = resolve_type(type_ref_canonical(applied.args[0]), program, known);
+            TypeInfo v = resolve_type(type_ref_canonical(applied.args[1]), program, known);
+            return TypeInfo{"map<" + k.name + "," + v.name + ">"};
+        }
+        return TypeInfo{"map<any,any>"};
+    }
     if (decl.rfind("map<", 0) == 0) return TypeInfo{decl};
     if (!decl.empty() && (decl.back() == '*' || decl.back() == '&')) return TypeInfo{"pointer"};
 
@@ -270,24 +304,195 @@ TypeInfo TypeChecker::resolve_type(const std::string& syntax, const Program* pro
             std::string structName = sd.name;
             std::transform(structName.begin(), structName.end(), structName.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
             structName.erase(std::remove_if(structName.begin(), structName.end(), [](unsigned char c){ return std::isspace(c) != 0; }), structName.end());
-            if (structName == declNormalized) return TypeInfo{"struct:" + sd.name};
+            if (structName == declNormalized) {
+                if (!sd.typeParams.empty()) {
+                    if (applied.args.size() != sd.typeParams.size()) {
+                        if (known) *known = false;
+                        return TypeInfo{"unknown"};
+                    }
+                    std::string canon = sd.name + "<";
+                    for (size_t i = 0; i < applied.args.size(); ++i) {
+                        if (i) canon += ", ";
+                        canon += type_ref_canonical(applied.args[i]);
+                    }
+                    canon += ">";
+                    return TypeInfo{"struct:" + canon};
+                }
+                if (!applied.args.empty()) {
+                    if (known) *known = false;
+                    return TypeInfo{"unknown"};
+                }
+                return TypeInfo{"struct:" + sd.name};
+            }
         }
         for (const auto& en : program->entities) {
             std::string entityName = en.name;
             std::transform(entityName.begin(), entityName.end(), entityName.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
             entityName.erase(std::remove_if(entityName.begin(), entityName.end(), [](unsigned char c){ return std::isspace(c) != 0; }), entityName.end());
-            if (entityName == declNormalized) return TypeInfo{"entity:" + en.name};
+            if (entityName == declNormalized) {
+                if (!en.typeParams.empty()) {
+                    if (applied.args.size() != en.typeParams.size()) {
+                        if (known) *known = false;
+                        return TypeInfo{"unknown"};
+                    }
+                    std::string canon = en.name + "<";
+                    for (size_t i = 0; i < applied.args.size(); ++i) {
+                        if (i) canon += ", ";
+                        canon += type_ref_canonical(applied.args[i]);
+                    }
+                    canon += ">";
+                    return TypeInfo{"entity:" + canon};
+                }
+                return TypeInfo{"entity:" + en.name};
+            }
         }
         for (const auto& en : program->enums) {
             std::string enumName = en.name;
             std::transform(enumName.begin(), enumName.end(), enumName.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
             enumName.erase(std::remove_if(enumName.begin(), enumName.end(), [](unsigned char c){ return std::isspace(c) != 0; }), enumName.end());
-            if (enumName == declNormalized) return TypeInfo{"enum:" + en.name};
+            if (enumName == declNormalized) {
+                if (!en.typeParams.empty()) {
+                    if (applied.args.size() != en.typeParams.size()) {
+                        if (known) *known = false;
+                        return TypeInfo{"unknown"};
+                    }
+                    std::string canon = en.name + "<";
+                    for (size_t i = 0; i < applied.args.size(); ++i) {
+                        if (i) canon += ", ";
+                        canon += type_ref_canonical(applied.args[i]);
+                    }
+                    canon += ">";
+                    return TypeInfo{"enum:" + canon};
+                }
+                return TypeInfo{"enum:" + en.name};
+            }
         }
     }
 
     if (known) *known = false;
     return TypeInfo{"unknown"};
+}
+
+bool TypeChecker::is_opaque_type(const TypeInfo& t, const CheckContext& ctx) const {
+    return ctx.opaqueTypeParams.count(t.name) != 0;
+}
+
+void TypeChecker::push_opaque_params(CheckContext& ctx, const std::vector<TypeParam>& params) const {
+    for (const auto& tp : params) {
+        ctx.opaqueTypeParams.insert(tp.name);
+        ctx.typeParamConstraints[tp.name] = tp.constraints;
+    }
+}
+
+std::string TypeChecker::specialize_action_name(const std::string& name, const std::vector<std::string>& typeArgs) const {
+    if (typeArgs.empty()) return name;
+    std::string out = name + "<";
+    for (size_t i = 0; i < typeArgs.size(); ++i) {
+        if (i) out += ", ";
+        out += typeArgs[i];
+    }
+    out += ">";
+    return out;
+}
+
+bool TypeChecker::unify_type_args(const std::string& pattern, const std::string& concrete,
+                                  std::unordered_map<std::string, std::string>& out,
+                                  const std::vector<TypeParam>& typeParams) const {
+    auto strip_prefix = [](std::string s) {
+        if (s.rfind("struct:", 0) == 0) s = s.substr(7);
+        else if (s.rfind("entity:", 0) == 0) s = s.substr(7);
+        else if (s.rfind("enum:", 0) == 0) s = s.substr(5);
+        return s;
+    };
+    TypeRef pat;
+    TypeRef con;
+    try {
+        pat = parse_type_ref_string(pattern);
+        con = parse_type_ref_string(strip_prefix(concrete));
+    } catch (...) {
+        return false;
+    }
+    auto isParam = [&](const std::string& n) {
+        for (const auto& tp : typeParams) if (tp.name == n) return true;
+        return false;
+    };
+    std::function<bool(const TypeRef&, const TypeRef&)> unify = [&](const TypeRef& p, const TypeRef& c) -> bool {
+        if (isParam(p.name) && p.args.empty()) {
+            auto it = out.find(p.name);
+            const std::string canon = type_ref_canonical(c);
+            if (it == out.end()) {
+                out[p.name] = canon;
+                return true;
+            }
+            return it->second == canon;
+        }
+        if (p.name != c.name || p.args.size() != c.args.size()) return false;
+        for (size_t i = 0; i < p.args.size(); ++i) {
+            if (!unify(p.args[i], c.args[i])) return false;
+        }
+        return true;
+    };
+    return unify(pat, con);
+}
+
+bool TypeChecker::check_constraints(const std::vector<TypeParam>& typeParams,
+                                    const std::unordered_map<std::string, std::string>& subst,
+                                    const Program* program, TCResult& out, const std::string& ctxName) const {
+    if (!program) return true;
+    bool ok = true;
+    for (const auto& tp : typeParams) {
+        if (tp.constraints.empty()) continue;
+        auto sit = subst.find(tp.name);
+        if (sit == subst.end()) continue;
+        const std::string& concrete = sit->second;
+        for (const auto& constraint : tp.constraints) {
+            TypeRef needed = constraint;
+            // Substitute trait type args too (Comparable<T>).
+            needed = parse_type_ref_string(substitute_type_string(type_ref_canonical(constraint), subst));
+            const TraitDecl* trait = nullptr;
+            for (const auto& tr : program->traits) {
+                if (tr.name == needed.name) { trait = &tr; break; }
+            }
+            if (!trait) {
+                DiagBuilder(out, Severity::Error, "Unknown trait constraint: " + needed.name, "TC142", ctxName).emit();
+                ok = false;
+                continue;
+            }
+            // Structural: look for methods on struct/entity matching concrete type.
+            std::string bare = concrete;
+            const StructDecl* sd = nullptr;
+            const Entity* ent = nullptr;
+            if (bare.rfind("struct:", 0) == 0) bare = bare.substr(7);
+            if (bare.rfind("entity:", 0) == 0) bare = bare.substr(7);
+            std::string base = bare;
+            auto lt = base.find('<');
+            if (lt != std::string::npos) base = base.substr(0, lt);
+            for (const auto& s : program->structs) if (s.name == base) { sd = &s; break; }
+            for (const auto& e : program->entities) if (e.name == base) { ent = &e; break; }
+            for (const auto& method : trait->methods) {
+                bool found = false;
+                auto check_action = [&](const Action& a) {
+                    if (a.name != method.name) return;
+                    if (a.params.size() != method.params.size()) return;
+                    found = true;
+                };
+                if (sd) for (const auto& m : sd->methods) check_action(m);
+                if (ent) for (const auto& m : ent->methods) check_action(m);
+                // Primitive types: no structural methods unless builtin later.
+                if (!found && concrete != "int" && concrete != "string" && concrete != "bool" && concrete != "double") {
+                    DiagBuilder(out, Severity::Error,
+                        "Type '" + concrete + "' does not satisfy trait '" + needed.name + "' (missing method '" + method.name + "')",
+                        "TC143", ctxName).emit();
+                    ok = false;
+                }
+            }
+        }
+    }
+    return ok;
+}
+
+TypeInfo TypeChecker::instantiate_generic_type(const TypeRef& applied, const Program* program, bool* known) const {
+    return resolve_type(type_ref_canonical(applied), program, known);
 }
 
 // ================= ExprChecker =================
@@ -311,7 +516,8 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
                     bool resolvedEnum = false;
                     if (ctx.program) {
                         for (const auto& en : ctx.program->enums) {
-                            for (const auto& member : en.members) {
+                            for (const auto& variant : en.variants) {
+                                const auto& member = variant.name;
                                 if (node.name == member ||
                                     node.name == en.name + "::" + member ||
                                     node.name == en.name + "." + member) {
@@ -333,6 +539,14 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
         } else if constexpr (std::is_same_v<T, BinaryExpr>) {
             auto lt = check(node.left, ctx);
             auto rt = check(node.right, ctx);
+            if (tc_.is_opaque_type(lt, ctx) || tc_.is_opaque_type(rt, ctx)) {
+                DiagBuilder(result_, Severity::Error,
+                    "Opaque type parameter used in operator without a trait constraint",
+                    "TC140", ctx.actionName())
+                    .hint("Add a trait constraint such as `<T: Addable<T>>` and call a trait method instead of using '+' / arithmetic")
+                    .emit();
+                inferred = {"unknown"};
+            } else
             switch (node.op) {
                 case BinOp::Add:
                     if (TypeChecker::is_int(lt) && TypeChecker::is_int(rt)) { inferred = {"int"}; break; }
@@ -350,13 +564,20 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
                         .hint("Arithmetic operators require int operands").emit();
                     inferred = {"unknown"};
                     break;
+                case BinOp::BitAnd: case BinOp::BitXor: case BinOp::BitOr: case BinOp::Shl: case BinOp::Shr:
+                    if (TypeChecker::is_int(lt) && TypeChecker::is_int(rt)) { inferred = {"int"}; break; }
+                    DiagBuilder(result_, Severity::Error, "Invalid bitwise operand types: " + lt.name + " " + rt.name, "TC013", ctx.actionName())
+                        .hint("Bitwise operators require int operands").emit();
+                    inferred = {"unknown"};
+                    break;
                 case BinOp::And: case BinOp::Or:
                     if (TypeChecker::is_bool(lt) && TypeChecker::is_bool(rt)) { inferred={"bool"}; break; }
                     DiagBuilder(result_, Severity::Error, "Invalid logical operand types: " + lt.name + " " + rt.name, "TC014", ctx.actionName())
                         .hint("'&&' and '||' require bool operands").emit();
                     inferred = {"unknown"};
                     break;
-                case BinOp::EQ: case BinOp::NE: case BinOp::LT: case BinOp::LE: case BinOp::GT: case BinOp::GE:
+                case BinOp::EQ: case BinOp::NE: case BinOp::StrictEQ: case BinOp::StrictNE:
+                case BinOp::LT: case BinOp::LE: case BinOp::GT: case BinOp::GE:
                     inferred={"bool"}; break;
                 default: inferred={"bool"}; break;
             }
@@ -377,23 +598,72 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
             else if (node.op == UnOp::Not) {
                 check(node.expr, ctx);
                 inferred = {"bool"};
+            } else if (node.op == UnOp::BitNot) {
+                auto t = check(node.expr, ctx);
+                if (t.name != "unknown" && !TypeChecker::is_int(t)) {
+                    DiagBuilder(result_, Severity::Error, "Bitwise NOT requires an int operand, got " + t.name, "TC013", ctx.actionName()).emit();
+                }
+                inferred = {"int"};
             } else inferred = check(node.expr, ctx);
         } else if constexpr (std::is_same_v<T, NewExpr>) {
-            inferred = TypeInfo{"entity:" + node.typeName};
+            bool known = true;
+            inferred = tc_.resolve_type(node.typeName, ctx.program, &known);
+            if (!known) inferred = TypeInfo{"entity:" + node.typeName};
+            for (const auto& arg : node.args) (void)check(arg, ctx);
         } else if constexpr (std::is_same_v<T, MemberExpr>) {
             inferred = {"unknown"};
-            if (ctx.scopes) {
+            bool handled = false;
+            if (ctx.program) {
+                TypeRef applied;
+                try { applied = parse_type_ref_string(node.objectName); } catch (...) { applied = make_type_ref(node.objectName); }
+                for (const auto& en : ctx.program->enums) {
+                    if (en.name != applied.name && node.objectName != en.name) continue;
+                    for (const auto& variant : en.variants) {
+                        if (variant.name != node.field) continue;
+                        if (!variant.payloads.empty()) {
+                            DiagBuilder(result_, Severity::Error,
+                                "Enum variant '" + variant.name + "' requires payload arguments",
+                                "TC146", ctx.actionName()).emit();
+                        }
+                        bool known = true;
+                        inferred = tc_.resolve_type(node.objectName, ctx.program, &known);
+                        if (!known) {
+                            if (en.typeParams.empty()) inferred = TypeInfo{"enum:" + en.name};
+                            else inferred = TypeInfo{"enum:" + type_ref_canonical(applied)};
+                        }
+                        handled = true;
+                        break;
+                    }
+                    if (handled) break;
+                }
+            }
+            if (!handled && ctx.scopes) {
                 if (auto* owner = ctx.scopes->lookup(node.objectName)) {
                     owner->used = true;
                     std::string otype = owner->type.name;
                     const std::string prefix = "struct:";
                     if (otype.rfind(prefix, 0) == 0 && ctx.program) {
-                        const std::string structName = otype.substr(prefix.size());
+                        std::string structName = otype.substr(prefix.size());
+                        std::unordered_map<std::string, std::string> subst;
+                        TypeRef applied;
+                        try { applied = parse_type_ref_string(structName); } catch (...) { applied = make_type_ref(structName); }
+                        std::string base = applied.name;
                         for (const auto& sd : ctx.program->structs) {
-                            if (sd.name != structName) continue;
+                            if (sd.name != base) continue;
+                            if (!sd.typeParams.empty() && applied.args.size() == sd.typeParams.size()) {
+                                for (size_t i = 0; i < sd.typeParams.size(); ++i) {
+                                    subst[sd.typeParams[i].name] = type_ref_canonical(applied.args[i]);
+                                }
+                            }
                             for (const auto& field : sd.fields) {
                                 if (field.name == node.field) {
-                                    inferred = { field.type.empty() ? "unknown" : field.type };
+                                    std::string ft = field.type.empty() ? "unknown" : field.type;
+                                    if (!subst.empty()) ft = substitute_type_string(ft, subst);
+                                    if (ctx.opaqueTypeParams.count(ft)) {
+                                        inferred = TypeInfo{ft};
+                                    } else {
+                                        inferred = tc_.resolve_type(ft, ctx.program, nullptr);
+                                    }
                                     break;
                                 }
                             }
@@ -455,6 +725,105 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
                 (void)check(arg, ctx);
             }
 
+            // Enum variant construction: Option<int>.Some(1) or Status.Active as call with args
+            bool enumConstructed = false;
+            if (ctx.program) {
+                const auto dot = node.name.rfind('.');
+                if (dot != std::string::npos) {
+                    const std::string typePart = node.name.substr(0, dot);
+                    const std::string variantName = node.name.substr(dot + 1);
+                    TypeRef applied;
+                    try { applied = parse_type_ref_string(typePart); } catch (...) { applied = make_type_ref(typePart); }
+                    for (const auto& en : ctx.program->enums) {
+                        if (en.name != applied.name && typePart != en.name) continue;
+                        std::unordered_map<std::string, std::string> subst;
+                        if (!en.typeParams.empty() && applied.args.size() == en.typeParams.size()) {
+                            for (size_t i = 0; i < en.typeParams.size(); ++i) {
+                                subst[en.typeParams[i].name] = type_ref_canonical(applied.args[i]);
+                            }
+                        }
+                        const EnumVariant* foundVariant = nullptr;
+                        for (const auto& variant : en.variants) {
+                            if (variant.name == variantName) { foundVariant = &variant; break; }
+                        }
+                        if (!foundVariant) {
+                            DiagBuilder(result_, Severity::Error,
+                                "Unknown variant `" + variantName + "` for enum `" + en.name + "`",
+                                "TC150", ctx.actionName()).emit();
+                            inferred = {"unknown"};
+                            enumConstructed = true;
+                            break;
+                        }
+                        if (foundVariant->payloads.size() != node.args.size()) {
+                            DiagBuilder(result_, Severity::Error,
+                                "Enum variant '" + variantName + "' expects " + std::to_string(foundVariant->payloads.size()) +
+                                " payload(s), got " + std::to_string(node.args.size()),
+                                "TC146", ctx.actionName()).emit();
+                        } else {
+                            for (size_t i = 0; i < node.args.size(); ++i) {
+                                std::string pt = type_ref_canonical(foundVariant->payloads[i]);
+                                if (!subst.empty()) pt = substitute_type_string(pt, subst);
+                                TypeInfo expected = tc_.resolve_type(pt, ctx.program, nullptr);
+                                TypeInfo actual = check(node.args[i], ctx);
+                                if (!tc_.is_assignable(actual, expected) && actual.name != "unknown" && expected.name != "unknown") {
+                                    DiagBuilder(result_, Severity::Error,
+                                        "Enum variant '" + variantName + "' payload " + std::to_string(i) +
+                                        " type mismatch: expected `" + expected.name + "`, got `" + actual.name + "`",
+                                        "TC151", ctx.actionName()).emit();
+                                }
+                            }
+                        }
+                        bool known = true;
+                        TypeInfo et = tc_.resolve_type(typePart, ctx.program, &known);
+                        if (!known && en.typeParams.empty()) et = TypeInfo{"enum:" + en.name};
+                        else if (!known) et = TypeInfo{"enum:" + type_ref_canonical(applied)};
+                        inferred = et;
+                        enumConstructed = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!enumConstructed) {
+            // Trait method on opaque param: a.compare(b) as FunctionCallExpr "a.compare"
+            {
+                const auto dot = node.name.rfind('.');
+                if (dot != std::string::npos && ctx.scopes) {
+                    const std::string objectName = node.name.substr(0, dot);
+                    const std::string methodName = node.name.substr(dot + 1);
+                    if (auto* owner = ctx.scopes->lookup(objectName)) {
+                        if (ctx.opaqueTypeParams.count(owner->type.name)) {
+                            bool found = false;
+                            std::string ret = "unknown";
+                            auto cit = ctx.typeParamConstraints.find(owner->type.name);
+                            if (cit != ctx.typeParamConstraints.end() && ctx.program) {
+                                for (const auto& constraint : cit->second) {
+                                    for (const auto& tr : ctx.program->traits) {
+                                        if (tr.name != constraint.name) continue;
+                                        for (const auto& m : tr.methods) {
+                                            if (m.name != methodName) continue;
+                                            found = true;
+                                            ret = m.returnType.empty() ? "void" : m.returnType;
+                                            break;
+                                        }
+                                    }
+                                    if (found) break;
+                                }
+                            }
+                            if (!found) {
+                                DiagBuilder(result_, Severity::Error,
+                                    "Method '" + methodName + "' not provided by constraints on type parameter '" + owner->type.name + "'",
+                                    "TC147", ctx.actionName()).emit();
+                                inferred = {"unknown"};
+                            } else {
+                                inferred = {ret};
+                            }
+                            enumConstructed = true; // skip normal call resolve
+                        }
+                    }
+                }
+            }
+            if (!enumConstructed) {
             // action or builtin
             auto resolve_action = [&](const std::string& name) -> const Action* {
                 auto it = tc_.actions_.find(name);
@@ -475,17 +844,73 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
             auto aIt = resolved ? tc_.actions_.find(resolved->name) : tc_.actions_.end();
             if (aIt != tc_.actions_.end()) {
                 tc_.actionUsage_[aIt->second->name].referenced = true;
-                if (aIt->second->params.size() != node.args.size()) {
+                const Action& action = *aIt->second;
+                std::vector<std::string> typeArgs = node.typeArgs;
+                std::unordered_map<std::string, std::string> subst;
+                if (!action.typeParams.empty()) {
+                    if (typeArgs.empty()) {
+                        // Infer from argument types.
+                        for (size_t i = 0; i < action.params.size() && i < node.args.size(); ++i) {
+                            if (action.params[i].type.empty()) continue;
+                            TypeInfo argT = check(node.args[i], ctx);
+                            if (!tc_.unify_type_args(action.params[i].type, argT.name, subst, action.typeParams)) {
+                                // keep going; may fail later
+                            }
+                        }
+                        for (const auto& tp : action.typeParams) {
+                            if (!subst.count(tp.name)) {
+                                DiagBuilder(result_, Severity::Error,
+                                    "Cannot infer type parameter '" + tp.name + "' for call to " + node.name,
+                                    "TC141", ctx.actionName())
+                                    .hint("Pass explicit type arguments: `" + node.name + "<...>(...)`")
+                                    .emit();
+                            } else {
+                                typeArgs.push_back(subst[tp.name]);
+                            }
+                        }
+                        // Rebuild typeArgs in param order
+                        typeArgs.clear();
+                        for (const auto& tp : action.typeParams) {
+                            auto it = subst.find(tp.name);
+                            if (it != subst.end()) typeArgs.push_back(it->second);
+                        }
+                    } else if (typeArgs.size() != action.typeParams.size()) {
+                        DiagBuilder(result_, Severity::Error,
+                            "Type argument count mismatch calling " + node.name + ": got " +
+                            std::to_string(typeArgs.size()) + ", expected " + std::to_string(action.typeParams.size()),
+                            "TC144", ctx.actionName()).emit();
+                    } else {
+                        for (size_t i = 0; i < action.typeParams.size(); ++i) {
+                            subst[action.typeParams[i].name] = typeArgs[i];
+                        }
+                    }
+                    (void)tc_.check_constraints(action.typeParams, subst, ctx.program, result_, ctx.actionName());
+                    (void)tc_.specialize_action_name(action.name, typeArgs);
+                }
+                if (action.params.size() != node.args.size()) {
                     DiagBuilder(result_, Severity::Error,
                         "Param count mismatch calling action " + node.name + ": got " + std::to_string(node.args.size()) +
-                        ", expected " + std::to_string(aIt->second->params.size()),
+                        ", expected " + std::to_string(action.params.size()),
                         "TC020", ctx.actionName())
                         .hint("Declare params in `action " + node.name + "(...)` or pass the correct number of arguments")
                         .emit();
+                } else if (subst.empty()) {
+                    check_action_arg_types(tc_, result_, action, node.args, *this, ctx, node.name);
                 } else {
-                    check_action_arg_types(tc_, result_, *aIt->second, node.args, *this, ctx, node.name);
+                    // Check args against substituted param types
+                    for (size_t i = 0; i < action.params.size(); ++i) {
+                        TypeInfo expected = tc_.resolve_type(substitute_type_string(action.params[i].type, subst), ctx.program, nullptr);
+                        TypeInfo actual = check(node.args[i], ctx);
+                        if (!tc_.is_assignable(actual, expected)) {
+                            DiagBuilder(result_, Severity::Error,
+                                "Argument type mismatch for " + node.name + " param '" + action.params[i].name +
+                                "': expected " + expected.name + ", got " + actual.name,
+                                "TC021", ctx.actionName()).emit();
+                        }
+                    }
                 }
-                inferred = { aIt->second->returnType.empty()?"void":tc_.resolve_type(aIt->second->returnType, ctx.program, nullptr).name };
+                std::string ret = action.returnType.empty() ? "void" : substitute_type_string(action.returnType, subst);
+                inferred = { ret.empty() || ret == "void" ? "void" : tc_.resolve_type(ret, ctx.program, nullptr).name };
             } else {
                 std::string builtinLookup = node.name;
                 if (auto mapped = resolve_builtin_module_alias_call(ctx.program, node.name)) {
@@ -549,6 +974,8 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
                     inferred = { bIt->second.returnType };
                 }
             }
+            } // !enumConstructed inner
+            } // !enumConstructed outer
         } else if constexpr (std::is_same_v<T, PostfixExpr>) {
             auto ot = check(node.operand, ctx);
             if (ot.name != "unknown" && !TypeChecker::is_int(ot)) {
@@ -681,6 +1108,35 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
             }
         } else if constexpr (std::is_same_v<T, MethodCallStmt>) {
             for (auto& a : stmt.args) expr_.check(a, ctx);
+
+            // Opaque type param: method must come from a constrained trait.
+            if (ctx.scopes) {
+                if (auto* owner = ctx.scopes->lookup(stmt.objectName)) {
+                    if (ctx.opaqueTypeParams.count(owner->type.name)) {
+                        bool found = false;
+                        auto cit = ctx.typeParamConstraints.find(owner->type.name);
+                        if (cit != ctx.typeParamConstraints.end() && ctx.program) {
+                            for (const auto& constraint : cit->second) {
+                                for (const auto& tr : ctx.program->traits) {
+                                    if (tr.name != constraint.name) continue;
+                                    for (const auto& m : tr.methods) {
+                                        if (m.name == stmt.method) { found = true; break; }
+                                    }
+                                }
+                                if (found) break;
+                            }
+                        }
+                        if (!found) {
+                            DiagBuilder(result_, Severity::Error,
+                                "Method '" + stmt.method + "' not provided by constraints on type parameter '" + owner->type.name + "'",
+                                "TC147", ctx.actionName())
+                                .hint("Add a trait constraint that declares this method")
+                                .emit();
+                        }
+                        return;
+                    }
+                }
+            }
 
             const std::string callName = stmt.objectName + "." + stmt.method;
             auto mark_route_action_refs = [&]() {
@@ -898,6 +1354,101 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                 check_block(*c.body, ctx, scopes, retType);
             }
             if (stmt.defaultBlk) { auto guardD = scopes.push(); check_block(*stmt.defaultBlk, ctx, scopes, retType); }
+        } else if constexpr (std::is_same_v<T, MatchStmt>) {
+            TypeInfo selT = expr_.check(stmt.selector, ctx);
+            std::string enumType = selT.name;
+            if (enumType.rfind("enum:", 0) == 0) enumType = enumType.substr(5);
+            const EnumDecl* ed = nullptr;
+            TypeRef applied;
+            if (ctx.program) {
+                try { applied = parse_type_ref_string(enumType); } catch (...) { applied = make_type_ref(enumType); }
+                for (const auto& en : ctx.program->enums) {
+                    if (en.name != applied.name) continue;
+                    ed = &en;
+                    break;
+                }
+            }
+            if (!ed && selT.name != "unknown") {
+                DiagBuilder(result_, Severity::Error,
+                    "Match requires an enum value, got `" + selT.name + "`",
+                    "TC148", ctx.actionName())
+                    .hint("Use `match` on Option/Result or other enum types")
+                    .emit();
+            }
+
+            std::function<void(const PatternPtr&, const std::string&)> check_pattern;
+            check_pattern = [&](const PatternPtr& pat, const std::string& expectedType) {
+                if (!pat) return;
+                std::visit([&](const auto& node) {
+                    using N = std::decay_t<decltype(node)>;
+                    if constexpr (std::is_same_v<N, PatWildcard>) {
+                        return;
+                    } else if constexpr (std::is_same_v<N, PatBinding>) {
+                        VarInfo vi;
+                        vi.type = tc_.resolve_type(expectedType, ctx.program, nullptr);
+                        vi.assigned = true;
+                        if (!scopes.declare(node.name, vi)) {
+                            DiagBuilder(result_, Severity::Error,
+                                "Variable redeclared in match binding: " + node.name,
+                                "TC030", ctx.actionName()).emit();
+                        }
+                    } else if constexpr (std::is_same_v<N, PatCtor>) {
+                        std::string typeName = expectedType;
+                        if (typeName.rfind("enum:", 0) == 0) typeName = typeName.substr(5);
+                        const EnumDecl* nestEd = nullptr;
+                        std::unordered_map<std::string, std::string> nestSubst;
+                        TypeRef nestApplied;
+                        if (ctx.program) {
+                            try { nestApplied = parse_type_ref_string(typeName); } catch (...) { nestApplied = make_type_ref(typeName); }
+                            for (const auto& en : ctx.program->enums) {
+                                if (en.name != nestApplied.name) continue;
+                                nestEd = &en;
+                                if (!en.typeParams.empty() && nestApplied.args.size() == en.typeParams.size()) {
+                                    for (size_t i = 0; i < en.typeParams.size(); ++i) {
+                                        nestSubst[en.typeParams[i].name] = type_ref_canonical(nestApplied.args[i]);
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                        if (!nestEd) {
+                            DiagBuilder(result_, Severity::Error,
+                                "Pattern variant `" + node.name + "` used where enum type `" + expectedType + "` expected",
+                                "TC149", ctx.actionName()).emit();
+                            return;
+                        }
+                        const EnumVariant* found = nullptr;
+                        for (const auto& variant : nestEd->variants) {
+                            if (variant.name == node.name) { found = &variant; break; }
+                        }
+                        if (!found) {
+                            DiagBuilder(result_, Severity::Error,
+                                "Unknown variant `" + node.name + "` for enum `" + nestEd->name + "`",
+                                "TC150", ctx.actionName()).emit();
+                            return;
+                        }
+                        if (found->payloads.size() != node.args.size()) {
+                            DiagBuilder(result_, Severity::Error,
+                                "Match binding count mismatch for variant '" + node.name + "'",
+                                "TC145", ctx.actionName()).emit();
+                            return;
+                        }
+                        for (size_t i = 0; i < node.args.size(); ++i) {
+                            std::string pt = type_ref_canonical(found->payloads[i]);
+                            if (!nestSubst.empty()) pt = substitute_type_string(pt, nestSubst);
+                            check_pattern(node.args[i], pt);
+                        }
+                    }
+                }, pat->node);
+            };
+
+            for (auto& c : stmt.cases) {
+                auto caseScope = scopes.push();
+                if (ed) {
+                    check_pattern(c.pattern, enumType);
+                }
+                if (c.body) check_block(*c.body, ctx, scopes, retType);
+            }
         } else if constexpr (std::is_same_v<T, std::shared_ptr<ParallelStmt>>) {
             if (stmt) { auto guardP = scopes.push(); check_block(stmt->body, ctx, scopes, retType); }
         } else if constexpr (std::is_same_v<T, UnsafeStmt>) {
@@ -931,9 +1482,15 @@ void TypeChecker::pass_collect(const Program& program) {
     actions_.clear(); entities_.clear(); methods_.clear(); entityFields_.clear();
     actionUsage_.clear(); entityUsage_.clear(); methodUsage_.clear();
     externActions_.clear();
+    structs_.clear(); enums_.clear(); aliases_.clear(); traits_.clear();
+    specializedTypeCache_.clear();
     init_builtins();
     for (const auto& a : program.actions) { actions_[a.name] = &a; actionUsage_[a.name]; }
     for (const auto& e : program.externs) { externActions_.insert(e.name); }
+    for (const auto& s : program.structs) structs_[s.name] = &s;
+    for (const auto& e : program.enums) enums_[e.name] = &e;
+    for (const auto& a : program.typeAliases) aliases_[a.name] = &a;
+    for (const auto& t : program.traits) traits_[t.name] = &t;
     for (const auto& e : program.entities) {
         entities_[e.name] = &e; entityUsage_[e.name];
         std::unordered_map<std::string,const Action*> mm; std::unordered_set<std::string> fields;
@@ -1000,6 +1557,7 @@ void TypeChecker::pass_check_program(const Program& program, TCResult& out) {
         CheckContext ctx; ctx.program=&program; ctx.currentAction=&a;
         ScopeManager scopes; // base scope
         ctx.scopes = &scopes;
+        push_opaque_params(ctx, a.typeParams);
         // Warn if the action has return-value statements but no declared return type.
         if (a.returnType.empty() && block_has_value_return(a.body)) {
             DiagBuilder(out, Severity::Error,
@@ -1018,9 +1576,19 @@ void TypeChecker::pass_check_program(const Program& program, TCResult& out) {
                     .emit();
             }
             bool known = true;
-            TypeInfo paramType = p.type.empty()
-                ? TypeInfo{"unknown"}
-                : resolve_type(p.type, &program, &known);
+            TypeInfo paramType;
+            bool isOpaqueParam = false;
+            for (const auto& tp : a.typeParams) {
+                if (tp.name == p.type) { isOpaqueParam = true; break; }
+            }
+            if (isOpaqueParam) {
+                paramType = TypeInfo{p.type};
+                known = true;
+            } else {
+                paramType = p.type.empty()
+                    ? TypeInfo{"unknown"}
+                    : resolve_type(p.type, &program, &known);
+            }
             if (!p.type.empty() && !known) {
                 DiagBuilder(out, Severity::Error,
                     "Unknown parameter type '" + p.type + "' on '" + p.name + "' in action '" + a.name + "'",
@@ -1047,7 +1615,11 @@ void TypeChecker::pass_check_program(const Program& program, TCResult& out) {
             VarInfo reqInfo; reqInfo.type = {"string"}; reqInfo.assigned = true; reqInfo.used = true;
             scopes.declare("req", reqInfo);
         }
-        auto rf = stmt.check_block(a.body, ctx, scopes, a.returnType.empty()?"void":a.returnType);
+        auto rf = stmt.check_block(a.body, ctx, scopes, [&]() -> std::string {
+            if (a.returnType.empty()) return "void";
+            for (const auto& tp : a.typeParams) if (tp.name == a.returnType) return a.returnType;
+            return a.returnType;
+        }());
         for (auto& frame : scopes.all()) for (auto& kv : frame) if (!kv.second.used) DiagBuilder(out, Severity::Warning, "Unused variable: " + kv.first, "TC120", a.name).emit();
         if (!returns_void(a) && rf != ReturnFlow::AlwaysReturn) DiagBuilder(out, Severity::Error, "Missing return in action declared to return " + a.returnType, "TC121", a.name).emit();
     }

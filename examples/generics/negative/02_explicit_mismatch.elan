@@ -1,0 +1,12 @@
+@strict
+
+public action identity<T>(value: T): T {
+    return value;
+}
+
+public action main() {
+    int x = identity<int>("hello");
+    print x;
+}
+
+run main;

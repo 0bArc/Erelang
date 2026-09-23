@@ -91,6 +91,15 @@ struct FoldStats {
 			}
 			return value;
 		}
+		case BinOp::BitAnd: return lhs & rhs;
+		case BinOp::BitXor: return lhs ^ rhs;
+		case BinOp::BitOr: return lhs | rhs;
+		case BinOp::Shl:
+			if (rhs < 0 || rhs >= 64) return std::nullopt;
+			return lhs << static_cast<unsigned>(rhs);
+		case BinOp::Shr:
+			if (rhs < 0 || rhs >= 64) return std::nullopt;
+			return lhs >> static_cast<unsigned>(rhs);
 		default: break;
 	}
 	return std::nullopt;
@@ -134,6 +143,9 @@ void fold_expr(ExprPtr& expr, FoldStats& stats) {
 					return; // -INT64_MIN would be signed-overflow UB; skip folding
 				}
 				expr = make_number_expr(-*value);
+				stats.record_fold();
+			} else if (un.op == UnOp::BitNot) {
+				expr = make_number_expr(~*value);
 				stats.record_fold();
 			}
 			},
@@ -215,6 +227,14 @@ void fold_block(Block& block, FoldStats& stats) {
 					}
 					if (stmt.defaultBlk) {
 						fold_block(*stmt.defaultBlk, stats);
+					}
+				},
+				[&](MatchStmt& stmt) {
+					fold_expr_inplace(stmt.selector);
+					for (auto& c : stmt.cases) {
+						if (c.body) {
+							fold_block(*c.body, stats);
+						}
 					}
 				},
 				[&](DoWhileStmt& stmt) {

@@ -389,6 +389,28 @@ std::string X64Codegen::emit_gas_win64_demo(const IRModule& module) const {
                 }
                 continue;
             }
+            if (ins.opcode == "bitnot") {
+                if (ins.operands.size() >= 2) {
+                    emit_load_operand(out, ctx, "rax", ins.operands[1]);
+                    out << "    not rax\n";
+                    emit_store_symbol(out, ctx, ins.operands[0], "rax");
+                }
+                continue;
+            }
+            if (ins.opcode == "bitand" || ins.opcode == "bitor" || ins.opcode == "bitxor" ||
+                ins.opcode == "shl" || ins.opcode == "shr") {
+                if (ins.operands.size() >= 3) {
+                    emit_load_operand(out, ctx, "rax", ins.operands[1]);
+                    emit_load_operand(out, ctx, "r10", ins.operands[2]);
+                    if (ins.opcode == "bitand") out << "    and rax, r10\n";
+                    else if (ins.opcode == "bitor") out << "    or rax, r10\n";
+                    else if (ins.opcode == "bitxor") out << "    xor rax, r10\n";
+                    else if (ins.opcode == "shl") out << "    mov cl, r10b\n    shl rax, cl\n";
+                    else out << "    mov cl, r10b\n    sar rax, cl\n";
+                    emit_store_symbol(out, ctx, ins.operands[0], "rax");
+                }
+                continue;
+            }
             if (ins.opcode == "and" || ins.opcode == "or") {
                 if (ins.operands.size() >= 3) {
                     const auto& dst = ins.operands[0];
@@ -405,6 +427,8 @@ std::string X64Codegen::emit_gas_win64_demo(const IRModule& module) const {
             }
             if (ins.opcode == "cmp_eq") { emit_compare(out, ctx, ins, "e"); continue; }
             if (ins.opcode == "cmp_ne") { emit_compare(out, ctx, ins, "ne"); continue; }
+            if (ins.opcode == "cmp_seq") { emit_compare(out, ctx, ins, "e"); continue; }
+            if (ins.opcode == "cmp_sne") { emit_compare(out, ctx, ins, "ne"); continue; }
             if (ins.opcode == "cmp_lt") { emit_compare(out, ctx, ins, "l"); continue; }
             if (ins.opcode == "cmp_le") { emit_compare(out, ctx, ins, "le"); continue; }
             if (ins.opcode == "cmp_gt") { emit_compare(out, ctx, ins, "g"); continue; }

@@ -5,8 +5,91 @@
 #include <limits>
 #include <algorithm>
 #include <unordered_set>
+#include <unordered_map>
 
 namespace erelang {
+
+namespace {
+
+void skip_ws(std::string_view text, size_t& i) {
+    while (i < text.size() && std::isspace(static_cast<unsigned char>(text[i]))) ++i;
+}
+
+TypeRef parse_type_ref_at(std::string_view text, size_t& i) {
+    skip_ws(text, i);
+    if (i >= text.size() || !(std::isalpha(static_cast<unsigned char>(text[i])) || text[i] == '_')) {
+        throw std::runtime_error("Expected type name");
+    }
+    const size_t start = i;
+    while (i < text.size() &&
+           (std::isalnum(static_cast<unsigned char>(text[i])) || text[i] == '_' || text[i] == ':')) {
+        ++i;
+    }
+    TypeRef out;
+    out.name = std::string(text.substr(start, i - start));
+    skip_ws(text, i);
+    if (i < text.size() && text[i] == '<') {
+        ++i;
+        skip_ws(text, i);
+        if (i >= text.size() || text[i] != '>') {
+            while (true) {
+                out.args.push_back(parse_type_ref_at(text, i));
+                skip_ws(text, i);
+                if (i < text.size() && text[i] == ',') {
+                    ++i;
+                    skip_ws(text, i);
+                    continue;
+                }
+                break;
+            }
+        }
+        if (i >= text.size() || text[i] != '>') throw std::runtime_error("Unterminated generic type");
+        ++i;
+    }
+    while (i < text.size() && (text[i] == '*' || text[i] == '&')) {
+        out.name += text[i];
+        ++i;
+    }
+    out.canonical = type_ref_canonical(out);
+    return out;
+}
+
+TypeRef substitute_type_ref(const TypeRef& t, const std::unordered_map<std::string, std::string>& subst) {
+    auto it = subst.find(t.name);
+    if (it != subst.end() && t.args.empty()) {
+        return parse_type_ref_string(it->second);
+    }
+    TypeRef out;
+    out.name = t.name;
+    out.args.reserve(t.args.size());
+    for (const auto& a : t.args) out.args.push_back(substitute_type_ref(a, subst));
+    out.canonical = type_ref_canonical(out);
+    return out;
+}
+
+} // namespace
+
+TypeRef parse_type_ref_string(std::string_view text) {
+    size_t i = 0;
+    TypeRef t = parse_type_ref_at(text, i);
+    skip_ws(text, i);
+    if (i != text.size()) {
+        // tolerate trailing junk from historical annotations
+    }
+    return t;
+}
+
+std::string substitute_type_string(const std::string& typeText,
+                                   const std::unordered_map<std::string, std::string>& subst) {
+    if (typeText.empty()) return typeText;
+    try {
+        return substitute_type_ref(parse_type_ref_string(typeText), subst).canonical;
+    } catch (...) {
+        auto it = subst.find(typeText);
+        if (it != subst.end()) return it->second;
+        return typeText;
+    }
+}
 
 // Guards against pathological nesting (e.g. `((((...))))`) overflowing the
 // call stack; fails with a clear error instead of crashing.
@@ -274,18 +357,35 @@ static ExprPtr make_default_initializer_for_declared_type(const std::string& dec
 }
 
 const Token& Parser::peek(size_t offset) const {
+    if (offset == 0 && pendingGreater_) {
+        static Token greaterTok;
+        greaterTok.kind = TokenKind::Greater;
+        greaterTok.text = ">";
+        return greaterTok;
+    }
     size_t idx = pos_ + offset;
     if (idx >= tokens_.size()) return tokens_.back();
     return tokens_[idx];
 }
 
 const Token& Parser::consume() {
+    if (pendingGreater_) {
+        pendingGreater_ = false;
+        static Token greaterTok;
+        greaterTok.kind = TokenKind::Greater;
+        greaterTok.text = ">";
+        return greaterTok;
+    }
     const Token& t = peek();
     if (pos_ < tokens_.size()) ++pos_;
     return t;
 }
 
 bool Parser::match(TokenKind kind) {
+    if (kind == TokenKind::Greater && pendingGreater_) {
+        pendingGreater_ = false;
+        return true;
+    }
     if (peek().kind == kind) { consume(); return true; }
     return false;
 }
@@ -358,10 +458,37 @@ ExprPtr Parser::parse_or() {
 }
 
 ExprPtr Parser::parse_and() {
-    auto left = parse_equality();
+    auto left = parse_bitor();
     while (match(TokenKind::AmpAmp)) {
-        auto right = parse_equality();
+        auto right = parse_bitor();
         left = std::make_shared<Expr>(Expr{ BinaryExpr{ BinOp::And, left, right } });
+    }
+    return left;
+}
+
+ExprPtr Parser::parse_bitor() {
+    auto left = parse_bitxor();
+    while (match(TokenKind::Pipe)) {
+        auto right = parse_bitxor();
+        left = std::make_shared<Expr>(Expr{ BinaryExpr{ BinOp::BitOr, left, right } });
+    }
+    return left;
+}
+
+ExprPtr Parser::parse_bitxor() {
+    auto left = parse_bitand();
+    while (match(TokenKind::Caret)) {
+        auto right = parse_bitand();
+        left = std::make_shared<Expr>(Expr{ BinaryExpr{ BinOp::BitXor, left, right } });
+    }
+    return left;
+}
+
+ExprPtr Parser::parse_bitand() {
+    auto left = parse_equality();
+    while (match(TokenKind::Amp)) {
+        auto right = parse_equality();
+        left = std::make_shared<Expr>(Expr{ BinaryExpr{ BinOp::BitAnd, left, right } });
     }
     return left;
 }
@@ -371,18 +498,30 @@ ExprPtr Parser::parse_equality() {
     while (true) {
         if (match(TokenKind::EqualEqual)) { auto right = parse_relational(); left = std::make_shared<Expr>(Expr{ BinaryExpr{ BinOp::EQ, left, right } }); }
         else if (match(TokenKind::BangEqual)) { auto right = parse_relational(); left = std::make_shared<Expr>(Expr{ BinaryExpr{ BinOp::NE, left, right } }); }
+        else if (match(TokenKind::StrictEqual)) { auto right = parse_relational(); left = std::make_shared<Expr>(Expr{ BinaryExpr{ BinOp::StrictEQ, left, right } }); }
+        else if (match(TokenKind::StrictNotEqual)) { auto right = parse_relational(); left = std::make_shared<Expr>(Expr{ BinaryExpr{ BinOp::StrictNE, left, right } }); }
         else break;
     }
     return left;
 }
 
 ExprPtr Parser::parse_relational() {
+    auto left = parse_shift();
+    while (true) {
+        if (match(TokenKind::Less)) { auto right = parse_shift(); left = std::make_shared<Expr>(Expr{ BinaryExpr{ BinOp::LT, left, right } }); }
+        else if (match(TokenKind::LessEqual)) { auto right = parse_shift(); left = std::make_shared<Expr>(Expr{ BinaryExpr{ BinOp::LE, left, right } }); }
+        else if (match(TokenKind::Greater)) { auto right = parse_shift(); left = std::make_shared<Expr>(Expr{ BinaryExpr{ BinOp::GT, left, right } }); }
+        else if (match(TokenKind::GreaterEqual)) { auto right = parse_shift(); left = std::make_shared<Expr>(Expr{ BinaryExpr{ BinOp::GE, left, right } }); }
+        else break;
+    }
+    return left;
+}
+
+ExprPtr Parser::parse_shift() {
     auto left = parse_additive();
     while (true) {
-        if (match(TokenKind::Less)) { auto right = parse_additive(); left = std::make_shared<Expr>(Expr{ BinaryExpr{ BinOp::LT, left, right } }); }
-        else if (match(TokenKind::LessEqual)) { auto right = parse_additive(); left = std::make_shared<Expr>(Expr{ BinaryExpr{ BinOp::LE, left, right } }); }
-        else if (match(TokenKind::Greater)) { auto right = parse_additive(); left = std::make_shared<Expr>(Expr{ BinaryExpr{ BinOp::GT, left, right } }); }
-        else if (match(TokenKind::GreaterEqual)) { auto right = parse_additive(); left = std::make_shared<Expr>(Expr{ BinaryExpr{ BinOp::GE, left, right } }); }
+        if (match(TokenKind::Shl)) { auto right = parse_additive(); left = std::make_shared<Expr>(Expr{ BinaryExpr{ BinOp::Shl, left, right } }); }
+        else if (match(TokenKind::Shr)) { auto right = parse_additive(); left = std::make_shared<Expr>(Expr{ BinaryExpr{ BinOp::Shr, left, right } }); }
         else break;
     }
     return left;
@@ -404,7 +543,7 @@ ExprPtr Parser::parse_multiplicative() {
         if (match(TokenKind::Star)) { auto right = parse_unary(); left = std::make_shared<Expr>(Expr{ BinaryExpr{ BinOp::Mul, left, right } }); }
         else if (match(TokenKind::Slash)) { auto right = parse_unary(); left = std::make_shared<Expr>(Expr{ BinaryExpr{ BinOp::Div, left, right } }); }
         else if (match(TokenKind::Percent)) { auto right = parse_unary(); left = std::make_shared<Expr>(Expr{ BinaryExpr{ BinOp::Mod, left, right } }); }
-        else if (match(TokenKind::Caret) || match(TokenKind::Pow)) { auto right = parse_unary(); left = std::make_shared<Expr>(Expr{ BinaryExpr{ BinOp::Pow, left, right } }); }
+        else if (match(TokenKind::Pow)) { auto right = parse_unary(); left = std::make_shared<Expr>(Expr{ BinaryExpr{ BinOp::Pow, left, right } }); }
         else break;
     }
     return left;
@@ -426,6 +565,10 @@ ExprPtr Parser::parse_unary() {
     if (match(TokenKind::Bang)) {
         auto e = parse_unary();
         return std::make_shared<Expr>(Expr{ UnaryExpr{ UnOp::Not, e } });
+    }
+    if (match(TokenKind::Tilde)) {
+        auto e = parse_unary();
+        return std::make_shared<Expr>(Expr{ UnaryExpr{ UnOp::BitNot, e } });
     }
     if (match(TokenKind::Star)) {
         auto e = parse_unary();
@@ -744,14 +887,8 @@ ExprPtr Parser::parse_primary() {
     // new Type(expr, ...)
     if ((t.kind == TokenKind::Word || t.kind == TokenKind::Keyword) && t.text == "new") {
         consume();
-        const Token& typeTok = consume();
-            if (!(typeTok.kind == TokenKind::Word || typeTok.kind == TokenKind::Keyword)) throw std::runtime_error("Expected type name after 'new'");
-        NewExpr ne; ne.typeName = ident_text(typeTok);
-        while (match(TokenKind::Scope)) {
-            const Token& seg = consume();
-            if (!(seg.kind == TokenKind::Word || seg.kind == TokenKind::Keyword)) throw std::runtime_error("Expected type segment after '::'");
-            ne.typeName += "::" + ident_text(seg);
-        }
+        NewExpr ne;
+        ne.typeName = parse_type_annotation();
         if (match(TokenKind::LParen)) {
             if (!match(TokenKind::RParen)) {
                 do { ne.args.push_back(parse_expression()); } while (match(TokenKind::Comma));
@@ -788,9 +925,39 @@ ExprPtr Parser::parse_primary() {
             if (!(seg.kind == TokenKind::Word || seg.kind == TokenKind::Keyword)) throw std::runtime_error("Expected identifier after '::'");
             baseName += "::" + ident_text(seg);
         }
-        // function call: ident(...)
+        // Optional type args when followed by call: name<T>(...)
+        std::vector<std::string> callTypeArgs = try_parse_call_type_args();
+        // Generic type prefix for enum construction: Option<int>.Some(...) / Option<int>.None
+        // baseName already consumed; only append `<...>` when `>` is followed by `.`
+        if (callTypeArgs.empty() && peek().kind == TokenKind::Less) {
+            size_t i = pos_ + 1;
+            int depth = 1;
+            while (i < tokens_.size() && depth > 0) {
+                if (tokens_[i].kind == TokenKind::Less || tokens_[i].kind == TokenKind::Shl) {
+                    depth += (tokens_[i].kind == TokenKind::Shl) ? 2 : 1;
+                } else if (tokens_[i].kind == TokenKind::Greater || tokens_[i].kind == TokenKind::Shr) {
+                    depth -= (tokens_[i].kind == TokenKind::Shr) ? 2 : 1;
+                } else if (tokens_[i].kind == TokenKind::End) {
+                    break;
+                }
+                ++i;
+            }
+            if (depth == 0 && i < tokens_.size() && tokens_[i].kind == TokenKind::Dot) {
+                // Reuse type-annotation angle parsing onto the already-read name.
+                baseName += parse_type_annotation_angles();
+            }
+        } else if (!callTypeArgs.empty() && peek().kind == TokenKind::Dot) {
+            baseName += "<";
+            for (size_t i = 0; i < callTypeArgs.size(); ++i) {
+                if (i) baseName += ", ";
+                baseName += callTypeArgs[i];
+            }
+            baseName += ">";
+            callTypeArgs.clear();
+        }
+        // function call: ident(...) or ident<T>(...)
         if (match(TokenKind::LParen)) {
-            FunctionCallExpr call; call.name = baseName;
+            FunctionCallExpr call; call.name = baseName; call.typeArgs = std::move(callTypeArgs);
             if (!match(TokenKind::RParen)) {
                 do { call.args.push_back(parse_expression()); } while (match(TokenKind::Comma));
                 expect(TokenKind::RParen, ")");
@@ -876,6 +1043,7 @@ Block Parser::parse_block(bool allowImplicit) {
     auto requires_semicolon = [](const Statement& stmt) {
         if (std::holds_alternative<IfStmt>(stmt)) return false;
         if (std::holds_alternative<SwitchStmt>(stmt)) return false;
+        if (std::holds_alternative<MatchStmt>(stmt)) return false;
         if (std::holds_alternative<WhileStmt>(stmt)) return false;
         if (std::holds_alternative<DoWhileStmt>(stmt)) return true;
         if (std::holds_alternative<RepeatStmt>(stmt)) return false;
@@ -966,6 +1134,7 @@ Action Parser::parse_action() {
     if (!(nameTok.kind == TokenKind::Word || nameTok.kind == TokenKind::Keyword)) throw std::runtime_error("Action name");
     const std::string rawName = ident_text(nameTok);
     a.name = parsingEntityMethod_ ? rawName : qualify_name(rawName);
+    a.typeParams = parse_type_param_list();
     auto parse_param_decl = [&]() -> Param {
         const size_t startPos = pos_;
         const Token& first = consume();
@@ -1136,42 +1305,7 @@ Statement Parser::parse_statement() {
         return parse_try_catch();
     }
     if (is_word_or_kw(peek(), "match")) {
-        consume();
-        auto sel = parse_expression();
-        expect(TokenKind::LBrace, "{");
-        SwitchStmt sw; sw.selector = sel;
-        skip_separators();
-        while (peek().kind != TokenKind::RBrace && peek().kind != TokenKind::End) {
-            if (match_word("case")) {
-                const Token& v = consume();
-                if (!(v.kind == TokenKind::String || v.kind == TokenKind::Word || v.kind == TokenKind::Keyword || v.kind == TokenKind::Number)) {
-                    throw std::runtime_error("case value");
-                }
-                Block b;
-                if (match(TokenKind::Colon)) {
-                    skip_separators();
-                    b.stmts.push_back(parse_statement());
-                } else {
-                    b = parse_block();
-                }
-                sw.cases.push_back(SwitchCase{v.text, std::make_shared<Block>(std::move(b))});
-            } else if (match_word("default")) {
-                if (match(TokenKind::Colon)) {
-                    Block b;
-                    skip_separators();
-                    b.stmts.push_back(parse_statement());
-                    sw.defaultBlk = std::make_shared<Block>(std::move(b));
-                } else {
-                    sw.defaultBlk = std::make_shared<Block>(parse_block());
-                }
-            } else {
-                skip_separators();
-                if (!(peek().kind == TokenKind::RBrace || peek().kind == TokenKind::End)) throw std::runtime_error("Expected 'case' or 'default'");
-            }
-            skip_separators();
-        }
-        expect(TokenKind::RBrace, "}");
-        return sw;
+        return parse_match();
     }
     // while
     if (is_word_or_kw(peek(), "while")) {
@@ -1475,6 +1609,7 @@ Statement Parser::parse_statement() {
             if (!(seg.kind == TokenKind::Word || seg.kind == TokenKind::Keyword)) throw std::runtime_error("Expected scoped segment after '::'");
             call.name += "::" + ident_text(seg);
         }
+        call.typeArgs = try_parse_call_type_args();
         if (match(TokenKind::LParen)) {
             if (!match(TokenKind::RParen)) {
                 do { call.args.push_back(parse_expression()); } while (match(TokenKind::Comma));
@@ -1712,6 +1847,7 @@ Program Parser::parse_program() {
                     if (w == "struct") return std::string("struct");
                     if (w == "enum") return std::string("enum");
                     if (w == "type") return std::string("type");
+                    if (w == "trait") return std::string("trait");
                     if (w == "extern") return std::string("extern");
                     if (w == "namespace") return std::string("namespace");
                     if (w == "run") return std::string("run");
@@ -1748,6 +1884,8 @@ Program Parser::parse_program() {
                 prog.enums.push_back(parse_enum());
             } else if (kind == "type") {
                 prog.typeAliases.push_back(parse_type_alias());
+            } else if (kind == "trait") {
+                prog.traits.push_back(parse_trait());
             } else if (kind == "namespace") {
                 consume();
                 const Token& firstNs = consume();
@@ -2022,6 +2160,7 @@ Entity Parser::parse_entity() {
     const Token& nameTok = consume();
     if (!(nameTok.kind == TokenKind::Word || nameTok.kind == TokenKind::Keyword)) throw std::runtime_error("Entity name");
     Entity e; e.name = qualify_name(ident_text(nameTok)); e.visibility = vis; e.exported = isExport; e.attributes = std::move(attrs);
+    e.typeParams = parse_type_param_list();
     if (match(TokenKind::Colon)) {
         e.baseType = parse_type_annotation();
     }
@@ -2326,6 +2465,7 @@ StructDecl Parser::parse_struct() {
     if (!(nameTok.kind == TokenKind::Word || nameTok.kind == TokenKind::Keyword)) throw std::runtime_error("Struct name");
     StructDecl decl;
     decl.name = qualify_name(ident_text(nameTok));
+    decl.typeParams = parse_type_param_list();
     expect(TokenKind::LBrace, "{");
     skip_separators();
     while (peek().kind != TokenKind::RBrace && peek().kind != TokenKind::End) {
@@ -2378,6 +2518,14 @@ StructDecl Parser::parse_struct() {
         if (match(TokenKind::Colon)) {
             fieldName = ident_text(firstTok);
             fieldType = parse_type_annotation();
+        } else if (peek().kind == TokenKind::Less || peek().kind == TokenKind::Scope ||
+                   peek().kind == TokenKind::Star || peek().kind == TokenKind::Amp) {
+            // type-first with generics/pointers: put first token back conceptually
+            --pos_;
+            fieldType = parse_type_annotation();
+            const Token& nameTok2 = consume();
+            if (!(nameTok2.kind == TokenKind::Word || nameTok2.kind == TokenKind::Keyword)) throw std::runtime_error("Struct field name");
+            fieldName = ident_text(nameTok2);
         } else {
             const Token& secondTok = consume();
             if (!(secondTok.kind == TokenKind::Word || secondTok.kind == TokenKind::Keyword)) throw std::runtime_error("Struct field name");
@@ -2407,12 +2555,23 @@ EnumDecl Parser::parse_enum() {
     if (!(nameTok.kind == TokenKind::Word || nameTok.kind == TokenKind::Keyword)) throw std::runtime_error("Enum name");
     EnumDecl decl;
     decl.name = qualify_name(ident_text(nameTok));
+    decl.typeParams = parse_type_param_list();
     expect(TokenKind::LBrace, "{");
     skip_separators();
     while (peek().kind != TokenKind::RBrace && peek().kind != TokenKind::End) {
         const Token& member = consume();
         if (!(member.kind == TokenKind::Word || member.kind == TokenKind::Keyword)) throw std::runtime_error("Enum member");
-        decl.members.push_back(ident_text(member));
+        EnumVariant variant;
+        variant.name = ident_text(member);
+        if (match(TokenKind::LParen)) {
+            if (!match(TokenKind::RParen)) {
+                do {
+                    variant.payloads.push_back(parse_type_ref());
+                } while (match(TokenKind::Comma));
+                expect(TokenKind::RParen, ")");
+            }
+        }
+        decl.variants.push_back(std::move(variant));
         (void)match(TokenKind::Comma);
         (void)match(TokenKind::Semicolon);
         skip_separators();
@@ -2434,9 +2593,197 @@ TypeAliasDecl Parser::parse_type_alias() {
     if (!match_word("type")) throw std::runtime_error("Expected 'type'");
     const Token& nameTok = consume();
     if (!(nameTok.kind == TokenKind::Word || nameTok.kind == TokenKind::Keyword)) throw std::runtime_error("Type alias name");
+    TypeAliasDecl decl;
+    decl.name = qualify_name(ident_text(nameTok));
+    decl.typeParams = parse_type_param_list();
     expect(TokenKind::Assign, "=");
-    std::string targetType = parse_type_annotation();
-    return TypeAliasDecl{ qualify_name(ident_text(nameTok)), targetType };
+    decl.targetType = parse_type_annotation();
+    return decl;
+}
+
+TraitDecl Parser::parse_trait() {
+    auto attrs = parse_attributes();
+    (void)attrs;
+    while (true) {
+        if (match_word("export") || match_word("public") || match_word("private")) {
+            skip_separators();
+            continue;
+        }
+        break;
+    }
+    if (!match_word("trait")) throw std::runtime_error("Expected 'trait'");
+    const Token& nameTok = consume();
+    if (!(nameTok.kind == TokenKind::Word || nameTok.kind == TokenKind::Keyword)) throw std::runtime_error("Trait name");
+    TraitDecl decl;
+    decl.name = qualify_name(ident_text(nameTok));
+    decl.typeParams = parse_type_param_list();
+    expect(TokenKind::LBrace, "{");
+    skip_separators();
+    while (peek().kind != TokenKind::RBrace && peek().kind != TokenKind::End) {
+        match_word("public");
+        match_word("private");
+        match_word("action");
+        TraitMethodSig method;
+        const Token& mname = consume();
+        if (!(mname.kind == TokenKind::Word || mname.kind == TokenKind::Keyword)) throw std::runtime_error("Trait method name");
+        method.name = ident_text(mname);
+        expect(TokenKind::LParen, "(");
+        if (!match(TokenKind::RParen)) {
+            do {
+                const size_t startPos = pos_;
+                const Token& first = consume();
+                if (!(first.kind == TokenKind::Word || first.kind == TokenKind::Keyword)) throw std::runtime_error("Trait param");
+                const std::string firstText = ident_text(first);
+                if (match(TokenKind::Colon)) {
+                    method.params.push_back(Param{ firstText, parse_type_annotation() });
+                } else if (peek().kind == TokenKind::Word || peek().kind == TokenKind::Keyword ||
+                           peek().kind == TokenKind::Less || peek().kind == TokenKind::Scope) {
+                    pos_ = startPos;
+                    std::string ptype = parse_type_annotation();
+                    const Token& pname = consume();
+                    if (!(pname.kind == TokenKind::Word || pname.kind == TokenKind::Keyword)) throw std::runtime_error("Trait param name");
+                    method.params.push_back(Param{ ident_text(pname), ptype });
+                } else {
+                    method.params.push_back(Param{ firstText, std::string{} });
+                }
+            } while (match(TokenKind::Comma));
+            expect(TokenKind::RParen, ")");
+        }
+        if (match(TokenKind::Colon) || match(TokenKind::Arrow) || match(TokenKind::FatArrow)) {
+            method.returnType = parse_type_annotation();
+        }
+        match(TokenKind::Semicolon);
+        skip_separators();
+        decl.methods.push_back(std::move(method));
+    }
+    expect(TokenKind::RBrace, "}");
+    return decl;
+}
+
+MatchStmt Parser::parse_match() {
+    if (!match_word("match")) throw std::runtime_error("Expected 'match'");
+    ExprPtr sel;
+    if (match(TokenKind::LParen)) {
+        sel = parse_expression();
+        expect(TokenKind::RParen, ")");
+    } else {
+        sel = parse_expression();
+    }
+    expect(TokenKind::LBrace, "{");
+    MatchStmt ms;
+    ms.selector = sel;
+    skip_separators();
+    while (peek().kind != TokenKind::RBrace && peek().kind != TokenKind::End) {
+        if (!match_word("case")) {
+            skip_separators();
+            if (peek().kind == TokenKind::RBrace || peek().kind == TokenKind::End) break;
+            throw std::runtime_error("Expected 'case' in match");
+        }
+        MatchCase mc;
+        mc.pattern = parse_pattern(true);
+        expect(TokenKind::Colon, ":");
+        skip_separators();
+        if (peek().kind == TokenKind::LBrace) {
+            mc.body = std::make_shared<Block>(parse_block());
+        } else {
+            auto body = std::make_shared<Block>();
+            body->stmts.push_back(parse_statement());
+            mc.body = body;
+        }
+        ms.cases.push_back(std::move(mc));
+        skip_separators();
+    }
+    expect(TokenKind::RBrace, "}");
+    return ms;
+}
+
+PatternPtr Parser::parse_pattern(bool topLevel) {
+    const Token& tok = consume();
+    if (!(tok.kind == TokenKind::Word || tok.kind == TokenKind::Keyword)) {
+        throw std::runtime_error("Expected pattern name");
+    }
+    const std::string name = ident_text(tok);
+    if (name == "_" && peek().kind != TokenKind::LParen) {
+        return std::make_shared<Pattern>(Pattern{PatWildcard{}});
+    }
+    if (match(TokenKind::LParen)) {
+        PatCtor ctor;
+        ctor.name = name;
+        if (!match(TokenKind::RParen)) {
+            do {
+                ctor.args.push_back(parse_pattern(false));
+            } while (match(TokenKind::Comma));
+            expect(TokenKind::RParen, ")");
+        }
+        return std::make_shared<Pattern>(Pattern{std::move(ctor)});
+    }
+    if (topLevel) {
+        return std::make_shared<Pattern>(Pattern{PatCtor{name, {}}});
+    }
+    return std::make_shared<Pattern>(Pattern{PatBinding{name}});
+}
+
+TypeRef Parser::parse_type_ref() {
+    TypeRef t;
+    t.canonical = parse_type_annotation();
+    try {
+        t = parse_type_ref_string(t.canonical);
+    } catch (...) {
+        t.name = t.canonical;
+        t.args.clear();
+    }
+    return t;
+}
+
+std::vector<TypeParam> Parser::parse_type_param_list() {
+    std::vector<TypeParam> params;
+    if (!match(TokenKind::Less)) return params;
+    if (!match(TokenKind::Greater)) {
+        do {
+            const Token& nameTok = consume();
+            if (!(nameTok.kind == TokenKind::Word || nameTok.kind == TokenKind::Keyword)) {
+                throw std::runtime_error("Expected type parameter name");
+            }
+            TypeParam tp;
+            tp.name = ident_text(nameTok);
+            if (match(TokenKind::Colon)) {
+                do {
+                    tp.constraints.push_back(parse_type_ref());
+                } while (match(TokenKind::Amp));
+            }
+            params.push_back(std::move(tp));
+        } while (match(TokenKind::Comma));
+        expect(TokenKind::Greater, ">");
+    }
+    return params;
+}
+
+std::vector<std::string> Parser::try_parse_call_type_args() {
+    std::vector<std::string> args;
+    if (peek().kind != TokenKind::Less) return args;
+    // Look ahead: only treat as type args when `<...>` is followed by `(`.
+    size_t i = pos_ + 1;
+    int depth = 1;
+    while (i < tokens_.size() && depth > 0) {
+        if (tokens_[i].kind == TokenKind::Less || tokens_[i].kind == TokenKind::Shl) {
+            depth += (tokens_[i].kind == TokenKind::Shl) ? 2 : 1;
+        } else if (tokens_[i].kind == TokenKind::Greater || tokens_[i].kind == TokenKind::Shr) {
+            depth -= (tokens_[i].kind == TokenKind::Shr) ? 2 : 1;
+        } else if (tokens_[i].kind == TokenKind::End || tokens_[i].kind == TokenKind::Newline ||
+                   tokens_[i].kind == TokenKind::Semicolon) {
+            return args;
+        }
+        ++i;
+    }
+    if (depth != 0 || i >= tokens_.size() || tokens_[i].kind != TokenKind::LParen) return args;
+    consume(); // <
+    if (!match(TokenKind::Greater)) {
+        do {
+            args.push_back(parse_type_annotation());
+        } while (match(TokenKind::Comma));
+        expect(TokenKind::Greater, ">");
+    }
+    return args;
 }
 
 std::string Parser::parse_type_annotation() {
@@ -2448,58 +2795,70 @@ std::string Parser::parse_type_annotation() {
         if (!(seg.kind == TokenKind::Word || seg.kind == TokenKind::Keyword)) throw std::runtime_error("Expected type segment after '::'");
         out += "::" + ident_text(seg);
     }
-    if (match(TokenKind::Less)) {
-        out += "<";
-        int depth = 1;
-        while (depth > 0) {
-            const Token& tk = consume();
-            if (tk.kind == TokenKind::End) throw std::runtime_error("Unterminated generic type annotation");
-            if (tk.kind == TokenKind::Less) {
-                out += "<";
-                ++depth;
-                continue;
-            }
-            if (tk.kind == TokenKind::Greater) {
-                --depth;
-                out += ">";
-                continue;
-            }
-            // The lexer emits a single Shr/Shl token for '>>'/'<<', which in
-            // nested generic annotations means two closing/opening brackets.
-            if (tk.kind == TokenKind::Shr) {
-                depth -= 2;
-                out += ">>";
-                if (depth < 0) throw std::runtime_error("Invalid token in type annotation");
-                continue;
-            }
-            if (tk.kind == TokenKind::Shl) {
-                depth += 2;
-                out += "<<";
-                continue;
-            }
-            if (tk.kind == TokenKind::Comma) {
-                out += ", ";
-                continue;
-            }
-            if (tk.kind == TokenKind::Dot || tk.kind == TokenKind::Colon || tk.kind == TokenKind::Question ||
-                tk.kind == TokenKind::Scope ||
-                tk.kind == TokenKind::Word || tk.kind == TokenKind::Keyword || tk.kind == TokenKind::Number) {
-                out += tk.text;
-                continue;
-            }
-            throw std::runtime_error("Invalid token in type annotation");
-        }
-    }
+    out += parse_type_annotation_angles();
     while (true) {
         if (match(TokenKind::Star)) {
             out += "*";
             continue;
         }
-        if (match(TokenKind::Amp)) {
+        if (peek().kind == TokenKind::Amp) {
+            const Token& next = peek(1);
+            if (next.kind == TokenKind::Word || next.kind == TokenKind::Keyword) break;
+            consume();
             out += "&";
             continue;
         }
         break;
+    }
+    return out;
+}
+
+std::string Parser::parse_type_annotation_angles() {
+    std::string out;
+    if (!match(TokenKind::Less)) return out;
+    out += "<";
+    int depth = 1;
+    while (depth > 0) {
+        const Token& tk = consume();
+        if (tk.kind == TokenKind::End) throw std::runtime_error("Unterminated generic type annotation");
+        if (tk.kind == TokenKind::Less) {
+            out += "<";
+            ++depth;
+            continue;
+        }
+        if (tk.kind == TokenKind::Greater) {
+            --depth;
+            out += ">";
+            continue;
+        }
+        if (tk.kind == TokenKind::Shr) {
+            if (depth == 1) {
+                --depth;
+                out += ">";
+                pendingGreater_ = true;
+                break;
+            }
+            depth -= 2;
+            out += ">>";
+            if (depth < 0) throw std::runtime_error("Invalid token in type annotation");
+            continue;
+        }
+        if (tk.kind == TokenKind::Shl) {
+            depth += 2;
+            out += "<<";
+            continue;
+        }
+        if (tk.kind == TokenKind::Comma) {
+            out += ", ";
+            continue;
+        }
+        if (tk.kind == TokenKind::Dot || tk.kind == TokenKind::Colon || tk.kind == TokenKind::Question ||
+            tk.kind == TokenKind::Scope ||
+            tk.kind == TokenKind::Word || tk.kind == TokenKind::Keyword || tk.kind == TokenKind::Number) {
+            out += tk.text;
+            continue;
+        }
+        throw std::runtime_error("Invalid token in type annotation");
     }
     return out;
 }

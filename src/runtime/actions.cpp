@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <sstream>
@@ -17,6 +18,9 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <type_traits>
+#include <unordered_map>
+#include <vector>
 
 namespace erelang {
 
@@ -55,7 +59,11 @@ const Hook* Runtime::find_hook(const Program& program, std::string_view name) co
 }
 
 const Entity* Runtime::find_entity(const Program& program, std::string_view name) const {
-    for (const auto& e : program.entities) if (e.name == name) return &e;
+    std::string_view bare = name;
+    if (bare.rfind("entity:", 0) == 0) bare = bare.substr(7);
+    const auto lt = bare.find('<');
+    if (lt != std::string_view::npos) bare = bare.substr(0, lt);
+    for (const auto& e : program.entities) if (e.name == bare) return &e;
     return nullptr;
 }
 
@@ -138,6 +146,11 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                             }
                         }
                     }
+                }
+                if (!lastReturnFields_.empty()) {
+                    for (const auto& kv : lastReturnFields_)
+                        env_set(env, st.name + "." + kv.first, kv.second);
+                    lastReturnFields_.clear();
                 }
                 return;
             }
@@ -239,6 +252,11 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 }
             }
             env_set(env, st.name, value);
+            if (value.rfind("struct:", 0) == 0 && !lastReturnFields_.empty()) {
+                for (const auto& kv : lastReturnFields_)
+                    env_set(env, st.name + "." + kv.first, kv.second);
+                lastReturnFields_.clear();
+            }
             if (std::holds_alternative<FunctionCallExpr>(st.value->node)) {
                 const auto& fc = std::get<FunctionCallExpr>(st.value->node);
                 if (fc.name == "dynamic_cast") {
@@ -256,7 +274,27 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
     if (std::holds_alternative<ReturnStmt>(s)) {
         const auto& rs = std::get<ReturnStmt>(s);
         Value rv = Value::from_string("");
-        if (rs.value && *rs.value) rv = eval_value(**rs.value, env);
+        ctx.returnFields.clear();
+        if (rs.value && *rs.value) {
+            if (std::holds_alternative<ExprIdent>((*rs.value)->node)) {
+                const std::string& name = std::get<ExprIdent>((*rs.value)->node).name;
+                Value bound = env_get(env, name);
+                if (bound.rfind("struct:", 0) == 0) {
+                    rv = bound;
+                    const std::string prefix = name + ".";
+                    for (const auto& kv : env.vars) {
+                        if (kv.first.rfind(prefix, 0) == 0)
+                            ctx.returnFields[kv.first.substr(prefix.size())] = kv.second;
+                    }
+                } else {
+                    rv = eval_value(**rs.value, env);
+                }
+            } else {
+                rv = eval_value(**rs.value, env);
+                if (rv.rfind("struct:", 0) == 0 && !lastReturnFields_.empty())
+                    ctx.returnFields = lastReturnFields_;
+            }
+        }
         ctx.returned = true;
         ctx.returnValue = std::move(rv);
         return;
@@ -478,6 +516,65 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
         }
         return;
     }
+    if (std::holds_alternative<MatchStmt>(s)) {
+        const auto& ms = std::get<MatchStmt>(s);
+        const std::string sel = to_display_string(eval_value(*ms.selector, env));
+
+        auto bind_value = [&](Env& caseEnv, const std::string& name, const std::string& val) {
+            caseEnv.vars[name] = value_from_legacy_string(val);
+            if (val.rfind("dict:", 0) == 0) {
+                const int id = to_int(val.substr(5));
+                auto dit = g_dicts.find(id);
+                if (dit != g_dicts.end()) {
+                    for (const auto& kv : dit->second) {
+                        caseEnv.vars[name + "." + kv.first] = value_from_legacy_string(kv.second);
+                    }
+                }
+            }
+        };
+
+        std::function<bool(const PatternPtr&, const std::string&, Env&)> try_match;
+        try_match = [&](const PatternPtr& pat, const std::string& value, Env& caseEnv) -> bool {
+            if (!pat) return false;
+            return std::visit([&](const auto& node) -> bool {
+                using N = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<N, PatWildcard>) {
+                    return true;
+                } else if constexpr (std::is_same_v<N, PatBinding>) {
+                    bind_value(caseEnv, node.name, value);
+                    return true;
+                } else if constexpr (std::is_same_v<N, PatCtor>) {
+                    std::string tag;
+                    std::vector<std::string> payloads;
+                    if (decode_enum_variant(value, tag, payloads)) {
+                        if (tag != node.name) return false;
+                        if (node.args.size() != payloads.size()) return false;
+                        for (size_t i = 0; i < node.args.size(); ++i) {
+                            if (!try_match(node.args[i], payloads[i], caseEnv)) return false;
+                        }
+                        return true;
+                    }
+                    return value == node.name && node.args.empty();
+                } else {
+                    return false;
+                }
+            }, pat->node);
+        };
+
+        for (const auto& c : ms.cases) {
+            Env caseEnv = env;
+            if (!try_match(c.pattern, sel, caseEnv)) continue;
+            if (c.body) exec_block(*c.body, program, ctx, caseEnv);
+            for (auto& kv : caseEnv.vars) {
+                if (env.vars.count(kv.first) || globalNames_.count(kv.first)) {
+                    env_set(env, kv.first, kv.second);
+                }
+            }
+            if (ctx.breakSignal) ctx.breakSignal = false;
+            return;
+        }
+        return;
+    }
     if (std::holds_alternative<ExprStmt>(s)) {
         const auto& st = std::get<ExprStmt>(s);
         if (!st.expr) return;
@@ -575,6 +672,14 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 return;
             }
             env_set(env, st.varOrField, eval_value(*st.value, env));
+            if (!lastReturnFields_.empty()) {
+                Value assigned = env_get(env, st.varOrField);
+                if (assigned.rfind("struct:", 0) == 0) {
+                    for (const auto& kv : lastReturnFields_)
+                        env_set(env, st.varOrField + "." + kv.first, kv.second);
+                }
+                lastReturnFields_.clear();
+            }
         }
         return;
     }
@@ -1422,13 +1527,25 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
             // Bind positional args into parameter names
             for (size_t i=0; i<a->params.size() && i<call.args.size(); ++i) {
                 const std::string paramName = a->params[i].name;
-                calleeEnv.vars[paramName] = eval_string(*call.args[i], env);
                 if (std::holds_alternative<ExprIdent>(call.args[i]->node)) {
                     const auto& id = std::get<ExprIdent>(call.args[i]->node).name;
+                    Value argValue = env_get(env, id);
+                    if (argValue.rfind("struct:", 0) == 0)
+                        calleeEnv.vars[paramName] = argValue;
+                    else
+                        calleeEnv.vars[paramName] = eval_string(*call.args[i], env);
                     auto oit = env.objects.find(id);
                     if (oit != env.objects.end()) {
                         calleeEnv.objects[paramName] = oit->second;
                     }
+                    for (const auto& kv : env.vars) {
+                        const std::string prefix = id + ".";
+                        if (kv.first.rfind(prefix, 0) == 0) {
+                            calleeEnv.vars[paramName + kv.first.substr(id.size())] = kv.second;
+                        }
+                    }
+                } else {
+                    calleeEnv.vars[paramName] = eval_string(*call.args[i], env);
                 }
             }
             prepare_action_slots(calleeEnv, *a);

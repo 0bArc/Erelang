@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import {
   ENTITY_RE, ACTION_RE, TYPED_FUNC_RE, FIELD_RE, STRUCT_RE, ENUM_RE,
-  TYPE_ALIAS_RE, HOOK_RE, LET_RE, GLOBAL_RE, LANGUAGE_KEYWORDS,
+  TYPE_ALIAS_RE, TRAIT_RE, HOOK_RE, LET_RE, GLOBAL_RE, LANGUAGE_KEYWORDS,
 } from './constants';
 import {
   CollectedSymbols, DocumentIndex, EntityMembers, OutlineSymbol, WordToken, RangeToken,
@@ -132,6 +132,7 @@ function buildDocumentIndex(doc: vscode.TextDocument): DocumentIndex {
       out.enumMembers.set(m[1], out.enumMembers.get(m[1]) ?? new Set());
     }
     if ((m = TYPE_ALIAS_RE.exec(text))) out.typeAliases.add(m[1]);
+    if ((m = TRAIT_RE.exec(text))) out.typeAliases.add(m[1]);
 
     if ((m = ACTION_RE.exec(text))) {
       out.actions.add(m[1]);

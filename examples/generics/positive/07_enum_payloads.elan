@@ -1,0 +1,42 @@
+@strict
+
+struct Pair<A, B> {
+    A first;
+    B second;
+}
+
+enum Option<T> {
+    Some(T),
+    None
+}
+
+enum Result<T, E> {
+    Ok(T),
+    Error(E)
+}
+
+public action main() {
+    Option<string> os = Option<string>.Some("hi");
+    Option<Pair<int, string>> op = Option<Pair<int, string>>.None;
+    Result<Option<int>, string> r = Result<Option<int>, string>.Ok(Option<int>.Some(5));
+
+    match (os) {
+        case Some(s): { print s; }
+        case None: { print "empty"; }
+    }
+    match (op) {
+        case Some(p): { print p.first; }
+        case None: { print "no-pair"; }
+    }
+    match (r) {
+        case Ok(inner): {
+            match (inner) {
+                case Some(n): { print n; }
+                case None: { print "inner-none"; }
+            }
+        }
+        case Error(e): { print e; }
+    }
+}
+
+run main;

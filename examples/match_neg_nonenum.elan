@@ -1,0 +1,12 @@
+@strict
+
+public action main() {
+    int x = 1;
+    match (x) {
+        case Some(v): {
+            print v;
+        }
+    }
+}
+
+run main;

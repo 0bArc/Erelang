@@ -1,0 +1,108 @@
+@strict
+
+enum Option<T> {
+    Some(T),
+    None
+}
+
+enum Result<T, E> {
+    Ok(T),
+    Error(E)
+}
+
+enum PairInt {
+    Values(int, int)
+}
+
+public action main() {
+    Option<int> some = Option<int>.Some(42);
+    Option<int> none = Option<int>.None;
+    match (some) {
+        case Some(v): {
+            print v;
+        }
+        case None: {
+            print "empty";
+        }
+    }
+    match (none) {
+        case Some(v): {
+            print v;
+        }
+        case None: {
+            print "empty";
+        }
+    }
+
+    Result<string, string> ok = Result<string, string>.Ok("loaded");
+    Result<string, string> err = Result<string, string>.Error("fail");
+    match (ok) {
+        case Ok(msg): {
+            print msg;
+        }
+        case Error(e): {
+            print e;
+        }
+    }
+    match (err) {
+        case Ok(msg): {
+            print msg;
+        }
+        case Error(e): {
+            print e;
+        }
+    }
+
+    PairInt p = PairInt.Values(3, 7);
+    match (p) {
+        case Values(a, b): {
+            print a;
+            print b;
+        }
+    }
+
+    Option<Option<int>> nested = Option<Option<int>>.Some(Option<int>.Some(9));
+    match (nested) {
+        case Some(Some(n)): {
+            print n;
+        }
+        case Some(None): {
+            print "inner-empty";
+        }
+        case None: {
+            print "outer-empty";
+        }
+    }
+
+    Result<Option<int>, string> ro = Result<Option<int>, string>.Ok(Option<int>.Some(5));
+    match (ro) {
+        case Ok(Some(x)): {
+            print x;
+        }
+        case Ok(None): {
+            print "none";
+        }
+        case Error(e): {
+            print e;
+        }
+    }
+
+    match (some) {
+        case Some(v): {
+            print v;
+        }
+        case None: {
+            print "empty";
+        }
+    }
+    match (none) {
+        case Some(v): {
+            print v;
+        }
+        case None: {
+            print "empty";
+        }
+    }
+}
+
+run main;

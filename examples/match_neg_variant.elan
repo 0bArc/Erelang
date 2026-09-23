@@ -1,0 +1,13 @@
+@strict
+
+enum Option<T> {
+    Some(T),
+    None
+}
+
+public action main() {
+    Option<int> bad = Option<int>.DoesNotExist(1);
+    print bad;
+}
+
+run main;

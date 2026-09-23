@@ -1,0 +1,22 @@
+@strict
+
+public action die(): never {
+    fail("boom");
+}
+
+public action main() {
+    for (int i : 1 .. 3) {
+        print i;
+    }
+    for (int j : 0 ..< 3) {
+        print j;
+    }
+
+    try {
+        die();
+    } catch (err) {
+        print err;
+    }
+}
+
+run main;

@@ -286,6 +286,10 @@ private:
                     case BinOp::StrictNE: emit("cmp_sne", {dst, l.value, r.value}); return {dst, "bool"};
                     default: return {"#0", "unknown"};
                 }
+            } else if constexpr (std::is_same_v<T, RangeExpr>) {
+                (void)lower_expr(node.start);
+                (void)lower_expr(node.end);
+                return {"#0", "array<int>"};
             } else if constexpr (std::is_same_v<T, TernaryExpr>) {
                 auto cond = lower_expr(node.cond);
                 const std::string thenLabel = new_label("tern_then");
@@ -368,10 +372,15 @@ private:
                 if (v.type == "string") emit("print_s", {v.value});
                 else emit("print_i", {v.value});
             } else if constexpr (std::is_same_v<T, LetStmt>) {
-                auto v = lower_expr(s.value);
-                emit("mov", {to_var(s.name), v.value});
-                varTypes_[s.name] = v.type;
-                track_literal_binding(s.name, s.value);
+                if (s.pattern) {
+                    // Native IR lowering skips declaration destructuring; interpreter path handles it.
+                    (void)lower_expr(s.value);
+                } else {
+                    auto v = lower_expr(s.value);
+                    emit("mov", {to_var(s.name), v.value});
+                    varTypes_[s.name] = v.type;
+                    track_literal_binding(s.name, s.value);
+                }
             } else if constexpr (std::is_same_v<T, SetStmt>) {
                 if (!s.isMember) {
                     auto v = lower_expr(s.value);
@@ -559,6 +568,8 @@ private:
                 if (s.body) lower_block(*s.body);
             } else if constexpr (std::is_same_v<T, PointerSetStmt>) {
                 emit("nop", {"pointer-set"});
+            } else if constexpr (std::is_same_v<T, IndexSetStmt>) {
+                emit("nop", {"index-set"});
             } else if constexpr (std::is_same_v<T, InputStmt>) {
                 emit("input", {to_var(s.name)});
                 varTypes_[s.name] = "string";

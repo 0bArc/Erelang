@@ -12,6 +12,8 @@ export interface CollectedSymbols {
   typeAliases:  Set<string>;
   structFields: Map<string, Set<string>>;
   enumMembers:  Map<string, Set<string>>;
+  namespaces:   Set<string>;
+  namespaceMembers: Map<string, Set<string>>;
 }
 
 export interface EntityMembers {
@@ -29,7 +31,7 @@ export interface DocumentIndex {
 
 export interface OutlineSymbol {
   name: string;
-  kind: 'entity' | 'action' | 'field' | 'hook';
+  kind: 'entity' | 'action' | 'field' | 'hook' | 'namespace';
   line: number;
 }
 

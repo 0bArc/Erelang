@@ -1,0 +1,16 @@
+@strict
+
+public action main() {
+    set<string> s = set_new();
+    set_add(s, "a");
+    set_add(s, "b");
+    set_add(s, "a");
+    print set_size(s);
+    print set_has(s, "a");
+    print set_has(s, "z");
+
+    Set<int> nums = set_of(1, 2, 3);
+    print set_size(nums);
+}
+
+run main;

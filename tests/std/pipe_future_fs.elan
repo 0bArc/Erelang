@@ -1,0 +1,28 @@
+@strict
+
+#include <std/pipe>
+#include <std/fs>
+
+public async action worker(string p) {
+    p.send("hi");
+    p.close();
+}
+
+public async action main() {
+    string p = pipe.new(2);
+    any fut = worker(p);
+    print p.receive();
+    await fut;
+    print fut.done();
+
+    string path = "tests_tmp_api_fs.txt";
+    fs.write(path, "hello");
+    string file = fs.open(path, "r");
+    string body = file.read();
+    file.close();
+    print body;
+    fs.remove(path);
+    print "std-pipe-future-fs-ok";
+}
+
+run main;

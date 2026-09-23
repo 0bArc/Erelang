@@ -140,9 +140,7 @@ print "value={x}";
 
 ## Collections (no import)
 
-Lists: `list_new`, `list_get`, `list_len`, `list_push`, `list_join`, `list_clear`, `list_remove_at`
-
-Dicts: `dict_new`, `dict_set`, `dict_get`, `dict_has`, `dict_keys`, `dict_values`, `dict_size`, `dict_remove`, `dict_clear`, `dict_merge`, `dict_clone`
+Lists / maps: prefer literals (`[1, 2]`, `{"k": v}`). Bare `list_*` / `dict_*` constructors are not part of the public global API.
 
 Full docs: [collections.md](collections.md)
 

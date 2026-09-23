@@ -1,0 +1,21 @@
+@strict
+
+enum Option<T> {
+    Some(T),
+    None
+}
+
+public async action get(): Option<int> {
+    return Option<int>.Some(9);
+}
+
+public async action main() {
+    Option<int> o = await get();
+    match (o) {
+        case Some(v): { print v; }
+        case None: { print "none"; }
+    }
+    print "async-option-await-ok";
+}
+
+run main;

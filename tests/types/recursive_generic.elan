@@ -1,0 +1,17 @@
+@strict
+
+enum List<T> {
+    Cons(T, List<T>),
+    Nil
+}
+
+public action main() {
+    List<int> xs = List<int>.Nil;
+    match (xs) {
+        case Cons(h, t): { print h; }
+        case Nil: { print "nil"; }
+    }
+    print "types-recgen-ok";
+}
+
+run main;

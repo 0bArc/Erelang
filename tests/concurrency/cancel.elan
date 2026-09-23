@@ -1,0 +1,23 @@
+@strict
+
+#include <std/pipe>
+
+public async action blocked(string ch) {
+    string v = ch.receive();
+    print v;
+}
+
+public async action main() {
+    string ch = pipe.new();
+    any slow = blocked(ch);
+    any cancelled = slow.cancel();
+    print cancelled;
+    try {
+        await slow;
+        fail("expected cancel error");
+    } catch (e) {
+        print "concurrency-cancel-ok";
+    }
+}
+
+run main;

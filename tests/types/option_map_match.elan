@@ -1,0 +1,24 @@
+@strict
+
+enum Option<T> {
+    Some(T),
+    None
+}
+
+public action map_int_double(value: Option<int>): Option<int> {
+    match (value) {
+        case Some(v): { return Option<int>.Some(v * 2); }
+        case None: { return Option<int>.None; }
+    }
+    return Option<int>.None;
+}
+
+public action main() {
+    match (map_int_double(Option<int>.Some(21))) {
+        case Some(v): { print v; }
+        case None: { print "none"; }
+    }
+    print "types-option-map-match-ok";
+}
+
+run main;

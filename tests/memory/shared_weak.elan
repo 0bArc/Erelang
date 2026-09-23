@@ -1,0 +1,37 @@
+@strict
+
+enum Option<T> {
+    Some(T),
+    None
+}
+
+struct User {
+    int id;
+}
+
+public action main() {
+    shared<int> a = shared<int>(10);
+    shared<int> b = a;
+    *b = 99;
+    print *a;
+    print *b;
+
+    weak<int> w = weak(a);
+    match (w.get()) {
+        case Some(v): { print v; }
+        case None: { print "none-early"; }
+    }
+
+    shared<int> c = a;
+    b = shared<int>(0);
+    a = shared<int>(0);
+    c = shared<int>(0);
+
+    match (w.get()) {
+        case Some(v): { print v; print "weak-alive"; }
+        case None: { print "weak-expired"; }
+    }
+    print "shared-ok";
+}
+
+run main;

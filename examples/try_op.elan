@@ -1,0 +1,68 @@
+@strict
+
+enum Option<T> {
+    Some(T),
+    None
+}
+
+enum Result<T, E> {
+    Ok(T),
+    Error(E)
+}
+
+public action get_ok(): Result<int, string> {
+    return Result<int, string>.Ok(99);
+}
+
+public action get_err(): Result<int, string> {
+    return Result<int, string>.Error("boom");
+}
+
+public action get_some(): Option<int> {
+    return Option<int>.Some(5);
+}
+
+public action get_none(): Option<int> {
+    return Option<int>.None;
+}
+
+public action foo_ok(): Result<int, string> {
+    int x = get_ok()?;
+    return Result<int, string>.Ok(x);
+}
+
+public action foo_err(): Result<int, string> {
+    int x = get_err()?;
+    return Result<int, string>.Ok(x);
+}
+
+public action bar_some(): Option<int> {
+    int x = get_some()?;
+    return Option<int>.Some(x);
+}
+
+public action bar_none(): Option<int> {
+    int x = get_none()?;
+    return Option<int>.Some(x);
+}
+
+public action main() {
+    match (foo_ok()) {
+        case Ok(v): { print v; }
+        case Error(e): { print e; }
+    }
+    match (foo_err()) {
+        case Ok(v): { print v; }
+        case Error(e): { print e; }
+    }
+    match (bar_some()) {
+        case Some(v): { print v; }
+        case None: { print "none"; }
+    }
+    match (bar_none()) {
+        case Some(v): { print v; }
+        case None: { print "none"; }
+    }
+}
+
+run main;

@@ -1,30 +1,37 @@
 import * as vscode from 'vscode';
-import { validateDocument } from './diagnostics';
+import * as path from 'path';
+import {
+  LanguageClient,
+  LanguageClientOptions,
+  ServerOptions,
+  TransportKind,
+} from 'vscode-languageclient/node';
 import {
   ErelangCompletionProvider, setDebugChannel, isForeachColonCtx, isDictLiteralCtx,
+  noteDocumentEdit,
 } from './completions';
 import {
   collect, parseForEachHeader, getDocumentIndex, invalidateDocumentIndex,
+  MAX_INDEX_LINES,
 } from './symbols';
 import { invalidateDefCache } from './semantic-tokens';
 import { invalidateImportCache } from './imports';
-
-const MAX_SYMBOL_LINES = 8_000;
 
 const KIND_MAP = {
   entity: vscode.SymbolKind.Class,
   action: vscode.SymbolKind.Function,
   field: vscode.SymbolKind.Field,
   hook: vscode.SymbolKind.Event,
+  namespace: vscode.SymbolKind.Namespace,
 } as const;
 
 class ErelangDocumentSymbolProvider implements vscode.DocumentSymbolProvider {
   provideDocumentSymbols(doc: vscode.TextDocument): vscode.SymbolInformation[] {
     if (doc.languageId !== 'erelang') return [];
+    if (doc.lineCount > MAX_INDEX_LINES) return [];
     const index = getDocumentIndex(doc);
     const out: vscode.SymbolInformation[] = [];
     for (const sym of index.outline) {
-      if (sym.line >= MAX_SYMBOL_LINES) break;
       out.push(new vscode.SymbolInformation(
         sym.name,
         KIND_MAP[sym.kind],
@@ -48,6 +55,7 @@ class ErelangWorkspaceSymbolProvider implements vscode.WorkspaceSymbolProvider {
     for (const doc of vscode.workspace.textDocuments) {
       if (token.isCancellationRequested) return out;
       if (doc.languageId !== 'erelang') continue;
+      if (doc.lineCount > MAX_INDEX_LINES) continue;
       const index = getDocumentIndex(doc);
       for (const sym of index.outline) {
         if (!sym.name.includes(q)) continue;
@@ -63,6 +71,8 @@ class ErelangWorkspaceSymbolProvider implements vscode.WorkspaceSymbolProvider {
   }
 }
 
+let client: LanguageClient | undefined;
+
 export function activate(ctx: vscode.ExtensionContext) {
   let debugCh: vscode.OutputChannel | undefined;
   const getDebugCh = () => {
@@ -74,56 +84,35 @@ export function activate(ctx: vscode.ExtensionContext) {
     return debugCh;
   };
 
-  const semiDiags = vscode.languages.createDiagnosticCollection('erelang');
-  ctx.subscriptions.push(semiDiags);
-
-  const diagnosticTimers = new Map<string, NodeJS.Timeout>();
-  const diagnosticGeneration = new Map<string, number>();
-  const scheduleDiags = (d: vscode.TextDocument, delay = 1200) => {
-    if (d.isClosed || d.languageId !== 'erelang') return;
-    const key = d.uri.toString();
-    const generation = (diagnosticGeneration.get(key) ?? 0) + 1;
-    diagnosticGeneration.set(key, generation);
-    const pending = diagnosticTimers.get(key);
-    if (pending) clearTimeout(pending);
-    diagnosticTimers.set(key, setTimeout(() => {
-      diagnosticTimers.delete(key);
-      if (d.isClosed || d.version < 0) return;
-      try {
-        validateDocument(d, semiDiags, () =>
-          diagnosticGeneration.get(key) !== generation || d.isClosed);
-      } catch {}
-    }, delay));
+  const serverModule = ctx.asAbsolutePath(path.join('out', 'server.js'));
+  const exePath = vscode.workspace.getConfiguration('erelang').get<string>('executablePath', '');
+  const serverOptions: ServerOptions = {
+    run: { module: serverModule, transport: TransportKind.stdio },
+    debug: { module: serverModule, transport: TransportKind.stdio },
   };
+  const clientOptions: LanguageClientOptions = {
+    documentSelector: [{ scheme: 'file', language: 'erelang' }],
+    synchronize: {
+      fileEvents: vscode.workspace.createFileSystemWatcher('**/*.{elan,ere}'),
+    },
+    initializationOptions: {
+      erelangPath: exePath,
+    },
+  };
+  client = new LanguageClient('erelang', 'Erelang Language Server', serverOptions, clientOptions);
+  ctx.subscriptions.push({ dispose: () => { void client?.stop(); } });
+  void client.start();
 
-  const forget = (d: vscode.TextDocument) => {
+  ctx.subscriptions.push(vscode.workspace.onDidChangeTextDocument(e => {
+    noteDocumentEdit(e);
+  }));
+  ctx.subscriptions.push(vscode.workspace.onDidCloseTextDocument(d => {
     if (d.languageId !== 'erelang') return;
     const key = d.uri.toString();
     invalidateImportCache(key);
     invalidateDefCache(key);
     invalidateDocumentIndex(key);
-  };
-
-  ctx.subscriptions.push(vscode.workspace.onDidSaveTextDocument(d => {
-    if (d.languageId === 'erelang') scheduleDiags(d, 300);
   }));
-  ctx.subscriptions.push(vscode.workspace.onDidCloseTextDocument(d => {
-    if (d.languageId !== 'erelang') return;
-    const key = d.uri.toString();
-    const pending = diagnosticTimers.get(key);
-    if (pending) clearTimeout(pending);
-    diagnosticTimers.delete(key);
-    diagnosticGeneration.delete(key);
-    semiDiags.delete(d.uri);
-    forget(d);
-  }));
-  ctx.subscriptions.push({ dispose: () => {
-    for (const pending of diagnosticTimers.values()) clearTimeout(pending);
-    diagnosticTimers.clear();
-  }});
-
-  const active = vscode.window.activeTextEditor?.document;
-  if (active?.languageId === 'erelang') scheduleDiags(active, 2000);
 
   ctx.subscriptions.push(
     vscode.commands.registerCommand('erelang.debugCompletionContext', () => {
@@ -151,9 +140,10 @@ export function activate(ctx: vscode.ExtensionContext) {
       ch.appendLine('');
       ch.show(true);
       vscode.window.showInformationMessage('Context dumped → Output > Erelang Language Debug');
-    })
+    }),
   );
 
+  // Rich client-side completions keep include-path / member heuristics; LSP also offers basics.
   ctx.subscriptions.push(
     vscode.languages.registerCompletionItemProvider(
       { language: 'erelang' },
@@ -167,6 +157,19 @@ export function activate(ctx: vscode.ExtensionContext) {
   ctx.subscriptions.push(
     vscode.languages.registerWorkspaceSymbolProvider(new ErelangWorkspaceSymbolProvider()),
   );
+
+  ctx.subscriptions.push(
+    vscode.debug.registerDebugAdapterDescriptorFactory('erelang', {
+      createDebugAdapterDescriptor() {
+        return new vscode.DebugAdapterExecutable(
+          process.execPath,
+          [ctx.asAbsolutePath(path.join('out', 'debugAdapter.js'))],
+        );
+      },
+    }),
+  );
 }
 
-export function deactivate() {}
+export async function deactivate() {
+  if (client) await client.stop();
+}

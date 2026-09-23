@@ -1,0 +1,36 @@
+@strict
+
+trait Show {
+    action show(): string;
+}
+
+enum Option<T> {
+    Some(T),
+    None
+}
+
+struct Box<T> {
+    T value;
+
+    public action show(): string {
+        return "box";
+    }
+}
+
+public action describe<T: Show>(x: T): string {
+    return x.show();
+}
+
+public action main() {
+    Box<int> b;
+    b.value = 3;
+    print describe(b);
+    Option<int> o = Option<int>.Some(b.value);
+    match (o) {
+        case Some(v): { print v; }
+        case None: { print "none"; }
+    }
+    print "integration-gen-trait-enum-match-ok";
+}
+
+run main;

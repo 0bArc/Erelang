@@ -1,0 +1,21 @@
+@strict
+
+namespace Math {
+    public action add(int a, int b): int {
+        return a + b;
+    }
+}
+
+namespace Util {
+    public action twice(int x): int {
+        return Math::add(x, x);
+    }
+}
+
+public action main() {
+    print Math::add(2, 3);
+    print Util::twice(4);
+    print "modules-ns-ok";
+}
+
+run main;

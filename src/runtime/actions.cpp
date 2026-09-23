@@ -20,6 +20,7 @@
 #include <thread>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace erelang {
@@ -116,6 +117,111 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
     }
     if (std::holds_alternative<LetStmt>(s)) {
         const auto& st = std::get<LetStmt>(s);
+        if (st.pattern) {
+            std::function<void(const PatternPtr&, const std::string&)> bind_destructure;
+            bind_destructure = [&](const PatternPtr& pat, const std::string& value) {
+                if (!pat) return;
+                std::visit([&](const auto& node) {
+                    using N = std::decay_t<decltype(node)>;
+                    if constexpr (std::is_same_v<N, PatWildcard>) {
+                        return;
+                    } else if constexpr (std::is_same_v<N, PatBinding>) {
+                        env_set(env, node.name, value_from_legacy_string(value));
+                    } else if constexpr (std::is_same_v<N, PatStruct>) {
+                        std::string sourceName;
+                        if (std::holds_alternative<ExprIdent>(st.value->node)) {
+                            sourceName = std::get<ExprIdent>(st.value->node).name;
+                        } else if (env.objects.count(value)) {
+                            sourceName = value;
+                        }
+                        for (const auto& f : node.fields) {
+                            std::string fieldVal;
+                            if (!lastReturnFields_.empty()) {
+                                auto lit = lastReturnFields_.find(f.field);
+                                if (lit != lastReturnFields_.end()) {
+                                    fieldVal = to_display_string(lit->second);
+                                }
+                            }
+                            if (fieldVal.empty() && !sourceName.empty()) {
+                                auto fit = env.vars.find(sourceName + "." + f.field);
+                                if (fit != env.vars.end()) {
+                                    fieldVal = to_display_string(fit->second);
+                                } else {
+                                    auto oit = env.objects.find(sourceName);
+                                    if (oit != env.objects.end() && oit->second) {
+                                        auto ff = oit->second->fields.find(f.field);
+                                        if (ff != oit->second->fields.end()) fieldVal = ff->second;
+                                    }
+                                }
+                            }
+                            if (fieldVal.empty() && value.rfind("dict:", 0) == 0) {
+                                const int id = to_int(value.substr(5));
+                                auto dit = g_dicts.find(id);
+                                if (dit != g_dicts.end()) {
+                                    auto fit = dit->second.find(f.field);
+                                    if (fit != dit->second.end()) fieldVal = fit->second;
+                                }
+                            }
+                            bind_destructure(f.pattern, fieldVal);
+                        }
+                        lastReturnFields_.clear();
+                    } else if constexpr (std::is_same_v<N, PatArray>) {
+                        std::vector<std::string>* list = nullptr;
+                        int listId = -1;
+                        if (value.rfind("list:", 0) == 0) {
+                            listId = to_int(value.substr(5));
+                            auto lit = g_lists.find(listId);
+                            if (lit != g_lists.end()) list = &lit->second;
+                        }
+                        if (!list) {
+                            throw std::runtime_error("Array destructuring requires a list value");
+                        }
+                        if (list->size() < node.elements.size()) {
+                            throw std::runtime_error("Array destructuring: too few elements");
+                        }
+                        for (size_t i = 0; i < node.elements.size(); ++i) {
+                            bind_destructure(node.elements[i], (*list)[i]);
+                        }
+                    } else if constexpr (std::is_same_v<N, PatTuple>) {
+                        std::vector<std::string>* tup = nullptr;
+                        if (value.rfind("tuple:", 0) == 0) {
+                            const int id = to_int(value.substr(6));
+                            auto tit = g_tuples.find(id);
+                            if (tit != g_tuples.end()) tup = &tit->second;
+                        }
+                        if (!tup) {
+                            throw std::runtime_error("Tuple destructuring requires a tuple value");
+                        }
+                        if (tup->size() != node.elements.size()) {
+                            throw std::runtime_error("tuple destructuring expects " + std::to_string(node.elements.size()) +
+                                " elements, got " + std::to_string(tup->size()));
+                        }
+                        for (size_t i = 0; i < node.elements.size(); ++i) {
+                            bind_destructure(node.elements[i], (*tup)[i]);
+                        }
+                    } else if constexpr (std::is_same_v<N, PatCtor>) {
+                        std::string tag;
+                        std::vector<std::string> payloads;
+                        if (!decode_enum_variant(value, tag, payloads)) {
+                            tag = value;
+                            payloads.clear();
+                        }
+                        if (tag != node.name) {
+                            throw std::runtime_error("Enum let destructuring failed: expected variant `" + node.name + "`, got `" + tag + "`");
+                        }
+                        if (payloads.size() != node.args.size()) {
+                            throw std::runtime_error("Enum let destructuring payload count mismatch for `" + node.name + "`");
+                        }
+                        for (size_t i = 0; i < node.args.size(); ++i) {
+                            bind_destructure(node.args[i], payloads[i]);
+                        }
+                    }
+                }, pat->node);
+            };
+            const std::string value = eval_string(*st.value, env);
+            bind_destructure(st.pattern, value);
+            return;
+        }
         if (!st.declaredType.empty()) {
             if (const StructDecl* sd = find_struct_decl(program, st.declaredType)) {
                 env_set(env, st.name, Value::from_string(std::string("struct:") + sd->name));
@@ -220,19 +326,44 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
             env.objects[st.name] = obj;
             env_set(env, st.name, Value::from_string(st.name));
         } else {
-            Value value = eval_value(*st.value, env);
+            Value value;
+            bool movedOwn = false;
+            if (std::holds_alternative<ExprIdent>(st.value->node)) {
+                const std::string& srcName = std::get<ExprIdent>(st.value->node).name;
+                if (mem_try_move_own_ident(env.vars, srcName, value)) {
+                    movedOwn = true;
+                }
+            }
+            if (!movedOwn) {
+                value = eval_value(*st.value, env);
+                if (value_is_handle(value, HandleKind::Own) &&
+                    std::holds_alternative<ExprIdent>(st.value->node)) {
+                    const std::string& srcName = std::get<ExprIdent>(st.value->node).name;
+                    env_set(env, srcName, Value::null_value());
+                } else if (value_is_handle(value, HandleKind::Shared) &&
+                           std::holds_alternative<ExprIdent>(st.value->node)) {
+                    mem_retain(value);
+                }
+            }
             if (!st.declaredType.empty()) {
                 auto infer_runtime_value_type = [&](const Value& vv) {
                     if (vv.kind == ValueKind::Handle) {
                         switch (vv.h.kind) {
                             case HandleKind::List: return std::string("array<any>");
                             case HandleKind::Dict: return std::string("map<string,any>");
+                            case HandleKind::Set: return std::string("set<any>");
+                            case HandleKind::Ptr: return std::string("pointer");
+                            case HandleKind::Own: return std::string("heap");
+                            case HandleKind::Shared: return std::string("shared");
+                            case HandleKind::Weak: return std::string("weak");
+                            case HandleKind::Buffer: return std::string("buffer");
                             default: break;
                         }
                     }
                     const std::string text = to_display_string(vv);
                     if (text.rfind("list:", 0) == 0) return std::string("array<any>");
                     if (text.rfind("dict:", 0) == 0) return std::string("map<string,any>");
+                    if (text.rfind("set:", 0) == 0) return std::string("set<any>");
                     if (text.rfind("struct:", 0) == 0) return normalize_runtime_type_name(text);
                     if (vv.kind == ValueKind::Bool || text == "true" || text == "false") return std::string("bool");
                     if (vv.kind == ValueKind::Int || is_int_string(text)) return std::string("int");
@@ -245,10 +376,22 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 const std::string actualType = infer_runtime_value_type(value);
                 const std::string declaredNorm = normalize_runtime_type_name(st.declaredType);
                 if (declaredNorm == "string" || declaredNorm == "str") {
+                } else if ((!declaredNorm.empty() && declaredNorm.front() == '*') ||
+                           declaredNorm.rfind("heap<", 0) == 0 ||
+                           declaredNorm.rfind("own<", 0) == 0 ||
+                           declaredNorm.rfind("shared<", 0) == 0 || declaredNorm.rfind("weak<", 0) == 0 ||
+                           declaredNorm.rfind("buffer<", 0) == 0 || declaredNorm == "pointer") {
+                    // Memory handles: skip strict string-equality check; TC already validated.
                 } else if (!runtime_declared_type_matches(st.declaredType, actualType)) {
                     throw std::runtime_error(
                         "Type mismatch in declaration '" + st.name + "': declared " + st.declaredType + " but got " + actualType
                     );
+                }
+            }
+            {
+                Value prev = env_get(env, st.name);
+                if (mem_is_owner(prev) || value_is_handle(prev, HandleKind::Weak)) {
+                    mem_release(prev);
                 }
             }
             env_set(env, st.name, value);
@@ -278,16 +421,25 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
         if (rs.value && *rs.value) {
             if (std::holds_alternative<ExprIdent>((*rs.value)->node)) {
                 const std::string& name = std::get<ExprIdent>((*rs.value)->node).name;
-                Value bound = env_get(env, name);
-                if (bound.rfind("struct:", 0) == 0) {
-                    rv = bound;
-                    const std::string prefix = name + ".";
-                    for (const auto& kv : env.vars) {
-                        if (kv.first.rfind(prefix, 0) == 0)
-                            ctx.returnFields[kv.first.substr(prefix.size())] = kv.second;
-                    }
+                if (mem_try_move_own_ident(env.vars, name, rv)) {
+                    // moved
                 } else {
-                    rv = eval_value(**rs.value, env);
+                    Value bound = env_get(env, name);
+                    if (bound.rfind("struct:", 0) == 0) {
+                        rv = bound;
+                        const std::string prefix = name + ".";
+                        for (const auto& kv : env.vars) {
+                            if (kv.first.rfind(prefix, 0) == 0)
+                                ctx.returnFields[kv.first.substr(prefix.size())] = kv.second;
+                        }
+                    } else {
+                        rv = eval_value(**rs.value, env);
+                        if (value_is_handle(rv, HandleKind::Shared)) mem_retain(rv);
+                        if (value_is_handle(rv, HandleKind::Buffer)) {
+                            // returning buffer transfers ownership: clear local without destroy
+                            env_set(env, name, Value::null_value());
+                        }
+                    }
                 }
             } else {
                 rv = eval_value(**rs.value, env);
@@ -480,27 +632,45 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
     }
     if (std::holds_alternative<PointerSetStmt>(s)) {
         const auto& st = std::get<PointerSetStmt>(s);
-        const std::string target = eval_string(*st.pointer, env);
-        const std::string newValue = eval_string(*st.value, env);
-        if (target.rfind("ref:", 0) == 0) {
-            const std::string varName = target.substr(4);
-            env_set(env, varName, value_from_legacy_string(newValue));
+        const Value target = eval_value(*st.pointer, env);
+        const Value newValue = eval_value(*st.value, env);
+        const std::string targetText = to_display_string(target);
+        if (targetText.rfind("ref:", 0) == 0) {
+            const std::string varName = targetText.substr(4);
+            env_set(env, varName, newValue);
             return;
         }
-        if (auto idOpt = parse_pointer_handle(target); idOpt.has_value()) {
+        if (auto idOpt = parse_pointer_handle(targetText); idOpt.has_value()) {
             const int id = *idOpt;
             auto it = g_ptrs.find(id);
-            if (it != g_ptrs.end()) {
-                if (it->second.rfind("ref:", 0) == 0) {
-                    const std::string varName = it->second.substr(4);
-                    env_set(env, varName, value_from_legacy_string(newValue));
-                    return;
-                }
-                it->second = newValue;
+            if (it != g_ptrs.end() && it->second.rfind("ref:", 0) == 0) {
+                const std::string varName = it->second.substr(4);
+                env_set(env, varName, newValue);
+                return;
             }
+        }
+        mem_ptr_set(target, newValue);
+        return;
+    }
+    if (std::holds_alternative<IndexSetStmt>(s)) {
+        const auto& st = std::get<IndexSetStmt>(s);
+        const Value object = eval_value(*st.object, env);
+        const int64_t index = value_as_int(eval_value(*st.index, env));
+        const Value value = eval_value(*st.value, env);
+        if (value_is_handle(object, HandleKind::Buffer)) {
+            mem_buffer_index_set(object, index, value);
             return;
         }
-        throw std::runtime_error("Pointer assignment target is not a pointer");
+        if (to_display_string(object).rfind("list:", 0) == 0) {
+            const int id = to_int(to_display_string(object).substr(5));
+            auto& list = g_lists[id];
+            if (index < 0 || static_cast<std::size_t>(index) >= list.size()) {
+                throw std::runtime_error("list index out of bounds");
+            }
+            list[static_cast<std::size_t>(index)] = to_display_string(value);
+            return;
+        }
+        throw std::runtime_error("index assignment requires buffer or list");
     }
     if (std::holds_alternative<SwitchStmt>(s)) {
         const auto& sw = std::get<SwitchStmt>(s);
@@ -555,6 +725,15 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                         return true;
                     }
                     return value == node.name && node.args.empty();
+                } else if constexpr (std::is_same_v<N, PatOr>) {
+                    for (const auto& alt : node.alts) {
+                        Env altEnv = caseEnv;
+                        if (try_match(alt, value, altEnv)) {
+                            caseEnv = std::move(altEnv);
+                            return true;
+                        }
+                    }
+                    return false;
                 } else {
                     return false;
                 }
@@ -564,6 +743,9 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
         for (const auto& c : ms.cases) {
             Env caseEnv = env;
             if (!try_match(c.pattern, sel, caseEnv)) continue;
+            if (c.guard) {
+                if (!is_truthy(to_display_string(eval_value(*c.guard, caseEnv)))) continue;
+            }
             if (c.body) exec_block(*c.body, program, ctx, caseEnv);
             for (auto& kv : caseEnv.vars) {
                 if (env.vars.count(kv.first) || globalNames_.count(kv.first)) {
@@ -573,7 +755,7 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
             if (ctx.breakSignal) ctx.breakSignal = false;
             return;
         }
-        return;
+        throw std::runtime_error("non-exhaustive match at runtime");
     }
     if (std::holds_alternative<ExprStmt>(s)) {
         const auto& st = std::get<ExprStmt>(s);
@@ -671,7 +853,27 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 env_set(env, st.varOrField, Value::from_string(st.varOrField));
                 return;
             }
-            env_set(env, st.varOrField, eval_value(*st.value, env));
+            {
+                Value value;
+                bool movedOwn = false;
+                if (std::holds_alternative<ExprIdent>(st.value->node)) {
+                    const std::string& srcName = std::get<ExprIdent>(st.value->node).name;
+                    if (mem_try_move_own_ident(env.vars, srcName, value)) movedOwn = true;
+                }
+                if (!movedOwn) {
+                    value = eval_value(*st.value, env);
+                    if (value_is_handle(value, HandleKind::Own) &&
+                        std::holds_alternative<ExprIdent>(st.value->node)) {
+                        env_set(env, std::get<ExprIdent>(st.value->node).name, Value::null_value());
+                    } else if (value_is_handle(value, HandleKind::Shared) &&
+                               std::holds_alternative<ExprIdent>(st.value->node)) {
+                        mem_retain(value);
+                    }
+                }
+                Value prev = env_get(env, st.varOrField);
+                if (mem_is_owner(prev) || value_is_handle(prev, HandleKind::Weak)) mem_release(prev);
+                env_set(env, st.varOrField, std::move(value));
+            }
             if (!lastReturnFields_.empty()) {
                 Value assigned = env_get(env, st.varOrField);
                 if (assigned.rfind("struct:", 0) == 0) {
@@ -686,6 +888,29 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
     if (std::holds_alternative<MethodCallStmt>(s)) {
         const auto& mc = std::get<MethodCallStmt>(s);
         std::string methodName = mc.method;
+        {
+            Value recv = env_get(env, mc.objectName);
+            if (value_is_handle(recv, HandleKind::Buffer)) {
+                std::vector<Value> bargs;
+                bargs.reserve(mc.args.size());
+                for (const auto& a : mc.args) bargs.push_back(eval_value(*a, env));
+                env.vars["_"] = mem_buffer_method(recv, methodName, bargs);
+                return;
+            }
+            if (value_is_handle(recv, HandleKind::Weak) && methodName == "get") {
+                env.vars["_"] = mem_weak_get(recv);
+                return;
+            }
+            {
+                std::vector<Value> margs;
+                margs.reserve(mc.args.size());
+                for (const auto& a : mc.args) margs.push_back(eval_value(*a, env));
+                if (auto handled = dispatch_value_method(recv, methodName, margs)) {
+                    env.vars["_"] = *handled;
+                    return;
+                }
+            }
+        }
         if (auto moduleBuiltin = env.vars.find(mc.objectName + "." + mc.method); moduleBuiltin != env.vars.end()) {
             if (moduleBuiltin->second.rfind(kBuiltinAliasPrefix.data(), 0) == 0) {
                 env.vars["_"] = eval_builtin_call(mc.objectName + "." + mc.method, mc.args, env);
@@ -706,7 +931,10 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 return static_cast<char>(std::tolower(ch));
             });
             const bool isBuiltinAlias = (normalizedPath == "builtin/fs" || normalizedPath == "builtin/erefs" ||
-                                         normalizedPath == "builtin/path" || normalizedPath == "builtin/erepath");
+                                         normalizedPath == "std/fs" ||
+                                         normalizedPath == "builtin/path" || normalizedPath == "builtin/erepath" ||
+                                         normalizedPath == "std/path" ||
+                                         normalizedPath == "std/pipe" || normalizedPath == "builtin/pipe");
             if (isBuiltinAlias) {
                 continue;
             }
@@ -1417,7 +1645,10 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 Env callEnv;
                 // Seed captured values
                 for (const auto& cv : cd->captured) {
-                    callEnv.vars[cv.name] = cv.value;
+                    if (cv.cell) {
+                        callEnv.cells[cv.name] = cv.cell;
+                        callEnv.vars[cv.name] = *cv.cell;
+                    }
                 }
                 // Bind arguments
                 for (size_t i = 0; i < cd->body.params.size() && i < mc.args.size(); ++i) {
@@ -1517,9 +1748,24 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
     }
     if (std::holds_alternative<ActionCallStmt>(s)) {
         const auto& call = std::get<ActionCallStmt>(s);
+        if (call.name == "alloc" || call.name == "free" || call.name == "realloc" ||
+            call.name == "copy" || call.name == "move" || call.name == "fill" ||
+            call.name == "zero" || call.name == "heap" || call.name == "shared" ||
+            call.name == "weak" || call.name == "buffer") {
+            FunctionCallExpr fc;
+            fc.name = call.name;
+            fc.args = call.args;
+            fc.typeArgs = call.typeArgs;
+            (void)eval_value(Expr{std::move(fc)}, env);
+            return;
+        }
         if (const Action* a = find_action(program, call.name)) {
             if (program.strict && a->visibility != Visibility::Public) {
                 throw std::runtime_error("Action not public: " + a->name);
+            }
+            if (a->isAsync) {
+                (void)invoke_async_action(*a, call.args, env, async_in_async_action());
+                return;
             }
             Env calleeEnv;
             // Seed with current shared globals
@@ -1549,6 +1795,8 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 }
             }
             prepare_action_slots(calleeEnv, *a);
+            const bool prevAsync = async_in_async_action();
+            async_set_in_async_action(false);
             ExecContext calleeCtx;
             exec_block(a->body, program, calleeCtx, calleeEnv);
             for (auto& th : calleeCtx.threads) {
@@ -1556,6 +1804,8 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                     th.join();
                 }
             }
+            async_set_in_async_action(prevAsync);
+            return;
         }
         else {
             // Check if name resolves to a func:N handle in env
@@ -1570,7 +1820,12 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 if (cit != g_closures.end() && cit->second) {
                     ClosureData* cd = cit->second;
                     Env callEnv;
-                    for (const auto& cv : cd->captured) callEnv.vars[cv.name] = cv.value;
+                    for (const auto& cv : cd->captured) {
+                        if (cv.cell) {
+                            callEnv.cells[cv.name] = cv.cell;
+                            callEnv.vars[cv.name] = *cv.cell;
+                        }
+                    }
                     for (const auto& kv : globalVars_) callEnv.vars[kv.first] = kv.second;
                     for (size_t i = 0; i < cd->body.params.size() && i < call.args.size(); ++i) {
                         callEnv.vars[cd->body.params[i].name] = eval_string(*call.args[i], env);
@@ -1595,10 +1850,66 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
 }
 
 void Runtime::exec_block(const Block& b, const Program& program, ExecContext& ctx, Env& env) const {
-    for (const auto& st : b.stmts) {
-        exec_stmt(st, program, ctx, env);
+    const bool dbg = debug_enabled();
+    std::unordered_set<std::string> before;
+    before.reserve(env.vars.size());
+    for (const auto& kv : env.vars) before.insert(kv.first);
+    for (size_t i = 0; i < b.stmts.size(); ++i) {
+        if (dbg) {
+            const int line = (i < b.lines.size()) ? b.lines[i] : 0;
+            debug_hook(line, env);
+        }
+        try {
+            exec_stmt(b.stmts[i], program, ctx, env);
+        } catch (const TryPropagateException& prop) {
+            ctx.returned = true;
+            ctx.returnValue = prop.value;
+            break;
+        } catch (...) {
+            for (auto it = env.vars.begin(); it != env.vars.end(); ) {
+                if (before.count(it->first)) {
+                    ++it;
+                    continue;
+                }
+                if (mem_is_owner(it->second) || value_is_handle(it->second, HandleKind::Weak)) {
+                    mem_release(it->second);
+                    it = env.vars.data.erase(it);
+                } else if (value_is_handle(it->second, HandleKind::File) ||
+                           to_display_string(it->second).rfind("file:", 0) == 0) {
+                    auto makeArg = [](const Value& v) {
+                        return std::make_shared<Expr>(Expr{ ExprString{ to_display_string(v) } });
+                    };
+                    std::vector<ExprPtr> callArgs{ makeArg(it->second) };
+                    (void)eval_builtin_call("file_close", callArgs, env, true);
+                    it = env.vars.data.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+            throw;
+        }
         if (ctx.returned || ctx.breakSignal || ctx.continueSignal) {
             break;
+        }
+    }
+    for (auto it = env.vars.begin(); it != env.vars.end(); ) {
+        if (before.count(it->first)) {
+            ++it;
+            continue;
+        }
+        if (mem_is_owner(it->second) || value_is_handle(it->second, HandleKind::Weak)) {
+            mem_release(it->second);
+            it = env.vars.data.erase(it);
+        } else if (value_is_handle(it->second, HandleKind::File) ||
+                   to_display_string(it->second).rfind("file:", 0) == 0) {
+            auto makeArg = [](const Value& v) {
+                return std::make_shared<Expr>(Expr{ ExprString{ to_display_string(v) } });
+            };
+            std::vector<ExprPtr> callArgs{ makeArg(it->second) };
+            (void)eval_builtin_call("file_close", callArgs, env, true);
+            it = env.vars.data.erase(it);
+        } else {
+            ++it;
         }
     }
 }

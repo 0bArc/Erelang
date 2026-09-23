@@ -1,0 +1,13 @@
+@strict
+
+public async action apply_async<T>(x: T, f: any): T {
+    return f(x);
+}
+
+public async action main() {
+    any add1 = lambda(int n) => n + 1;
+    int r = await apply_async(41, add1);
+    print r;
+}
+
+run main;

@@ -1,0 +1,14 @@
+@strict
+
+public async action slow(): int {
+    return 7;
+}
+
+public async action main(): int {
+    int x = await slow();
+    print x;
+    print "async-ok";
+    return x;
+}
+
+run main;

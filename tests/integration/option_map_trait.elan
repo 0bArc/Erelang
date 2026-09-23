@@ -1,0 +1,35 @@
+@strict
+
+enum Option<T> {
+    Some(T),
+    None
+}
+
+trait Mapper {
+    action map_int(v: int): int;
+}
+
+struct Doubler {
+    public action map_int(v: int): int {
+        return v * 2;
+    }
+}
+
+public action apply_map<T: Mapper>(m: T, value: Option<int>): Option<int> {
+    match (value) {
+        case Some(v): { return Option<int>.Some(m.map_int(v)); }
+        case None: { return Option<int>.None; }
+    }
+    return Option<int>.None;
+}
+
+public action main() {
+    Doubler d;
+    match (apply_map(d, Option<int>.Some(21))) {
+        case Some(v): { print v; }
+        case None: { print "none"; }
+    }
+    print "integration-option-map-trait-ok";
+}
+
+run main;

@@ -4,39 +4,45 @@ Advanced scripting: streaming file handles, string builders, pointers and memory
 
 ## File handles
 
-Requires `builtin/fs` import.
+Requires `builtin/fs` import. Prefer `fs.open` and handle methods:
 
 ```elan
 @erelang
 #include <builtin/fs> as fs
 
 public action main {
-    h = file_open("out.dat", "wb");
-    file_write(h, "header\n");
-    file_write(h, "body\n");
-    file_seek(h, 0, "set");
-    all = file_read(h);
-    file_close(h);
+    string h = fs.open("out.dat", "wb");
+    h.write("header\n");
+    h.write("body\n");
+    h.seek(0, "set");
+    string all = h.read();
+    h.close();
     print all;
 }
 
 run main;
 ```
 
-| Builtin | Args | Returns |
-|---------|------|---------|
-| `file_open(path, mode)` | | `"file:N"` handle or empty on failure |
-| `file_close(handle)` | | `"true"` / `"false"` |
-| `file_read(handle)` | | rest of file as string |
-| `file_read(handle, count)` | byte count | up to count bytes |
-| `file_write(handle, data)` | | bytes written |
-| `file_seek(handle, offset, whence?)` | whence: `"set"`, `"cur"`, `"end"` | `"true"` / `"false"` |
-| `file_tell(handle)` | | current byte position |
-| `file_flush(handle)` | | `"true"` / `"false"` |
+| API | Args | Returns |
+|-----|------|---------|
+| `fs.open(path, mode)` | | `"file:N"` handle or empty on failure |
+| `h.close()` | | `"true"` / `"false"` |
+| `h.read()` | | rest of file as string |
+| `h.read(count)` | byte count | up to count bytes |
+| `h.write(data)` | | bytes written |
+| `h.seek(offset, whence?)` | whence: `"set"`, `"cur"`, `"end"` | `"true"` / `"false"` |
+| `h.tell()` | | current byte position |
+| `h.flush()` | | `"true"` / `"false"` |
 
 **Modes:** `"r"`, `"w"`, `"a"`, `"rb"`, `"wb"`, `"ab"`, `"r+"`, `"w+"`, `"a+"`.
 
-Handle format is `"file:N"` where N is an internal id. Empty return from `file_open` means the path is invalid or the mode is wrong.
+Handle format is `"file:N"` where N is an internal id. Empty return from `fs.open` means the path is invalid or the mode is wrong.
+
+Streaming handles — use `fs.open` and handle methods. Do not call bare `file_*` / `fopen` globals (TC rejects them).
+
+String building: use `+` / string methods (`text.lower()`, `strip`, …), not `strbuf_*` globals.
+
+Pointers: use `*T`, `&x`, `heap<T>`, `shared<T>`, `buffer<T>` — not `ptr_new` / `ptr_get` / `make_unique`.
 
 ## String buffers
 

@@ -266,6 +266,11 @@ void fold_block(Block& block, FoldStats& stats) {
 					fold_expr_inplace(stmt.pointer);
 					fold_expr_inplace(stmt.value);
 				},
+				[&](IndexSetStmt& stmt) {
+					fold_expr_inplace(stmt.object);
+					fold_expr_inplace(stmt.index);
+					fold_expr_inplace(stmt.value);
+				},
 				[](auto&) {}
 			},
 			stmtVariant);

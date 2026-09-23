@@ -206,7 +206,24 @@ std::vector<Token> Lexer::lex() {
             if (i+1 < src_.size() && src_[i+1] == '?') { push(TokenKind::NullCoalesce, "??"); i+=2; col+=2; continue; }
             push(TokenKind::Question, "?"); ++i; ++col; continue;
         }
-        if (c == '.') { push(TokenKind::Dot, "."); ++i; ++col; continue; }
+        if (c == '.') {
+            if (i + 1 < src_.size() && src_[i + 1] == '.') {
+                if (i + 2 < src_.size() && src_[i + 2] == '<') {
+                    push(TokenKind::DotDotLt, "..<");
+                    i += 3;
+                    col += 3;
+                    continue;
+                }
+                push(TokenKind::DotDot, "..");
+                i += 2;
+                col += 2;
+                continue;
+            }
+            push(TokenKind::Dot, ".");
+            ++i;
+            ++col;
+            continue;
+        }
         if (c == '+') {
             if (i+1 < src_.size() && src_[i+1] == '+') { push(TokenKind::PlusPlus, "++"); i+=2; col+=2; continue; }
             if (i+1 < src_.size() && src_[i+1] == '=') { push(TokenKind::PlusAssign, "+="); i+=2; col+=2; continue; }

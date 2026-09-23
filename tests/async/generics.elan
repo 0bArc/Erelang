@@ -1,0 +1,13 @@
+@strict
+
+public async action id<T>(x: T): T {
+    return x;
+}
+
+public async action main() {
+    int v = await id(5);
+    print v;
+    print "async-generics-ok";
+}
+
+run main;

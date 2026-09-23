@@ -1,0 +1,8 @@
+@strict
+
+public action main() {
+    print args_count();
+    print "std-cli-ok";
+}
+
+run main;

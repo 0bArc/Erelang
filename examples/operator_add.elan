@@ -1,0 +1,45 @@
+@strict
+
+trait Add<T> {
+    action add(other: T): T;
+}
+
+trait Eq<T> {
+    action eq(other: T): bool;
+}
+
+struct Vec2 {
+    int x;
+    int y;
+
+    public action add(other: Vec2): Vec2 {
+        Vec2 out;
+        out.x = self.x + other.x;
+        out.y = self.y + other.y;
+        return out;
+    }
+
+    public action eq(other: Vec2): bool {
+        return self.x == other.x && self.y == other.y;
+    }
+}
+
+public action sum<T: Add<T>>(a: T, b: T): T {
+    return a + b;
+}
+
+public action main() {
+    Vec2 a;
+    a.x = 1;
+    a.y = 2;
+    Vec2 b;
+    b.x = 3;
+    b.y = 4;
+    Vec2 c = a + b;
+    print c.x;
+    print c.y;
+    print a == b;
+    print c == sum(a, b);
+}
+
+run main;

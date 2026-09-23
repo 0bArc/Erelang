@@ -1,0 +1,11 @@
+@strict
+
+#include <builtin/crypto> as crypto
+
+public action main() {
+    print crypto.hash("hello");
+    print crypto.sha256("hello");
+    print crypto.random_bytes("4");
+}
+
+run main;

@@ -1,0 +1,14 @@
+@strict
+
+#include "cycle_b.elan"
+
+public action from_a(): int {
+    return 1;
+}
+
+public action main() {
+    print from_b();
+    print "modules-cycle-ok";
+}
+
+run main;

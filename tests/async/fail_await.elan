@@ -1,0 +1,17 @@
+@strict
+
+public async action boom() {
+    fail("kaboom");
+}
+
+public async action main() {
+    try {
+        await boom();
+        print "no";
+    } catch (err) {
+        print err;
+    }
+    print "async-fail-ok";
+}
+
+run main;

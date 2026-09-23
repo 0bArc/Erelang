@@ -1,0 +1,17 @@
+// expect: TC022
+@strict
+
+enum Box<T> {
+    Val(T)
+}
+
+public action take_num(b: Box<int>) {
+    print "n";
+}
+
+public action main() {
+    Box<string> s = Box<string>.Val("x");
+    take_num(s);
+}
+
+run main;

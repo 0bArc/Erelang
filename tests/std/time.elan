@@ -1,0 +1,8 @@
+@strict
+
+public action main() {
+    print now_ms();
+    print "std-time-ok";
+}
+
+run main;

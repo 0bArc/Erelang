@@ -1,0 +1,16 @@
+@strict
+
+public action main() {
+    any add1 = lambda(int x) => x + 1;
+    print add1(41);
+
+    any greet = lambda(string name) => "hi " + name;
+    print greet("world");
+
+    any sum = lambda(int a, int b) {
+        return a + b;
+    };
+    print sum(10, 20);
+}
+
+run main;

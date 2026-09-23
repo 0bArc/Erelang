@@ -99,11 +99,14 @@ static void print_help() {
                  "  erelang --help\n"
                  "  erelang --about\n"
                  "  erelang --bootstrap  (force show bootstrap manifest UI even if args given)\n"
-                 "  erelang <path\\to\\file.(elan|ere)> [--debug] [--auto]\n"
+                 "  erelang <path\\to\\file.(elan|ere)> [--debug] [--dap] [--auto]\n"
+                 "  erelang --check <path\\to\\file.(elan|ere)>\n"
                  "  erelang --compile <path\\to\\file.(elan|ere)> [--output <path\\to\\out.exe>] [--static|--dynamic] [--bundle-runtime] [--manifest] [--lto] [--strip] [--minify] [--gc-sections]\n"
                  "  erelang --emit-ir <path\\to\\file.(elan|ere)> [--out <path\\to\\out.eir>]\n"
                  "  erelang --emit-asm <path\\to\\file.(elan|ere)> [--out <path\\to\\out.s>]\n"
                  "  erelang --build-native <path\\to\\file.(elan|ere)> [--out <path\\to\\out.exe>]\n"
+                 "  erelang --fmt <path\\to\\file.(elan|ere)> [--check]\n"
+                 "  erelang --docgen <path\\to\\file.(elan|ere)> [--out <path\\to\\out.md>]\n"
                  "  erelang --make-debug [--output <path\\to\\debug.exe>]\n"
                  "\n"
                  "Description:\n"
@@ -120,6 +123,10 @@ static void print_help() {
                  "  --strip removes debug symbols from the compiled executable.\n"
                  "  --minify strips comments/whitespace from embedded sources.\n"
                  "  --gc-sections drops unused function sections at link time.\n"
+                 "  --fmt rewrites indentation/braces for a formatting subset; --check exits 1 if dirty.\n"
+                 "  --check <file> typechecks only (no run); exits non-zero on errors.\n"
+                 "  --dap enables line-protocol debugger (stdin/stderr !dap); use with ERELANG_DEBUG=1.\n"
+                 "  --docgen emits a markdown API list from public actions/structs/enums.\n"
                  "  --make-debug builds a debugger exe from examples/lib/debugger.elan.\n"
                  "  --debug when running loads the debug driver and prefers debug_main.\n";
 }
@@ -816,6 +823,7 @@ struct BootstrapOptions {
 struct RunOptions {
     fs::path script{};
     bool debug{false};
+    bool dap{false};
     std::vector<std::string> scriptArgs{};
 };
 
@@ -1336,6 +1344,17 @@ struct ExecutionContext {
 
         (void)erelang::optimize_program(mainProgram);
 
+        if (options.dap || [] {
+                const char* e = std::getenv("ERELANG_DEBUG");
+                return e && e[0] == '1' && e[1] == '\0';
+            }()) {
+            erelang::Runtime::debug_enable(true);
+            erelang::Runtime::debug_set_source_path(fs::absolute(input).string());
+            if (options.dap) {
+                erelang::Runtime::debug_wait_attach();
+            }
+        }
+
         erelang::Runtime runtime;
         runtime.register_plugins(ctx.runtimePlugins);
         erelang::Runtime::set_cli_args(cliArgs);
@@ -1571,6 +1590,100 @@ int main(int argc, char** argv) {
     return cpp.str();
 }
 
+static std::string format_elan_source(const std::string& src) {
+    std::ostringstream out;
+    int indent = 0;
+    bool atLineStart = true;
+    auto write_indent = [&]() {
+        for (int i = 0; i < indent; ++i) out << "    ";
+    };
+    for (size_t i = 0; i < src.size(); ++i) {
+        char c = src[i];
+        if (c == '\r') continue;
+        if (c == '\n') {
+            out << '\n';
+            atLineStart = true;
+            continue;
+        }
+        if (c == ' ' || c == '\t') {
+            if (atLineStart) continue;
+            out << ' ';
+            while (i + 1 < src.size() && (src[i + 1] == ' ' || src[i + 1] == '\t')) ++i;
+            continue;
+        }
+        if (c == '}') {
+            if (indent > 0) --indent;
+            if (atLineStart) write_indent();
+            out << '}';
+            atLineStart = false;
+            continue;
+        }
+        if (atLineStart) {
+            write_indent();
+            atLineStart = false;
+        }
+        out << c;
+        if (c == '{') ++indent;
+    }
+    if (!src.empty() && src.back() != '\n') out << '\n';
+    return out.str();
+}
+
+static std::string docgen_markdown(const erelang::Program& program) {
+    std::ostringstream out;
+    out << "# API\n\n";
+    if (!program.actions.empty()) {
+        out << "## Actions\n\n";
+        for (const auto& a : program.actions) {
+            if (a.visibility != erelang::Visibility::Public) continue;
+            out << "### `" << a.name << "`\n\n";
+            out << "```elan\n";
+            if (a.isAsync) out << "async ";
+            out << "action " << a.name << "(";
+            for (size_t i = 0; i < a.params.size(); ++i) {
+                if (i) out << ", ";
+                if (!a.params[i].type.empty()) out << a.params[i].type << " ";
+                out << a.params[i].name;
+            }
+            out << ")";
+            if (!a.returnType.empty()) out << ": " << a.returnType;
+            out << "\n```\n\n";
+        }
+    }
+    if (!program.structs.empty()) {
+        out << "## Structs\n\n";
+        for (const auto& s : program.structs) {
+            out << "### `" << s.name << "`\n\n";
+            out << "```elan\nstruct " << s.name << " {\n";
+            for (const auto& f : s.fields) {
+                out << "    " << (f.type.empty() ? "any" : f.type) << " " << f.name << ";\n";
+            }
+            out << "}\n```\n\n";
+        }
+    }
+    if (!program.enums.empty()) {
+        out << "## Enums\n\n";
+        for (const auto& e : program.enums) {
+            out << "### `" << e.name << "`\n\n";
+            out << "```elan\nenum " << e.name << " {\n";
+            for (const auto& v : e.variants) {
+                out << "    " << v.name;
+                if (!v.payloads.empty()) {
+                    out << "(";
+                    for (size_t i = 0; i < v.payloads.size(); ++i) {
+                        if (i) out << ", ";
+                        out << erelang::type_ref_canonical(v.payloads[i]);
+                    }
+                    out << ")";
+                }
+                out << ",\n";
+            }
+            out << "}\n```\n\n";
+        }
+    }
+    return out.str();
+}
+
 int main(int argc, char** argv) {
     // If no args, just show banner (no GUI)
     if (argc <= 1) { print_banner(); return 0; }
@@ -1607,6 +1720,74 @@ int main(int argc, char** argv) {
     [[maybe_unused]] auto& runtimePluginRecords = ctx.runtimePlugins;
 #endif
     if (args.size() == 1 && (args[0] == "--help" || args[0] == "-h")) { print_help(); return 0; }
+
+    if (!args.empty() && (args[0] == "--fmt" || args[0] == "--docgen")) {
+        const bool isFmt = args[0] == "--fmt";
+        if (args.size() < 2) {
+            std::cerr << (isFmt ? "--fmt" : "--docgen") << " requires a source file\n";
+            return 1;
+        }
+        fs::path input;
+        fs::path output;
+        bool checkOnly = false;
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i] == "--check") { checkOnly = true; continue; }
+            if ((args[i] == "--out" || args[i] == "--output") && i + 1 < args.size()) {
+                output = args[++i];
+                continue;
+            }
+            if (input.empty() && !args[i].empty() && args[i][0] != '-') input = args[i];
+        }
+        if (input.empty() || !fs::exists(input)) {
+            std::cerr << "Input not found\n";
+            return 1;
+        }
+        const std::string src = slurp_file(input);
+        if (isFmt) {
+            const std::string formatted = format_elan_source(src);
+            if (checkOnly) {
+                if (formatted != src) {
+                    std::cerr << "Would reformat: " << input.string() << "\n";
+                    return 1;
+                }
+                return 0;
+            }
+            if (output.empty()) output = input;
+            std::ofstream outFile(output, std::ios::binary);
+            if (!outFile) {
+                std::cerr << "Failed to write: " << output << "\n";
+                return 1;
+            }
+            outFile << formatted;
+            std::cout << "Formatted " << output.string() << "\n";
+            return 0;
+        }
+        try {
+            erelang::LexerOptions opts;
+            opts.emitDocComments = true;
+            erelang::Lexer lex(src, opts);
+            auto tokens = lex.lex();
+            erelang::Parser parser(std::move(tokens));
+            erelang::Program program = parser.parse();
+            const std::string md = docgen_markdown(program);
+            if (output.empty()) {
+                std::cout << md;
+                return 0;
+            }
+            if (!output.parent_path().empty()) fs::create_directories(output.parent_path());
+            std::ofstream outFile(output, std::ios::binary);
+            if (!outFile) {
+                std::cerr << "Failed to write: " << output << "\n";
+                return 1;
+            }
+            outFile << md;
+            std::cout << "Wrote " << output.string() << "\n";
+            return 0;
+        } catch (const std::exception& ex) {
+            std::cerr << "Docgen error: " << ex.what() << "\n";
+            return 1;
+        }
+    }
 
 #ifdef ERELANG_STATIC_RUNNER
     if (args.size() >= 2 && (args[0] == "--emit-ir" || args[0] == "--emit-asm" || args[0] == "--build-native")) {
@@ -1700,12 +1881,43 @@ int main(int argc, char** argv) {
     }
 #endif
 
+    if (!args.empty() && args[0] == "--check") {
+        if (args.size() < 2) {
+            std::cerr << "--check requires a source file\n";
+            return 1;
+        }
+        fs::path input = args[1];
+        if (!fs::exists(input)) {
+            std::cerr << "Input not found: " << input << "\n";
+            return 1;
+        }
+#ifdef ERELANG_STATIC_RUNNER
+        erelang::Program mergedProgram;
+        std::string loadError;
+        if (!erelang::load_merged_program_for_script(input, ctx.pluginManifests, mergedProgram, loadError)) {
+            std::cerr << "Check error: " << loadError << "\n";
+            return 1;
+        }
+        erelang::TypeChecker tc;
+        auto tcRes = tc.check(mergedProgram);
+        for (const auto& diag : tcRes.diagnostics) {
+            std::cerr << erelang::format_diagnostic(diag) << '\n';
+        }
+        return tcRes.ok ? 0 : 1;
+#else
+        std::cerr << "--check requires the static runner build\n";
+        return 1;
+#endif
+    }
+
     if (!args.empty() && !args[0].empty() && args[0][0] != '-') {
         erelang::cli::RunOptions runOptions;
         runOptions.script = fs::path(args[0]);
         for (std::size_t i = 1; i < args.size(); ++i) {
             if (args[i] == "--debug") {
                 runOptions.debug = true;
+            } else if (args[i] == "--dap") {
+                runOptions.dap = true;
             } else {
                 runOptions.scriptArgs.emplace_back(args[i]);
             }

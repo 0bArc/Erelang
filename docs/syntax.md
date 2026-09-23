@@ -97,11 +97,17 @@ Runtime values are string-backed; numeric operators parse operands as numbers.
 | Type | Example | Notes |
 |---|---|---|
 | `int` | `42`, `-7` | 64-bit integer |
+| `u8` … `u64` / `i8` … `i64` | `u8` | Integer aliases (`u8` = byte) |
 | `string` | `"hello"` | Double-quoted |
 | `bool` | `true`, `false` | Booleans |
 | `double` | `3.14`, `-2.5` | Floating point |
 | `void` | (none) | No return value |
 | `any` | any value | Explicit opt-in only |
+| `*T` / `T*` | `*int p` | Raw pointer |
+| `heap<T>` | `heap<int>(1)` | Unique owner (move) |
+| `shared<T>` | `shared<int>(1)` | Refcounted |
+| `weak<T>` | `weak(s)` | Non-owning; `.get()` → Option |
+| `buffer<T>` | `buffer<u8>(64)` | Owned contiguous buffer |
 | `struct:Name` | - | User-defined struct |
 | `list:T` | `[1, 2, 3]` | Typed list |
 | `map:K,V` | `{"a": 1}` | Typed dictionary |
@@ -112,6 +118,21 @@ int x = int("42");          // "42" -> 42
 string s = string(42);      // 42 -> "42"
 bool b = bool("true");      // "true" -> true
 double d = double("3.14");  // "3.14" -> 3.14
+```
+
+## Memory
+
+See [memory.md](memory.md). Globals: `alloc` / `free` / `realloc` / `copy` / `move` / `fill` / `zero` / `sizeof` / `alignof`.
+
+```elan
+*int p = alloc<int>(4);
+*(p + 1) = 9;
+free(p);
+heap<int> o = heap<int>(1);
+shared<int> s = shared<int>(2);
+weak<int> w = weak(s);
+buffer<u8> b = buffer<u8>(8);
+b[0] = 42;
 ```
 
 ## Strings
@@ -185,6 +206,24 @@ a && b    a || b    !a
 ```elan
 string result = (x > 0) ? "positive" : "non-positive";
 ```
+
+### User-type operators
+
+Non-primitive `+ - * / == != []` lower to methods `add` / `sub` / `mul` / `div` / `eq` / `get` when the left-hand type defines them. Opaque parameters require traits `Add` / `Sub` / `Mul` / `Div` / `Eq` / `Index`.
+
+## Async / await
+
+```elan
+public async action work(): int { return 1; }
+public async action main(): int {
+    int x = await work();
+    return x;
+}
+```
+
+- Async calls from async callers produce `future<T>` (`future:` handles).
+- Async calls from normal actions run synchronously and return `T`.
+- `await` only inside `async` (`TC160`); errors on the future are rethrown.
 
 ## Lists
 
@@ -286,7 +325,7 @@ if (data == null) {
 Module methods are called with dot syntax:
 ```elan
 string html = net.get("https://example.com");
-int hash = crypto.sha256("hello");
+string hash = crypto.sha256("hello");
 thread.spawn("myTask");
 ```
 
@@ -296,8 +335,15 @@ Handles are string values with a prefix indicating their type:
 
 | Prefix | Type | Created by |
 |---|---|---|
-| `list:N` | Collection list | `list.new()`, `[1, 2, 3]` |
-| `dict:N` | Collection dictionary | `dict.new()`, `{"a": 1}` |
+| `list:N` | Collection list | `[1, 2, 3]`, `a .. b` |
+| `dict:N` | Collection dictionary | `{"a": 1}` |
+| `set:N` | Set | `set_new()`, `set_of(...)` |
+| `queue:N` | Queue | `queue_new()` |
+| `chan:N` | Blocking pipe | `pipe.new()` |
+| `heap:N` | Unique owner | `heap<T>(...)` |
+| `mutex:N` | Script mutex | `mutex_new()` |
+| `func:N` | Closure / lambda | `lambda(...) => ...` |
+| `future:N` | Async future | async call from async |
 | `file:N` | File stream | `fs.open(path)` |
 | `ws:N` | WebSocket connection | `ws.connect(url)` |
 | `http:N` | HTTP server | `net.create_server(port)` |
@@ -305,7 +351,12 @@ Handles are string values with a prefix indicating their type:
 | `res:N` | HTTP response | (injected in handler) |
 | `sse:N` | SSE connection | (injected in handler) |
 | `struct:Name` | Struct instance | `Name v;` |
-| `ptr:N` | Raw pointer | `ptr.new()` |
+| `ptr:N` | Raw pointer | `alloc<T>()`, `&x` |
+| `heap:N` | Unique owner | `heap<T>(...)` |
+| `shared:N` | Refcounted owner | `shared<T>(...)` |
+| `weak:N` | Weak ref | `weak(shared)` |
+| `buffer:N` | Contiguous buffer | `buffer<T>(n)` |
+| `thread:N` | OS thread | `threads.spawn` (experimental ON by default) |
 
 Handle methods are called with dot syntax:
 ```elan
@@ -654,15 +705,26 @@ fs.move("old.txt", "new.txt");
 ```elan
 #include <builtin/crypto> as crypto
 
-string hash = crypto.sha256("hello");
-string md5 = crypto.md5("hello");
-string hmac = crypto.hmac("sha256", "data", "secret");
-string enc = crypto.encrypt("aes", "data", "key");
-string dec = crypto.decrypt("aes", enc, "key");
-string b64 = crypto.base64("hello");
-string decoded = crypto.unbase64(b64);
-string uuid = crypto.uuid();
-string rand = crypto.random("32");
+string hash = crypto.sha256("hello");       // SHA-256 hex
+string fnv = crypto.hash("hello");          // FNV-1a hex
+string rand = crypto.random_bytes("16");    // PRNG hex (not CSPRNG)
+
+// AES-256-GCM (Win32 BCrypt). Key = 64 hex chars (32 bytes).
+// Ciphertext hex = 12-byte nonce || ciphertext || 16-byte tag.
+string key = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+string ct = crypto.aes_encrypt(key, "hello");
+string pt = crypto.aes_decrypt(key, ct);
+```
+
+MD5 / HMAC / base64 under `crypto.*` are **not** implemented. See [crypto.md](crypto.md).
+
+## Sets
+
+```elan
+set<string> s = set_new();
+set_add(s, "a");
+print set_has(s, "a");
+Set<int> nums = set_of(1, 2, 3);
 ```
 
 ## Threads
@@ -687,6 +749,8 @@ thread.gc_all();               // GC all threads
 thread.remove("myTask");
 string state = thread.state("myTask");
 ```
+
+Threads/monitor build by default (`ERELANG_EXPERIMENTAL=ON`). With OFF, calls return `error:experimental_disabled`.
 
 ## Math
 
@@ -884,7 +948,63 @@ match (pair) {
 - Bindings are scoped to the case body; payload types use specialized type arguments.
 - Nested variant patterns are allowed when a payload is an enum.
 - Wildcard `_` is allowed in payload positions and as a catch-all case.
-- No exhaustiveness checking, no guards, no `let Some(x) = ...` declaration destructuring, no struct field patterns.
+- Guards: `case Some(x) if x > 0:`.
+- Or-patterns: `case A | B:`.
+- Exhaustiveness required for enums (`TC161`) unless `_` is present.
+
+## Ranges
+
+```elan
+for (int i : 1 .. 3) { print i; }   // inclusive: 1,2,3
+for (int j : 0 ..< 3) { print j; }  // exclusive end: 0,1,2
+```
+
+Range expressions evaluate to `array<int>` lists.
+
+## unit / never
+
+- `unit` aliases `void`.
+- `never` is bottom: return type of `fail(msg)` and of actions that always throw.
+
+## Declaration destructuring
+
+Reuse the shared pattern AST for `let` / `const` bindings:
+
+```elan
+User user;
+user.name = "Ada";
+user.age = 36;
+let { name, age } = user;
+let { name: renamed } = user;
+
+Array<int> values = [10, 20, 30];
+let [first, second] = values;
+
+let (a, b) = (1, "hello");
+let Some(x) = Option<int>.Some(42);
+let None() = Option<int>.None;
+```
+
+Semantics:
+
+- Struct/entity `{ field, ... }` binds each named field (shorthand or `field: pattern`).
+- Array `[a, b, ...]` binds by index. Extra list elements are ignored. Too few elements is a runtime error.
+- Tuple `(a, b)` binds by position; arity must match (`tuple<...>`).
+- Enum ctor patterns in `let` bind payloads; tag mismatch throws at runtime. Zero-payload: `None()`.
+- Simple `let name = expr` is allowed again for bindings.
+
+See `examples/destructure.elan`, `examples/tuple.elan`, `examples/enum_let.elan`.
+
+## Result / Option helpers and `?`
+
+```elan
+r.unwrap()
+o.unwrap_or(0)
+r.ok()   // Option<T>
+x = get()?;
+```
+
+See `examples/result_helpers.elan`, `examples/try_op.elan`.
 
 See `examples/match.elan` and negative cases `examples/match_neg_*.elan`.
 

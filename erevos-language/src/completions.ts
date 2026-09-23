@@ -5,11 +5,34 @@ import {
   ARRAY_METHODS, DICTIONARY_METHODS, CHAIN_METHODS,
 } from './constants';
 import { PrintStringContext } from './types';
-import { getDocumentIndex } from './symbols';
+import { getDocumentIndex, MAX_INDEX_LINES } from './symbols';
 import { collectImports, listDirectoryCached } from './imports';
 
 let _debugChannel: vscode.OutputChannel | undefined;
 export function setDebugChannel(ch: vscode.OutputChannel): void { _debugChannel = ch; }
+
+const BULK_EDIT_WINDOW_MS = 400;
+const BULK_EDIT_MIN_CHARS = 400;
+let _bulkEditUntil = 0;
+
+export function noteDocumentEdit(e: vscode.TextDocumentChangeEvent): void {
+  if (e.document.languageId !== 'erelang') return;
+  let size = 0;
+  for (const c of e.contentChanges) {
+    size += c.text.length + (c.rangeLength ?? 0);
+  }
+  if (size >= BULK_EDIT_MIN_CHARS || e.contentChanges.length > 20) {
+    _bulkEditUntil = Date.now() + BULK_EDIT_WINDOW_MS;
+  }
+}
+
+export function isDocumentBulkEditing(): boolean {
+  return Date.now() < _bulkEditUntil;
+}
+
+function shouldSkipHeavyCompletion(doc: vscode.TextDocument): boolean {
+  return doc.lineCount > MAX_INDEX_LINES || isDocumentBulkEditing();
+}
 
 function dbg(msg: string): void {
   if (!vscode.workspace.getConfiguration('erelang').get<boolean>('debugCompletion', false)) return;
@@ -270,12 +293,18 @@ export class ErelangCompletionProvider implements vscode.CompletionItemProvider 
     context?: vscode.CompletionContext,
   ): Promise<vscode.CompletionItem[] | undefined> {
     if (token.isCancellationRequested) return [];
+    if (shouldSkipHeavyCompletion(doc)) return [];
+
+    const startVersion = doc.version;
+    const stale = () =>
+      token.isCancellationRequested || doc.version !== startVersion || isDocumentBulkEditing();
 
     const prefix   = doc.lineAt(pos.line).text.slice(0, pos.character);
     const fullLine = doc.lineAt(pos.line).text;
 
     if (context?.triggerCharacter === ' ') {
       const incl = await includePathCompletions(doc, pos, prefix, token);
+      if (stale()) return [];
       return incl && incl.length > 0 ? incl : undefined;
     }
 
@@ -286,17 +315,42 @@ export class ErelangCompletionProvider implements vscode.CompletionItemProvider 
     }
 
     const incl = await includePathCompletions(doc, pos, prefix, token);
+    if (stale()) return [];
     if (incl) {
       dbgCompletion('include-path', pos, prefix, `${incl.length} items`);
       return incl;
     }
 
+    if (stale()) return [];
     const memberItems = await memberCompletions(doc, pos, prefix, token);
+    if (stale()) return [];
     if (memberItems !== null) return memberItems;
 
-    if (token.isCancellationRequested) return [];
+    // Namespace::member completions
+    const scopeMatch = /([A-Za-z_]\w*)\s*::\s*([A-Za-z_]?\w*)$/.exec(prefix);
+    if (scopeMatch) {
+      const ns = scopeMatch[1];
+      const partialMember = scopeMatch[2] ?? '';
+      const index = getDocumentIndex(doc);
+      if (stale()) return [];
+      const members = index.symbols.namespaceMembers.get(ns);
+      if (members && members.size > 0) {
+        return [...members]
+          .filter(m => partialMember.length === 0 || m.startsWith(partialMember))
+          .map(m => {
+            const ci = new vscode.CompletionItem(m, vscode.CompletionItemKind.Method);
+            ci.detail = `${ns}::`;
+            ci.range = new vscode.Range(
+              pos.line, pos.character - partialMember.length, pos.line, pos.character);
+            return ci;
+          });
+      }
+    }
+
+    if (stale()) return [];
 
     const index = getDocumentIndex(doc);
+    if (stale()) return [];
     const col = index.symbols;
 
     const pctx = parsePrintStringContext(fullLine, pos.character);
@@ -330,7 +384,7 @@ export class ErelangCompletionProvider implements vscode.CompletionItemProvider 
       return [];
     }
 
-    if (token.isCancellationRequested) return [];
+    if (stale()) return [];
 
     const replaceRange = partial.length > 0
       ? new vscode.Range(pos.line, pos.character - partial.length, pos.line, pos.character)
@@ -356,6 +410,7 @@ export class ErelangCompletionProvider implements vscode.CompletionItemProvider 
 
     add(col.locals,      vscode.CompletionItemKind.Variable,       'local variable', 'a');
     add(col.globals,     vscode.CompletionItemKind.Variable,       'global',         'a');
+    add(col.namespaces,  vscode.CompletionItemKind.Module,         'namespace',      'b');
     add(col.entities,    vscode.CompletionItemKind.Class,           undefined,        'b');
     add(col.structs,     vscode.CompletionItemKind.Struct,         'struct',         'b');
     add(col.enums,       vscode.CompletionItemKind.Enum,           'enum',           'b');
@@ -363,6 +418,20 @@ export class ErelangCompletionProvider implements vscode.CompletionItemProvider 
     add(col.actions,     vscode.CompletionItemKind.Function,        undefined,        'c');
     add(col.fields,      vscode.CompletionItemKind.Field,           undefined,        'c');
     add(col.hooks,       vscode.CompletionItemKind.Event,           undefined,        'c');
+
+    for (const [ns, members] of col.namespaceMembers) {
+      for (const mem of members) {
+        const q = `${ns}::${mem}`;
+        if (!matchesPartial(q) && !matchesPartial(mem)) continue;
+        if (seen.has(q)) continue;
+        seen.add(q);
+        const ci = new vscode.CompletionItem(q, vscode.CompletionItemKind.Method);
+        ci.detail = 'namespace member';
+        ci.sortText = `d_${q}`;
+        if (replaceRange) ci.range = replaceRange;
+        items.push(ci);
+      }
+    }
 
     for (const kw of LANGUAGE_KEYWORDS) {
       if (!matchesPartial(kw) || seen.has(kw)) continue;
@@ -387,7 +456,7 @@ export class ErelangCompletionProvider implements vscode.CompletionItemProvider 
       }
     }
 
-    if (token.isCancellationRequested) return items;
+    if (stale()) return items;
 
     for (const b of BUILT_INS) {
       if (DEPRECATED_BUILT_INS.has(b) || !matchesPartial(b) || seen.has(b)) continue;
@@ -403,7 +472,7 @@ export class ErelangCompletionProvider implements vscode.CompletionItemProvider 
     const wantImports = manual || triggered || partial.length >= 2;
     if (wantImports) {
       const imported = await collectImports(doc);
-      if (token.isCancellationRequested) return items;
+      if (stale()) return items;
 
       for (const alias of imported.aliasToActions.keys()) {
         if (!matchesPartial(alias) || seen.has(alias)) continue;

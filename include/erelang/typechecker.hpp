@@ -50,6 +50,7 @@ struct CheckContext {
     class ScopeManager* scopes{nullptr};
     std::unordered_set<std::string> opaqueTypeParams;
     std::unordered_map<std::string, std::vector<TypeRef>> typeParamConstraints;
+    std::string expectedReturnType; // for `?` propagation
     std::string actionName() const { return currentAction ? currentAction->name : std::string(); }
 };
 
@@ -135,7 +136,7 @@ public:
     bool is_assignable(const TypeInfo& from, const TypeInfo& to) const;
     bool is_convertible(const TypeInfo& from, const TypeInfo& to) const;
     TypeInfo resolve_type(const std::string& syntax, const Program* program, bool* known) const;
-    bool returns_void(const Action& a) const { return a.returnType.empty() || a.returnType == "void"; }
+    bool returns_void(const Action& a) const { return a.returnType.empty() || a.returnType == "void" || a.returnType == "unit"; }
     bool is_opaque_type(const TypeInfo& t, const CheckContext& ctx) const;
     bool unify_type_args(const std::string& pattern, const std::string& concrete,
                          std::unordered_map<std::string, std::string>& out,

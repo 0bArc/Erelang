@@ -1,0 +1,9 @@
+@strict
+
+public async action main() {
+    any add1 = lambda(int n) => n + 1;
+    print add1(41);
+    print "integration-closure-async-ok";
+}
+
+run main;

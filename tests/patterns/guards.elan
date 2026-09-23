@@ -1,0 +1,24 @@
+@strict
+
+enum OptionInt {
+    Some(int),
+    None
+}
+
+public action main() {
+    OptionInt v = OptionInt.Some(5);
+    match (v) {
+        case Some(x) if x > 0: {
+            print "positive";
+        }
+        case Some(x): {
+            print "non-positive";
+        }
+        case None: {
+            print "none";
+        }
+    }
+    print "patterns-guards-ok";
+}
+
+run main;

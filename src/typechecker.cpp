@@ -4,6 +4,7 @@
 #include <cctype>
 #include <functional>
 #include <sstream>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -52,6 +53,20 @@ bool parse_map_type(const std::string& typeName, std::string& keyType, std::stri
     return false;
 }
 
+bool parse_set_type(const std::string& typeName, std::string& elementType) {
+    std::string lower;
+    lower.reserve(typeName.size());
+    for (char ch : typeName) {
+        if (!std::isspace(static_cast<unsigned char>(ch))) {
+            lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+        }
+    }
+    constexpr const char* prefix = "set<";
+    if (lower.rfind(prefix, 0) != 0 || lower.back() != '>') return false;
+    elementType = lower.substr(4, lower.size() - 5);
+    return !elementType.empty();
+}
+
 std::optional<std::string> resolve_builtin_module_alias_call(const Program* program, const std::string& callName) {
     if (!program) {
         return std::nullopt;
@@ -69,13 +84,28 @@ std::optional<std::string> hint_for_unknown_call(const std::string& name) {
     auto starts = [&](const char* prefix) { return name.rfind(prefix, 0) == 0; };
     if (starts("file_") || name == "fopen" || name == "fread" || name == "fwrite" ||
         name == "fclose" || name == "fseek" || name == "ftell" || name == "fflush") {
-        return "Filesystem builtin — add `#include <builtin/fs> as fs`, then `fs." + name + "(...)` or `" + name + "` after include";
+        return "Filesystem API — `#include <std/fs>` (or `<builtin/fs> as fs`), then `fs.open` / handle methods";
+    }
+    if (starts("chan_") || name == "chan_new") {
+        return "Pipe API — `#include <std/pipe>`, then `pipe.new` / `p.send` / `p.receive`";
+    }
+    if (name == "future_cancel" || name == "future_done") {
+        return "Use future methods: `fut.cancel()` / `fut.done()`";
+    }
+    if (starts("strbuf_") || starts("ptr_") || name == "make_unique" || name == "make_shared") {
+        return "Removed low-level global — use string methods, `heap<T>`, `shared<T>`, or `buffer<T>`";
+    }
+    if (name == "toint" || name == "toInt" || name == "tostr" || name == "toString" || name == "tofloat" || name == "tobool") {
+        return "Use type constructors: `int(...)`, `string(...)`, `float(...)`, `bool(...)`";
+    }
+    if (starts("dict_") || starts("list_")) {
+        return "Use array/map literals (`[…]`, `{k: v}`) instead of list_/dict_ constructors";
     }
     if (starts("regex_")) {
         return "Regex builtin — add `#include <builtin/regex> as regex`";
     }
     if (starts("sha") || starts("hash_") || name == "md5" || starts("aes_")) {
-        return "Crypto builtin — add `#include <builtin/crypto> as crypto`";
+        return "Crypto builtin — add `#include <builtin/crypto> as crypto`, then `crypto.sha256(...)`";
     }
     if (starts("thread_") || name == "spawn_thread") {
         return "Threads builtin — add `#include <builtin/threads> as threads`";
@@ -84,6 +114,25 @@ std::optional<std::string> hint_for_unknown_call(const std::string& name) {
         return "Network builtin — add `#include <builtin/network> as net`";
     }
     return std::nullopt;
+}
+
+bool is_module_private_builtin_name(const std::string& name) {
+    static const std::unordered_set<std::string> kPrivate = {
+        "file_open", "file_close", "file_read", "file_write", "file_seek", "file_tell", "file_flush",
+        "fopen", "fclose", "fread", "fwrite", "fseek", "ftell", "fflush",
+        "hash_fnv1a", "hash_sha256", "random_bytes", "aes_encrypt", "aes_decrypt",
+        "dict_new", "dict_set", "dict_get", "dict_has", "dict_keys", "dict_size",
+        "list_new", "list_push", "list_get", "list_len", "list_join",
+        "chan_new", "chan_send", "chan_recv", "chan_try_send", "chan_try_recv", "chan_close", "chan_len",
+        "future_cancel", "future_done",
+        "strbuf_new", "strbuf_append", "strbuf_to_string", "strbuf_len", "strbuf_clear", "strbuf_reserve", "strbuf_free",
+        "ptr_new", "ptr_get", "ptr_set", "ptr_free", "ptr_valid", "make_unique", "make_shared", "malloc", "memcpy", "memset",
+        "toint", "toInt", "tostr", "toString", "tofloat", "tobool",
+        "read_text", "write_text", "append_text", "file_exists", "is_dir", "is_file",
+        "mkdirs", "copy_file", "move_file", "delete_file", "list_files", "list_dirs", "list_regular_files",
+        "cwd", "chdir", "path_join", "path_dirname", "path_basename", "path_ext", "file_mtime", "file_size",
+    };
+    return kPrivate.count(name) != 0;
 }
 
 std::string format_param_range(int minP, int maxP) {
@@ -184,13 +233,30 @@ std::string format_diagnostic(const Diagnostic& d) {
 }
 
 bool TypeChecker::types_equal(const TypeInfo& a, const TypeInfo& b) const {
-    return a.name == b.name;
+    auto strip = [](std::string s) {
+        if (s.rfind("enum:", 0) == 0) s = s.substr(5);
+        return s;
+    };
+    return strip(a.name) == strip(b.name);
 }
 
 bool TypeChecker::is_assignable(const TypeInfo& from, const TypeInfo& to) const {
     if (to.name == "any" || from.name == "any") return true;
+    if (from.name == "never") return true;
+    if (to.name == "never") return from.name == "never";
     if (to.name == "unknown" || from.name == "unknown") return false;
     if (types_equal(from, to)) return true;
+
+    auto is_fun = [](const std::string& n) {
+        return n.rfind("action(", 0) == 0;
+    };
+    // Lambdas / func handles are string-typed at runtime; accept for function types.
+    if (is_fun(to.name) && (from.name == "string" || from.name == "any" || is_fun(from.name))) {
+        return true;
+    }
+    if (is_fun(from.name) && (to.name == "string" || to.name == "any")) {
+        return true;
+    }
 
     auto element_ok = [](const std::string& expected, const std::string& actual) {
         if (expected == "any" || actual == "any") return true;
@@ -216,6 +282,14 @@ bool TypeChecker::is_assignable(const TypeInfo& from, const TypeInfo& to) const 
         return element_ok(toMapKey, fromMapKey) && element_ok(toMapValue, fromMapValue);
     }
 
+    std::string toSetElem;
+    std::string fromSetElem;
+    if (parse_set_type(to.name, toSetElem)) {
+        if (from.name == "set<any>") return true;
+        if (!parse_set_type(from.name, fromSetElem)) return false;
+        return element_ok(toSetElem, fromSetElem);
+    }
+
     if (to.name.rfind("struct:", 0) == 0 && from.name.rfind("dict:", 0) == 0) return true;
     if (to.name.rfind("struct:", 0) == 0 && (from.name.rfind("map", 0) == 0 || from.name == "map<any,any>")) return true;
     return false;
@@ -230,6 +304,15 @@ TypeInfo TypeChecker::resolve_type(const std::string& syntax, const Program* pro
     std::string decl = syntax;
     std::transform(decl.begin(), decl.end(), decl.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
     decl.erase(std::remove_if(decl.begin(), decl.end(), [](unsigned char c){ return std::isspace(c) != 0; }), decl.end());
+
+    if (decl.rfind("action(", 0) == 0) {
+        return TypeInfo{decl};
+    }
+    if (syntax.rfind("action(", 0) == 0) {
+        std::string keep = syntax;
+        keep.erase(std::remove_if(keep.begin(), keep.end(), [](unsigned char c){ return std::isspace(c) != 0; }), keep.end());
+        return TypeInfo{keep};
+    }
 
     // Preserve original casing for generic application via TypeRef.
     TypeRef applied;
@@ -270,7 +353,8 @@ TypeInfo TypeChecker::resolve_type(const std::string& syntax, const Program* pro
     const std::string declNormalized = baseLower;
     if (declNormalized == "auto") return TypeInfo{"auto"};
     if (declNormalized == "any") return TypeInfo{"any"};
-    if (declNormalized == "void") return TypeInfo{"void"};
+    if (declNormalized == "void" || declNormalized == "unit") return TypeInfo{"void"};
+    if (declNormalized == "never") return TypeInfo{"never"};
     if (declNormalized == "int") return TypeInfo{"int"};
     if (declNormalized == "u8" || declNormalized == "u16" || declNormalized == "u32" || declNormalized == "u64" ||
         declNormalized == "i8" || declNormalized == "i16" || declNormalized == "i32" || declNormalized == "i64" ||
@@ -279,7 +363,6 @@ TypeInfo TypeChecker::resolve_type(const std::string& syntax, const Program* pro
     }
     if (declNormalized == "double" || declNormalized == "float") return TypeInfo{"double"};
     if (declNormalized == "bool") return TypeInfo{"bool"};
-    if (declNormalized == "pointer") return TypeInfo{"pointer"};
     if (declNormalized == "string" || declNormalized == "str" || declNormalized == "char") return TypeInfo{"string"};
     if (declNormalized == "array") return TypeInfo{"array<any>"};
     if (baseLower == "array" || baseLower == "Array") {
@@ -288,6 +371,21 @@ TypeInfo TypeChecker::resolve_type(const std::string& syntax, const Program* pro
         return TypeInfo{"array<" + elem.name + ">"};
     }
     if (decl.rfind("array<", 0) == 0) return TypeInfo{decl};
+    if (baseLower == "tuple" || declNormalized == "tuple") {
+        if (applied.args.empty()) {
+            if (known) *known = false;
+            return TypeInfo{"unknown"};
+        }
+        std::string canon = "tuple<";
+        for (size_t i = 0; i < applied.args.size(); ++i) {
+            if (i) canon += ", ";
+            TypeInfo el = resolve_type(type_ref_canonical(applied.args[i]), program, known);
+            canon += el.name;
+        }
+        canon += ">";
+        return TypeInfo{canon};
+    }
+    if (decl.rfind("tuple<", 0) == 0) return TypeInfo{decl};
     if (declNormalized == "map" || declNormalized == "dictionary" || declNormalized == "hashmap") {
         if (applied.args.size() >= 2) {
             TypeInfo k = resolve_type(type_ref_canonical(applied.args[0]), program, known);
@@ -297,7 +395,75 @@ TypeInfo TypeChecker::resolve_type(const std::string& syntax, const Program* pro
         return TypeInfo{"map<any,any>"};
     }
     if (decl.rfind("map<", 0) == 0) return TypeInfo{decl};
-    if (!decl.empty() && (decl.back() == '*' || decl.back() == '&')) return TypeInfo{"pointer"};
+    if (baseLower == "set" || baseLower == "Set" || declNormalized == "set") {
+        if (applied.args.empty()) return TypeInfo{"set<any>"};
+        TypeInfo elem = resolve_type(type_ref_canonical(applied.args[0]), program, known);
+        return TypeInfo{"set<" + elem.name + ">"};
+    }
+    if (decl.rfind("set<", 0) == 0) return TypeInfo{decl};
+    if (baseLower == "future" || declNormalized == "future") {
+        if (applied.args.empty()) return TypeInfo{"future<any>"};
+        TypeInfo inner = resolve_type(type_ref_canonical(applied.args[0]), program, known);
+        return TypeInfo{"future<" + inner.name + ">"};
+    }
+    if (decl.rfind("future<", 0) == 0) return TypeInfo{decl};
+    if (baseLower == "heap" || declNormalized == "heap" || baseLower == "own" || declNormalized == "own") {
+        if (applied.args.empty()) {
+            if (known) *known = false;
+            return TypeInfo{"unknown"};
+        }
+        TypeInfo inner = resolve_type(type_ref_canonical(applied.args[0]), program, known);
+        return TypeInfo{"heap<" + inner.name + ">"};
+    }
+    if (decl.rfind("heap<", 0) == 0) return TypeInfo{decl};
+    if (decl.rfind("own<", 0) == 0) {
+        return TypeInfo{"heap<" + decl.substr(4)};
+    }
+    if (baseLower == "shared" || declNormalized == "shared") {
+        if (applied.args.empty()) {
+            if (known) *known = false;
+            return TypeInfo{"unknown"};
+        }
+        TypeInfo inner = resolve_type(type_ref_canonical(applied.args[0]), program, known);
+        return TypeInfo{"shared<" + inner.name + ">"};
+    }
+    if (decl.rfind("shared<", 0) == 0) return TypeInfo{decl};
+    if (baseLower == "weak" || declNormalized == "weak") {
+        if (applied.args.empty()) {
+            if (known) *known = false;
+            return TypeInfo{"unknown"};
+        }
+        TypeInfo inner = resolve_type(type_ref_canonical(applied.args[0]), program, known);
+        return TypeInfo{"weak<" + inner.name + ">"};
+    }
+    if (decl.rfind("weak<", 0) == 0) return TypeInfo{decl};
+    if (baseLower == "buffer" || declNormalized == "buffer") {
+        if (applied.args.empty()) {
+            if (known) *known = false;
+            return TypeInfo{"unknown"};
+        }
+        TypeInfo inner = resolve_type(type_ref_canonical(applied.args[0]), program, known);
+        return TypeInfo{"buffer<" + inner.name + ">"};
+    }
+    if (decl.rfind("buffer<", 0) == 0) return TypeInfo{decl};
+    if (applied.name == "*" || (!decl.empty() && decl.front() == '*')) {
+        std::string innerSyntax;
+        if (applied.name == "*" && !applied.args.empty()) {
+            innerSyntax = type_ref_canonical(applied.args[0]);
+        } else if (!decl.empty() && decl.front() == '*') {
+            innerSyntax = syntax.substr(syntax.find('*') + 1);
+        } else if (!decl.empty() && decl.back() == '*') {
+            innerSyntax = syntax.substr(0, syntax.size() - 1);
+        }
+        TypeInfo inner = resolve_type(innerSyntax, program, known);
+        return TypeInfo{"*" + inner.name};
+    }
+    if (!decl.empty() && (decl.back() == '*' || decl.back() == '&')) {
+        if (decl.back() == '&') return TypeInfo{"pointer"};
+        TypeInfo inner = resolve_type(syntax.substr(0, syntax.size() - 1), program, known);
+        return TypeInfo{"*" + inner.name};
+    }
+    if (declNormalized == "pointer") return TypeInfo{"pointer"};
 
     if (program) {
         for (const auto& sd : program->structs) {
@@ -495,6 +661,109 @@ TypeInfo TypeChecker::instantiate_generic_type(const TypeRef& applied, const Pro
     return resolve_type(type_ref_canonical(applied), program, known);
 }
 
+namespace {
+
+std::string strip_type_prefix(std::string name) {
+    if (name.rfind("struct:", 0) == 0) return name.substr(7);
+    if (name.rfind("entity:", 0) == 0) return name.substr(7);
+    if (name.rfind("enum:", 0) == 0) return name.substr(5);
+    return name;
+}
+
+const char* binop_trait_name(BinOp op) {
+    switch (op) {
+        case BinOp::Add: return "Add";
+        case BinOp::Sub: return "Sub";
+        case BinOp::Mul: return "Mul";
+        case BinOp::Div: return "Div";
+        case BinOp::EQ:
+        case BinOp::NE: return "Eq";
+        default: return nullptr;
+    }
+}
+
+const char* binop_method_name(BinOp op) {
+    switch (op) {
+        case BinOp::Add: return "add";
+        case BinOp::Sub: return "sub";
+        case BinOp::Mul: return "mul";
+        case BinOp::Div: return "div";
+        case BinOp::EQ:
+        case BinOp::NE: return "eq";
+        default: return nullptr;
+    }
+}
+
+bool opaque_has_trait(const CheckContext& ctx, const std::string& typeName, const char* traitName) {
+    auto it = ctx.typeParamConstraints.find(typeName);
+    if (it == ctx.typeParamConstraints.end()) return false;
+    for (const auto& c : it->second) {
+        if (c.name == traitName) return true;
+    }
+    return false;
+}
+
+const Action* find_type_method(const Program* program, const TypeInfo& type, std::string_view method) {
+    if (!program) return nullptr;
+    std::string bare = strip_type_prefix(type.name);
+    TypeRef applied;
+    try { applied = parse_type_ref_string(bare); } catch (...) { applied = make_type_ref(bare); }
+    for (const auto& sd : program->structs) {
+        if (sd.name != applied.name) continue;
+        for (const auto& m : sd.methods) {
+            if (m.name == method) return &m;
+        }
+    }
+    for (const auto& ent : program->entities) {
+        if (ent.name != applied.name) continue;
+        for (const auto& m : ent.methods) {
+            if (m.name == method) return &m;
+        }
+    }
+    return nullptr;
+}
+
+bool try_operator_method(TypeChecker& tc, TCResult& result, CheckContext& ctx,
+                         BinOp op, const TypeInfo& lt, const TypeInfo& rt, TypeInfo& inferred) {
+    const char* traitName = binop_trait_name(op);
+    const char* methodName = binop_method_name(op);
+    if (!traitName || !methodName) return false;
+
+    const bool leftOpaque = tc.is_opaque_type(lt, ctx);
+    const bool rightOpaque = tc.is_opaque_type(rt, ctx);
+    if (leftOpaque || rightOpaque) {
+        if (leftOpaque && rightOpaque && lt.name == rt.name && opaque_has_trait(ctx, lt.name, traitName)) {
+            if (op == BinOp::EQ || op == BinOp::NE) inferred = {"bool"};
+            else inferred = lt;
+            return true;
+        }
+        DiagBuilder(result, Severity::Error,
+            "Opaque type parameter used in operator without a trait constraint",
+            "TC140", ctx.actionName())
+            .hint(std::string("Add a trait constraint such as `<T: ") + traitName + "<T>>` so `" + methodName + "` is available")
+            .emit();
+        inferred = {"unknown"};
+        return true;
+    }
+
+    if (lt.name != rt.name && !(op == BinOp::EQ || op == BinOp::NE)) {
+        return false;
+    }
+    const Action* method = find_type_method(ctx.program, lt, methodName);
+    if (!method) return false;
+    if (op == BinOp::EQ || op == BinOp::NE) {
+        inferred = {"bool"};
+    } else {
+        inferred = method->returnType.empty()
+            ? lt
+            : tc.resolve_type(method->returnType, ctx.program, nullptr);
+        if (inferred.name == "unknown" || inferred.name == "void") inferred = lt;
+    }
+    return true;
+}
+
+} // namespace
+
 // ================= ExprChecker =================
 TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
     if (!e) return {"void"};
@@ -539,11 +808,14 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
         } else if constexpr (std::is_same_v<T, BinaryExpr>) {
             auto lt = check(node.left, ctx);
             auto rt = check(node.right, ctx);
-            if (tc_.is_opaque_type(lt, ctx) || tc_.is_opaque_type(rt, ctx)) {
+            const bool opaqueOp = tc_.is_opaque_type(lt, ctx) || tc_.is_opaque_type(rt, ctx);
+            if (try_operator_method(tc_, result_, ctx, node.op, lt, rt, inferred)) {
+                // trait / user-type operator lowering (or TC140 for constrained ops)
+            } else if (opaqueOp) {
                 DiagBuilder(result_, Severity::Error,
                     "Opaque type parameter used in operator without a trait constraint",
                     "TC140", ctx.actionName())
-                    .hint("Add a trait constraint such as `<T: Addable<T>>` and call a trait method instead of using '+' / arithmetic")
+                    .hint("Add a trait constraint such as `<T: Add<T>>` so the operator can lower to a method")
                     .emit();
                 inferred = {"unknown"};
             } else
@@ -551,17 +823,25 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
                 case BinOp::Add:
                     if (TypeChecker::is_int(lt) && TypeChecker::is_int(rt)) { inferred = {"int"}; break; }
                     if (TypeChecker::is_string(lt) && TypeChecker::is_string(rt)) { inferred={"string"}; break; }
+                    if ((!lt.name.empty() && lt.name.front() == '*') && TypeChecker::is_int(rt)) {
+                        inferred = lt;
+                        break;
+                    }
                     if ((TypeChecker::is_string(lt) && TypeChecker::is_int(rt)) || (TypeChecker::is_int(lt) && TypeChecker::is_string(rt))) {
                         DiagBuilder(result_, Severity::Error, "Illegal '+' operands", "TC011", ctx.actionName()).emit();
                     }
                     DiagBuilder(result_, Severity::Error, "Invalid '+' operand types: " + lt.name + " + " + rt.name, "TC011", ctx.actionName())
-                        .hint("'+' requires int+int or string+string operands").emit();
+                        .hint("'+' requires int+int or string+string operands, or a type with `add`").emit();
                     inferred={"unknown"};
                     break;
                 case BinOp::Sub: case BinOp::Mul: case BinOp::Div: case BinOp::Mod: case BinOp::Pow:
                     if (TypeChecker::is_int(lt) && TypeChecker::is_int(rt)) { inferred = {"int"}; break; }
+                    if (node.op == BinOp::Sub && (!lt.name.empty() && lt.name.front() == '*') && TypeChecker::is_int(rt)) {
+                        inferred = lt;
+                        break;
+                    }
                     DiagBuilder(result_, Severity::Error, "Invalid arithmetic operand types: " + lt.name + " " + rt.name, "TC013", ctx.actionName())
-                        .hint("Arithmetic operators require int operands").emit();
+                        .hint("Arithmetic operators require int operands or a matching trait method").emit();
                     inferred = {"unknown"};
                     break;
                 case BinOp::BitAnd: case BinOp::BitXor: case BinOp::BitOr: case BinOp::Shl: case BinOp::Shr:
@@ -581,6 +861,16 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
                     inferred={"bool"}; break;
                 default: inferred={"bool"}; break;
             }
+        } else if constexpr (std::is_same_v<T, RangeExpr>) {
+            auto lt = check(node.start, ctx);
+            auto rt = check(node.end, ctx);
+            if ((!TypeChecker::is_int(lt) && lt.name != "unknown") ||
+                (!TypeChecker::is_int(rt) && rt.name != "unknown")) {
+                DiagBuilder(result_, Severity::Error,
+                    "Range bounds must be int, got `" + lt.name + "` .. `" + rt.name + "`",
+                    "TC163", ctx.actionName()).emit();
+            }
+            inferred = {"array<int>"};
         } else if constexpr (std::is_same_v<T, TernaryExpr>) {
             auto ct = check(node.cond, ctx);
             if (!TypeChecker::is_bool(ct) && ct.name != "unknown") {
@@ -593,18 +883,40 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
             else if (et.name == "unknown") inferred = tt;
             else inferred = {"unknown"};
         } else if constexpr (std::is_same_v<T, UnaryExpr>) {
-            if (node.op == UnOp::AddressOf) inferred = {"pointer"};
-            else if (node.op == UnOp::Deref) inferred = {"unknown"};
-            else if (node.op == UnOp::Not) {
-                check(node.expr, ctx);
+            auto t = check(node.expr, ctx);
+            if (node.op == UnOp::AddressOf) {
+                inferred = TypeInfo{"*" + t.name};
+            } else if (node.op == UnOp::Deref) {
+                if (!t.name.empty() && t.name.front() == '*') {
+                    inferred = TypeInfo{t.name.substr(1)};
+                } else if (t.name.rfind("heap<", 0) == 0 || t.name.rfind("own<", 0) == 0 || t.name.rfind("shared<", 0) == 0) {
+                    auto lt = t.name.find('<');
+                    auto gt = t.name.rfind('>');
+                    if (lt != std::string::npos && gt != std::string::npos && gt > lt) {
+                        inferred = tc_.resolve_type(t.name.substr(lt + 1, gt - lt - 1), ctx.program, nullptr);
+                    } else {
+                        inferred = {"unknown"};
+                    }
+                } else if (t.name == "pointer") {
+                    inferred = {"unknown"};
+                } else if (t.name != "unknown") {
+                    DiagBuilder(result_, Severity::Error,
+                        "Cannot dereference non-pointer type '" + t.name + "'",
+                        "TC170", ctx.actionName()).emit();
+                    inferred = {"unknown"};
+                } else {
+                    inferred = {"unknown"};
+                }
+            } else if (node.op == UnOp::Not) {
                 inferred = {"bool"};
             } else if (node.op == UnOp::BitNot) {
-                auto t = check(node.expr, ctx);
                 if (t.name != "unknown" && !TypeChecker::is_int(t)) {
                     DiagBuilder(result_, Severity::Error, "Bitwise NOT requires an int operand, got " + t.name, "TC013", ctx.actionName()).emit();
                 }
                 inferred = {"int"};
-            } else inferred = check(node.expr, ctx);
+            } else {
+                inferred = t;
+            }
         } else if constexpr (std::is_same_v<T, NewExpr>) {
             bool known = true;
             inferred = tc_.resolve_type(node.typeName, ctx.program, &known);
@@ -673,9 +985,44 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
                 }
             }
         } else if constexpr (std::is_same_v<T, IndexExpr>) {
-            (void)check(node.object, ctx);
-            (void)check(node.index, ctx);
-            inferred = {"unknown"};
+            auto ot = check(node.object, ctx);
+            auto it = check(node.index, ctx);
+            (void)it;
+            if (tc_.is_opaque_type(ot, ctx)) {
+                if (opaque_has_trait(ctx, ot.name, "Index")) {
+                    auto cit = ctx.typeParamConstraints.find(ot.name);
+                    TypeInfo elem{"unknown"};
+                    if (cit != ctx.typeParamConstraints.end()) {
+                        for (const auto& c : cit->second) {
+                            if (c.name != "Index" || c.args.empty()) continue;
+                            elem = tc_.resolve_type(type_ref_canonical(c.args[0]), ctx.program, nullptr);
+                            break;
+                        }
+                    }
+                    inferred = elem;
+                } else {
+                    DiagBuilder(result_, Severity::Error,
+                        "Opaque type parameter used in operator without a trait constraint",
+                        "TC140", ctx.actionName())
+                        .hint("Add a trait constraint such as `<T: Index<U>>` so `get` is available")
+                        .emit();
+                    inferred = {"unknown"};
+                }
+            } else if (ot.name.rfind("buffer<", 0) == 0) {
+                auto lt = ot.name.find('<');
+                auto gt = ot.name.rfind('>');
+                if (lt != std::string::npos && gt > lt) {
+                    inferred = tc_.resolve_type(ot.name.substr(lt + 1, gt - lt - 1), ctx.program, nullptr);
+                } else {
+                    inferred = {"unknown"};
+                }
+            } else if (const Action* method = find_type_method(ctx.program, ot, "get")) {
+                inferred = method->returnType.empty()
+                    ? TypeInfo{"unknown"}
+                    : tc_.resolve_type(method->returnType, ctx.program, nullptr);
+            } else {
+                inferred = {"unknown"};
+            }
         } else if constexpr (std::is_same_v<T, ListLiteralExpr>) {
             if (node.elements.empty()) {
                 DiagBuilder(result_, Severity::Error,
@@ -692,6 +1039,111 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
             }
             if (elementType.empty() || elementType == "unknown") elementType = "any";
             inferred = {"array<" + elementType + ">"};
+            return;
+        } else if constexpr (std::is_same_v<T, TupleLiteralExpr>) {
+            if (node.elements.size() < 2) {
+                DiagBuilder(result_, Severity::Error,
+                    "Tuple literal requires at least two elements",
+                    "TC157", ctx.actionName()).emit();
+                inferred = {"unknown"};
+                return;
+            }
+            std::string canon = "tuple<";
+            for (size_t i = 0; i < node.elements.size(); ++i) {
+                if (i) canon += ", ";
+                canon += check(node.elements[i], ctx).name;
+            }
+            canon += ">";
+            inferred = {canon};
+            return;
+        } else if constexpr (std::is_same_v<T, TryExpr>) {
+            TypeInfo innerT = check(node.inner, ctx);
+            std::string tn = innerT.name;
+            if (tn.rfind("future<", 0) == 0 && tn.back() == '>') {
+                tn = tn.substr(7, tn.size() - 8);
+                innerT = tc_.resolve_type(tn, ctx.program, nullptr);
+                if (innerT.name == "unknown" && !tn.empty()) innerT = TypeInfo{tn};
+                tn = innerT.name;
+            }
+            if (tn.rfind("enum:", 0) == 0) tn = tn.substr(5);
+            TypeRef applied;
+            try { applied = parse_type_ref_string(tn); } catch (...) { applied = make_type_ref(tn); }
+            const std::string ret = ctx.expectedReturnType.empty()
+                ? (ctx.currentAction ? ctx.currentAction->returnType : std::string{})
+                : ctx.expectedReturnType;
+            std::string retBare = ret;
+            if (retBare.rfind("enum:", 0) == 0) retBare = retBare.substr(5);
+            TypeRef retApplied;
+            try { retApplied = parse_type_ref_string(retBare); } catch (...) { retApplied = make_type_ref(retBare); }
+
+            if (applied.name == "Option") {
+                if (retApplied.name != "Option") {
+                    DiagBuilder(result_, Severity::Error,
+                        "cannot propagate `Option<T>` from a function returning `" + (ret.empty() ? std::string("void") : ret) + "`",
+                        "TC159", ctx.actionName()).emit();
+                    inferred = {"unknown"};
+                    return;
+                }
+                if (applied.args.empty()) {
+                    DiagBuilder(result_, Severity::Error,
+                        "cannot use `?` here: Option type is incomplete",
+                        "TC158", ctx.actionName()).emit();
+                    inferred = {"unknown"};
+                    return;
+                }
+                inferred = tc_.resolve_type(type_ref_canonical(applied.args[0]), ctx.program, nullptr);
+                return;
+            }
+            if (applied.name == "Result") {
+                if (retApplied.name != "Result") {
+                    DiagBuilder(result_, Severity::Error,
+                        "cannot use `?` here: function does not return Result or Option",
+                        "TC158", ctx.actionName()).emit();
+                    inferred = {"unknown"};
+                    return;
+                }
+                if (applied.args.size() < 2 || retApplied.args.size() < 2) {
+                    DiagBuilder(result_, Severity::Error,
+                        "cannot use `?` here: Result type is incomplete",
+                        "TC158", ctx.actionName()).emit();
+                    inferred = {"unknown"};
+                    return;
+                }
+                TypeInfo errFrom = tc_.resolve_type(type_ref_canonical(applied.args[1]), ctx.program, nullptr);
+                TypeInfo errTo = tc_.resolve_type(type_ref_canonical(retApplied.args[1]), ctx.program, nullptr);
+                if (!tc_.is_assignable(errFrom, errTo) && errFrom.name != "unknown" && errTo.name != "unknown") {
+                    DiagBuilder(result_, Severity::Error,
+                        "cannot propagate error type `" + errFrom.name + "` into `" + errTo.name + "`",
+                        "TC159", ctx.actionName()).emit();
+                }
+                inferred = tc_.resolve_type(type_ref_canonical(applied.args[0]), ctx.program, nullptr);
+                return;
+            }
+            DiagBuilder(result_, Severity::Error,
+                "cannot use `?` here: operand is not Result or Option (got `" + innerT.name + "`)",
+                "TC158", ctx.actionName()).emit();
+            inferred = {"unknown"};
+            return;
+        } else if constexpr (std::is_same_v<T, AwaitExpr>) {
+            if (!ctx.currentAction || !ctx.currentAction->isAsync) {
+                DiagBuilder(result_, Severity::Error,
+                    "`await` is only allowed inside `async` actions",
+                    "TC160", ctx.actionName()).emit();
+            }
+            TypeInfo innerT = check(node.inner, ctx);
+            if (innerT.name.rfind("future<", 0) == 0 && innerT.name.back() == '>') {
+                const std::string inner = innerT.name.substr(7, innerT.name.size() - 8);
+                if (inner.rfind("enum:", 0) == 0 || inner.rfind("struct:", 0) == 0 ||
+                    inner.rfind("action(", 0) == 0 || inner.rfind("tuple<", 0) == 0 ||
+                    inner.rfind("future<", 0) == 0) {
+                    inferred = TypeInfo{inner};
+                } else {
+                    inferred = tc_.resolve_type(inner, ctx.program, nullptr);
+                    if (inferred.name == "unknown" && !inner.empty()) inferred = TypeInfo{inner};
+                }
+            } else {
+                inferred = innerT;
+            }
             return;
         } else if constexpr (std::is_same_v<T, DictLiteralExpr>) {
             if (node.entries.empty()) {
@@ -714,7 +1166,14 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
             inferred = {"map<string," + valueType + ">"};
             return;
         } else if constexpr (std::is_same_v<T, LambdaExpr>) {
-            inferred = {"string"}; // lambda returns a func:N handle string
+            std::string ft = "action(";
+            for (size_t i = 0; i < node.params.size(); ++i) {
+                if (i) ft += ", ";
+                ft += node.params[i].type.empty() ? "any" : node.params[i].type;
+            }
+            ft += ")->";
+            ft += node.returnType.empty() ? "any" : node.returnType;
+            inferred = {ft};
             return;
         } else if constexpr (std::is_same_v<T, FunctionCallExpr>) {
 
@@ -723,6 +1182,159 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
             // and removed-builtin branches above handle their own args.
             for (const auto& arg : node.args) {
                 (void)check(arg, ctx);
+            }
+
+            if (node.name == "alloc" && !node.typeArgs.empty()) {
+                TypeInfo elem = tc_.resolve_type(node.typeArgs[0], ctx.program, nullptr);
+                inferred = TypeInfo{"*" + elem.name};
+                return;
+            }
+            if (node.name == "realloc" && !node.args.empty()) {
+                TypeInfo pt = check(node.args[0], ctx);
+                if (pt.name.size() > 1 && pt.name[0] == '*') {
+                    inferred = pt;
+                    return;
+                }
+                inferred = {"pointer"};
+                return;
+            }
+            if (node.name == "heap" && !node.typeArgs.empty()) {
+                TypeInfo elem = tc_.resolve_type(node.typeArgs[0], ctx.program, nullptr);
+                inferred = TypeInfo{"heap<" + elem.name + ">"};
+                return;
+            }
+            if (node.name == "shared" && !node.typeArgs.empty()) {
+                TypeInfo elem = tc_.resolve_type(node.typeArgs[0], ctx.program, nullptr);
+                inferred = TypeInfo{"shared<" + elem.name + ">"};
+                return;
+            }
+            if (node.name == "weak") {
+                TypeInfo elem{"unknown"};
+                if (!node.typeArgs.empty()) {
+                    elem = tc_.resolve_type(node.typeArgs[0], ctx.program, nullptr);
+                } else if (!node.args.empty()) {
+                    auto at = check(node.args[0], ctx);
+                    if (at.name.rfind("shared<", 0) == 0) {
+                        auto lt = at.name.find('<');
+                        auto gt = at.name.rfind('>');
+                        if (lt != std::string::npos && gt > lt) {
+                            elem = tc_.resolve_type(at.name.substr(lt + 1, gt - lt - 1), ctx.program, nullptr);
+                        }
+                    }
+                }
+                inferred = TypeInfo{"weak<" + elem.name + ">"};
+                return;
+            }
+            if (node.name == "buffer" && !node.typeArgs.empty()) {
+                TypeInfo elem = tc_.resolve_type(node.typeArgs[0], ctx.program, nullptr);
+                inferred = TypeInfo{"buffer<" + elem.name + ">"};
+                return;
+            }
+            if ((node.name == ".get" || node.name == "get") && !node.args.empty()) {
+                auto recv = check(node.args[0], ctx);
+                if (recv.name.rfind("weak<", 0) == 0) {
+                    auto lt = recv.name.find('<');
+                    auto gt = recv.name.rfind('>');
+                    std::string inner = (lt != std::string::npos && gt > lt)
+                        ? recv.name.substr(lt + 1, gt - lt - 1) : "any";
+                    inferred = TypeInfo{"enum:Option<" + inner + ">"};
+                    return;
+                }
+            }
+            {
+                const auto dot = node.name.rfind('.');
+                if (dot != std::string::npos && dot > 0 && ctx.scopes) {
+                    const std::string objectName = node.name.substr(0, dot);
+                    const std::string method = node.name.substr(dot + 1);
+                    if (auto* vi = ctx.scopes->lookup(objectName)) {
+                        vi->used = true;
+                        const std::string& tn = vi->type.name;
+                        if (method == "get" && tn.rfind("weak<", 0) == 0) {
+                            auto lt = tn.find('<');
+                            auto gt = tn.rfind('>');
+                            std::string inner = (lt != std::string::npos && gt > lt)
+                                ? tn.substr(lt + 1, gt - lt - 1) : "any";
+                            inferred = TypeInfo{"enum:Option<" + inner + ">"};
+                            return;
+                        }
+                        if (tn.rfind("buffer<", 0) == 0) {
+                            if (method == "len" || method == "cap") {
+                                inferred = {"int"};
+                                return;
+                            }
+                            if (method == "ptr") {
+                                auto lt = tn.find('<');
+                                auto gt = tn.rfind('>');
+                                std::string inner = (lt != std::string::npos && gt > lt)
+                                    ? tn.substr(lt + 1, gt - lt - 1) : "any";
+                                inferred = TypeInfo{"*" + inner};
+                                return;
+                            }
+                            if (method == "pop") {
+                                auto lt = tn.find('<');
+                                auto gt = tn.rfind('>');
+                                std::string inner = (lt != std::string::npos && gt > lt)
+                                    ? tn.substr(lt + 1, gt - lt - 1) : "any";
+                                inferred = tc_.resolve_type(inner, ctx.program, nullptr);
+                                return;
+                            }
+                            if (method == "push" || method == "resize" || method == "clear" || method == "reserve") {
+                                inferred = {"void"};
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+            if (!node.name.empty() && node.name[0] == '.' && !node.args.empty()) {
+                auto recv = check(node.args[0], ctx);
+                if (recv.name.rfind("buffer<", 0) == 0) {
+                    const std::string method = node.name.substr(1);
+                    if (method == "len" || method == "cap") {
+                        inferred = {"int"};
+                        return;
+                    }
+                    if (method == "ptr") {
+                        auto lt = recv.name.find('<');
+                        auto gt = recv.name.rfind('>');
+                        std::string inner = (lt != std::string::npos && gt > lt)
+                            ? recv.name.substr(lt + 1, gt - lt - 1) : "any";
+                        inferred = TypeInfo{"*" + inner};
+                        return;
+                    }
+                    if (method == "pop") {
+                        auto lt = recv.name.find('<');
+                        auto gt = recv.name.rfind('>');
+                        std::string inner = (lt != std::string::npos && gt > lt)
+                            ? recv.name.substr(lt + 1, gt - lt - 1) : "any";
+                        inferred = tc_.resolve_type(inner, ctx.program, nullptr);
+                        return;
+                    }
+                    if (method == "push" || method == "resize" || method == "clear" || method == "reserve") {
+                        inferred = {"void"};
+                        return;
+                    }
+                }
+            }
+
+            if (ctx.scopes) {
+                if (auto* vi = ctx.scopes->lookup(node.name)) {
+                    vi->used = true;
+                    const std::string& tn = vi->type.name;
+                    if (tn.rfind("action(", 0) == 0) {
+                        const auto arrow = tn.rfind("->");
+                        if (arrow != std::string::npos && arrow + 2 < tn.size()) {
+                            inferred = tc_.resolve_type(tn.substr(arrow + 2), ctx.program, nullptr);
+                        } else {
+                            inferred = {"any"};
+                        }
+                        return;
+                    }
+                    if (tn == "string" || tn == "any") {
+                        inferred = {"any"};
+                        return;
+                    }
+                }
             }
 
             // Enum variant construction: Option<int>.Some(1) or Status.Active as call with args
@@ -784,6 +1396,83 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
                 }
             }
 
+            if (!enumConstructed) {
+            // Enum methods: recv.method / chained .method() — same path as struct methods
+            {
+                std::string methodName;
+                TypeInfo recvType{"unknown"};
+                size_t userArgOffset = 0;
+                bool methodCandidate = false;
+                if (!node.name.empty() && node.name[0] == '.' && !node.args.empty()) {
+                    methodName = node.name.substr(1);
+                    recvType = check(node.args[0], ctx);
+                    userArgOffset = 1;
+                    methodCandidate = true;
+                } else {
+                    const auto dot = node.name.rfind('.');
+                    if (dot != std::string::npos && ctx.scopes) {
+                        methodName = node.name.substr(dot + 1);
+                        const std::string objectName = node.name.substr(0, dot);
+                        if (auto* owner = ctx.scopes->lookup(objectName)) {
+                            recvType = owner->type;
+                            owner->used = true;
+                            methodCandidate = true;
+                            userArgOffset = 0;
+                        }
+                    }
+                }
+                if (methodCandidate && recvType.name != "unknown" && ctx.program) {
+                    std::string tn = recvType.name;
+                    if (tn.rfind("enum:", 0) == 0) tn = tn.substr(5);
+                    TypeRef applied;
+                    try { applied = parse_type_ref_string(tn); } catch (...) { applied = make_type_ref(tn); }
+                    const EnumDecl* ed = nullptr;
+                    for (const auto& en : ctx.program->enums) {
+                        if (en.name == applied.name) { ed = &en; break; }
+                    }
+                    if (ed) {
+                        const Action* method = nullptr;
+                        for (const auto& m : ed->methods) {
+                            if (m.name == methodName) { method = &m; break; }
+                        }
+                        if (method) {
+                            std::unordered_map<std::string, std::string> subst;
+                            for (size_t i = 0; i < ed->typeParams.size() && i < applied.args.size(); ++i) {
+                                subst[ed->typeParams[i].name] = type_ref_canonical(applied.args[i]);
+                            }
+                            const size_t argc = node.args.size() >= userArgOffset ? node.args.size() - userArgOffset : 0;
+                            if (argc != method->params.size()) {
+                                DiagBuilder(result_, Severity::Error,
+                                    "Param count mismatch calling method " + methodName + ": got " + std::to_string(argc) +
+                                    ", expected " + std::to_string(method->params.size()),
+                                    "TC020", ctx.actionName()).emit();
+                            }
+                            for (size_t i = userArgOffset; i < node.args.size(); ++i) {
+                                TypeInfo actual = check(node.args[i], ctx);
+                                const size_t pi = i - userArgOffset;
+                                if (pi < method->params.size() && !method->params[pi].type.empty()) {
+                                    TypeInfo expected = tc_.resolve_type(
+                                        substitute_type_string(method->params[pi].type, subst), ctx.program, nullptr);
+                                    if (!tc_.is_assignable(actual, expected) && actual.name != "unknown" && expected.name != "unknown") {
+                                        DiagBuilder(result_, Severity::Error,
+                                            "Argument type mismatch calling " + methodName + ": expected `" + expected.name +
+                                            "`, got `" + actual.name + "`",
+                                            "TC022", ctx.actionName()).emit();
+                                    }
+                                }
+                            }
+                            if (method->returnType.empty() || method->returnType == "void") {
+                                inferred = {"void"};
+                            } else {
+                                inferred = tc_.resolve_type(
+                                    substitute_type_string(method->returnType, subst), ctx.program, nullptr);
+                            }
+                            enumConstructed = true;
+                        }
+                    }
+                }
+            }
+            }
             if (!enumConstructed) {
             // Trait method on opaque param: a.compare(b) as FunctionCallExpr "a.compare"
             {
@@ -911,13 +1600,21 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
                 }
                 std::string ret = action.returnType.empty() ? "void" : substitute_type_string(action.returnType, subst);
                 inferred = { ret.empty() || ret == "void" ? "void" : tc_.resolve_type(ret, ctx.program, nullptr).name };
+                if (action.isAsync && ctx.currentAction && ctx.currentAction->isAsync && inferred.name != "void") {
+                    inferred = { "future<" + inferred.name + ">" };
+                }
             } else {
                 std::string builtinLookup = node.name;
-                if (auto mapped = resolve_builtin_module_alias_call(ctx.program, node.name)) {
+                if (is_module_private_builtin_name(node.name)) {
+                    // Bare snake_case module internals are not part of the public API.
+                } else if (auto mapped = resolve_builtin_module_alias_call(ctx.program, node.name)) {
                     builtinLookup = *mapped;
                 }
                 auto bIt = tc_.builtins_.find(builtinLookup);
-                if (bIt == tc_.builtins_.end()) {
+                if (bIt == tc_.builtins_.end() && !is_module_private_builtin_name(node.name)) {
+                    bIt = tc_.builtins_.find(node.name);
+                }
+                if (bIt == tc_.builtins_.end() || is_module_private_builtin_name(node.name)) {
                     // Check dotted imports for module action calls in expression context
                     bool resolvedModuleAction = false;
                     const auto dotPos = builtinLookup.find('.');
@@ -1083,6 +1780,9 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                 }
                 if (!externResolved) {
                     std::string builtinLookup = stmt.name;
+                    if (is_module_private_builtin_name(stmt.name)) {
+                        emit_unknown_call(result_, stmt.name, ctx.actionName());
+                    } else {
                     if (auto mapped = resolve_builtin_module_alias_call(ctx.program, stmt.name)) {
                         builtinLookup = *mapped;
                     }
@@ -1100,11 +1800,16 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                                 .emit();
                         }
                     }
+                    }
                 }
             }
             for (auto& a : stmt.args) expr_.check(a, ctx);
             if (it != tc_.actions_.end() && it->second->params.size() == stmt.args.size()) {
                 check_action_arg_types(tc_, result_, *it->second, stmt.args, expr_, ctx, stmt.name);
+            }
+            if (stmt.name == "fail" ||
+                (it != tc_.actions_.end() && it->second->returnType == "never")) {
+                flow = ReturnFlow::AlwaysReturn;
             }
         } else if constexpr (std::is_same_v<T, MethodCallStmt>) {
             for (auto& a : stmt.args) expr_.check(a, ctx);
@@ -1213,6 +1918,195 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
             }
             mark_route_action_refs();
         } else if constexpr (std::is_same_v<T, LetStmt>) {
+            if (stmt.pattern) {
+                auto valT = expr_.check(stmt.value, ctx);
+                std::function<void(const PatternPtr&, const TypeInfo&)> bind_pattern;
+                bind_pattern = [&](const PatternPtr& pat, const TypeInfo& expected) {
+                    if (!pat) return;
+                    std::visit([&](const auto& node) {
+                        using N = std::decay_t<decltype(node)>;
+                        if constexpr (std::is_same_v<N, PatWildcard>) {
+                            return;
+                        } else if constexpr (std::is_same_v<N, PatBinding>) {
+                            if (scopes.lookup(node.name)) {
+                                DiagBuilder(result_, Severity::Error, "Variable redeclaration: " + node.name, "TC030", ctx.actionName()).emit();
+                                return;
+                            }
+                            VarInfo vi;
+                            vi.type = expected;
+                            vi.isConst = stmt.isConst;
+                            vi.assigned = true;
+                            scopes.declare(node.name, vi);
+                        } else if constexpr (std::is_same_v<N, PatStruct>) {
+                            std::string typeName = expected.name;
+                            if (typeName.rfind("struct:", 0) == 0) typeName = typeName.substr(7);
+                            if (typeName.rfind("entity:", 0) == 0) typeName = typeName.substr(7);
+                            const StructDecl* sd = nullptr;
+                            const Entity* ent = nullptr;
+                            std::unordered_map<std::string, std::string> subst;
+                            TypeRef applied;
+                            if (ctx.program) {
+                                try { applied = parse_type_ref_string(typeName); } catch (...) { applied = make_type_ref(typeName); }
+                                for (const auto& s : ctx.program->structs) {
+                                    if (s.name != applied.name) continue;
+                                    sd = &s;
+                                    if (!s.typeParams.empty() && applied.args.size() == s.typeParams.size()) {
+                                        for (size_t i = 0; i < s.typeParams.size(); ++i) {
+                                            subst[s.typeParams[i].name] = type_ref_canonical(applied.args[i]);
+                                        }
+                                    }
+                                    break;
+                                }
+                                if (!sd) {
+                                    for (const auto& e : ctx.program->entities) {
+                                        if (e.name != applied.name) continue;
+                                        ent = &e;
+                                        if (!e.typeParams.empty() && applied.args.size() == e.typeParams.size()) {
+                                            for (size_t i = 0; i < e.typeParams.size(); ++i) {
+                                                subst[e.typeParams[i].name] = type_ref_canonical(applied.args[i]);
+                                            }
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                            if (!sd && !ent) {
+                                DiagBuilder(result_, Severity::Error,
+                                    "Struct pattern requires a struct or entity value, got `" + expected.name + "`",
+                                    "TC154", ctx.actionName()).emit();
+                                return;
+                            }
+                            if (sd) {
+                                for (const auto& f : node.fields) {
+                                    const StructFieldDecl* found = nullptr;
+                                    for (const auto& sf : sd->fields) {
+                                        if (sf.name == f.field) { found = &sf; break; }
+                                    }
+                                    if (!found) {
+                                        DiagBuilder(result_, Severity::Error,
+                                            "Unknown field `" + f.field + "` in struct `" + sd->name + "`",
+                                            "TC153", ctx.actionName()).emit();
+                                        continue;
+                                    }
+                                    std::string ft = found->type.empty() ? "unknown" : found->type;
+                                    if (!subst.empty()) ft = substitute_type_string(ft, subst);
+                                    TypeInfo fieldT = tc_.resolve_type(ft, ctx.program, nullptr);
+                                    bind_pattern(f.pattern, fieldT);
+                                }
+                            } else {
+                                for (const auto& f : node.fields) {
+                                    const Field* found = nullptr;
+                                    for (const auto& ef : ent->fields) {
+                                        if (ef.name == f.field) { found = &ef; break; }
+                                    }
+                                    if (!found) {
+                                        DiagBuilder(result_, Severity::Error,
+                                            "Unknown field `" + f.field + "` in entity `" + ent->name + "`",
+                                            "TC153", ctx.actionName()).emit();
+                                        continue;
+                                    }
+                                    std::string ft = found->type.empty() ? "unknown" : found->type;
+                                    if (!subst.empty()) ft = substitute_type_string(ft, subst);
+                                    TypeInfo fieldT = tc_.resolve_type(ft, ctx.program, nullptr);
+                                    bind_pattern(f.pattern, fieldT);
+                                }
+                            }
+                        } else if constexpr (std::is_same_v<N, PatArray>) {
+                            std::string elemType = "unknown";
+                            bool isArray = false;
+                            std::string tn = expected.name;
+                            if (tn.rfind("array<", 0) == 0 && tn.back() == '>') {
+                                elemType = tn.substr(6, tn.size() - 7);
+                                isArray = true;
+                            } else if (tn.rfind("Array<", 0) == 0 && tn.back() == '>') {
+                                elemType = tn.substr(6, tn.size() - 7);
+                                isArray = true;
+                            } else if (tn == "array" || tn == "list" || tn.rfind("list:", 0) == 0) {
+                                isArray = true;
+                            }
+                            if (!isArray) {
+                                DiagBuilder(result_, Severity::Error,
+                                    "Array pattern requires an array value, got `" + expected.name + "`",
+                                    "TC155", ctx.actionName()).emit();
+                                return;
+                            }
+                            TypeInfo et = tc_.resolve_type(elemType, ctx.program, nullptr);
+                            for (const auto& el : node.elements) {
+                                bind_pattern(el, et);
+                            }
+                        } else if constexpr (std::is_same_v<N, PatTuple>) {
+                            std::string tn = expected.name;
+                            if (tn.rfind("tuple<", 0) != 0 || tn.back() != '>') {
+                                DiagBuilder(result_, Severity::Error,
+                                    "Tuple pattern requires a tuple value, got `" + expected.name + "`",
+                                    "TC157", ctx.actionName()).emit();
+                                return;
+                            }
+                            TypeRef applied;
+                            try { applied = parse_type_ref_string(tn); } catch (...) { applied = make_type_ref(tn); }
+                            if (applied.args.size() != node.elements.size()) {
+                                DiagBuilder(result_, Severity::Error,
+                                    "tuple destructuring expects " + std::to_string(applied.args.size()) +
+                                    " elements, got " + std::to_string(node.elements.size()),
+                                    "TC157", ctx.actionName()).emit();
+                                return;
+                            }
+                            for (size_t i = 0; i < node.elements.size(); ++i) {
+                                TypeInfo et = tc_.resolve_type(type_ref_canonical(applied.args[i]), ctx.program, nullptr);
+                                bind_pattern(node.elements[i], et);
+                            }
+                        } else if constexpr (std::is_same_v<N, PatCtor>) {
+                            std::string typeName = expected.name;
+                            if (typeName.rfind("enum:", 0) == 0) typeName = typeName.substr(5);
+                            const EnumDecl* nestEd = nullptr;
+                            std::unordered_map<std::string, std::string> nestSubst;
+                            TypeRef nestApplied;
+                            if (ctx.program) {
+                                try { nestApplied = parse_type_ref_string(typeName); } catch (...) { nestApplied = make_type_ref(typeName); }
+                                for (const auto& en : ctx.program->enums) {
+                                    if (en.name != nestApplied.name) continue;
+                                    nestEd = &en;
+                                    if (!en.typeParams.empty() && nestApplied.args.size() == en.typeParams.size()) {
+                                        for (size_t i = 0; i < en.typeParams.size(); ++i) {
+                                            nestSubst[en.typeParams[i].name] = type_ref_canonical(nestApplied.args[i]);
+                                        }
+                                    }
+                                    break;
+                                }
+                            }
+                            if (!nestEd) {
+                                DiagBuilder(result_, Severity::Error,
+                                    "Pattern variant `" + node.name + "` used where enum type `" + expected.name + "` expected",
+                                    "TC149", ctx.actionName()).emit();
+                                return;
+                            }
+                            const EnumVariant* found = nullptr;
+                            for (const auto& variant : nestEd->variants) {
+                                if (variant.name == node.name) { found = &variant; break; }
+                            }
+                            if (!found) {
+                                DiagBuilder(result_, Severity::Error,
+                                    "Unknown variant `" + node.name + "` for enum `" + nestEd->name + "`",
+                                    "TC150", ctx.actionName()).emit();
+                                return;
+                            }
+                            if (found->payloads.size() != node.args.size()) {
+                                DiagBuilder(result_, Severity::Error,
+                                    "Match binding count mismatch for variant '" + node.name + "'",
+                                    "TC145", ctx.actionName()).emit();
+                                return;
+                            }
+                            for (size_t i = 0; i < node.args.size(); ++i) {
+                                std::string pt = type_ref_canonical(found->payloads[i]);
+                                if (!nestSubst.empty()) pt = substitute_type_string(pt, nestSubst);
+                                TypeInfo fieldT = tc_.resolve_type(pt, ctx.program, nullptr);
+                                bind_pattern(node.args[i], fieldT);
+                            }
+                        }
+                    }, pat->node);
+                };
+                bind_pattern(stmt.pattern, valT);
+            } else {
             if (scopes.lookup(stmt.name)) DiagBuilder(result_, Severity::Error, "Variable redeclaration: " + stmt.name, "TC030", ctx.actionName()).emit();
             VarInfo vi; vi.type = expr_.check(stmt.value, ctx); vi.isConst = stmt.isConst; vi.assigned=true;
             if (!stmt.declaredType.empty()) {
@@ -1220,7 +2114,7 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                 TypeInfo expected = tc_.resolve_type(stmt.declaredType, ctx.program, &known);
                 if (!known) {
                     DiagBuilder(result_, Severity::Error, "Unknown declared type: " + stmt.declaredType, "TC041", ctx.actionName())
-                        .hint("Known primitives: int, string, bool, double, void, pointer, array<T>, map<K,V>, struct:Name, enum:Name")
+                        .hint("Known primitives: int, string, bool, double, void, unit, never, pointer, array<T>, map<K,V>, set<T>, struct:Name, enum:Name")
                         .emit();
                 } else if (expected.name != "auto") {
                     const bool defaultNullInit =
@@ -1236,6 +2130,7 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                 }
             }
             scopes.declare(stmt.name, vi);
+            }
         } else if constexpr (std::is_same_v<T, ReturnStmt>) {
             if (retType == "void") {
                 if (stmt.value) expr_.check(*stmt.value, ctx);
@@ -1438,16 +2333,75 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                             if (!nestSubst.empty()) pt = substitute_type_string(pt, nestSubst);
                             check_pattern(node.args[i], pt);
                         }
+                    } else if constexpr (std::is_same_v<N, PatStruct> || std::is_same_v<N, PatArray> || std::is_same_v<N, PatTuple>) {
+                        DiagBuilder(result_, Severity::Error,
+                            "Struct/array/tuple patterns are only supported in `let` destructuring, not in `match`",
+                            "TC156", ctx.actionName()).emit();
+                    } else if constexpr (std::is_same_v<N, PatOr>) {
+                        for (const auto& alt : node.alts) check_pattern(alt, expectedType);
                     }
                 }, pat->node);
             };
 
+            bool allCasesReturn = !stmt.cases.empty();
             for (auto& c : stmt.cases) {
                 auto caseScope = scopes.push();
                 if (ed) {
                     check_pattern(c.pattern, enumType);
                 }
-                if (c.body) check_block(*c.body, ctx, scopes, retType);
+                if (c.guard) {
+                    TypeInfo gt = expr_.check(c.guard, ctx);
+                    if (gt.name != "bool" && gt.name != "unknown" && gt.name != "any") {
+                        DiagBuilder(result_, Severity::Error,
+                            "Match guard must be bool, got `" + gt.name + "`",
+                            "TC162", ctx.actionName()).emit();
+                    }
+                }
+                ReturnFlow caseFlow = ReturnFlow::NoReturn;
+                if (c.body) caseFlow = check_block(*c.body, ctx, scopes, retType);
+                if (c.guard || caseFlow != ReturnFlow::AlwaysReturn) allCasesReturn = false;
+            }
+
+            if (ed) {
+                std::unordered_set<std::string> covered;
+                bool hasWildcard = false;
+                std::function<void(const PatternPtr&)> collect;
+                collect = [&](const PatternPtr& pat) {
+                    if (!pat) return;
+                    std::visit([&](const auto& node) {
+                        using N = std::decay_t<decltype(node)>;
+                        if constexpr (std::is_same_v<N, PatWildcard> || std::is_same_v<N, PatBinding>) {
+                            hasWildcard = true;
+                        } else if constexpr (std::is_same_v<N, PatCtor>) {
+                            covered.insert(node.name);
+                        } else if constexpr (std::is_same_v<N, PatOr>) {
+                            for (const auto& alt : node.alts) collect(alt);
+                        }
+                    }, pat->node);
+                };
+                for (const auto& c : stmt.cases) collect(c.pattern);
+                if (!hasWildcard) {
+                    std::vector<std::string> missing;
+                    for (const auto& variant : ed->variants) {
+                        if (!covered.count(variant.name)) missing.push_back(variant.name);
+                    }
+                    if (!missing.empty()) {
+                        std::string list;
+                        for (size_t i = 0; i < missing.size(); ++i) {
+                            if (i) list += ", ";
+                            list += missing[i];
+                        }
+                        DiagBuilder(result_, Severity::Error,
+                            "Non-exhaustive match on `" + ed->name + "`; missing: " + list,
+                            "TC161", ctx.actionName())
+                            .hint("Cover all variants or add `case _:`")
+                            .emit();
+                    } else if (allCasesReturn) {
+                        flow = ReturnFlow::AlwaysReturn;
+                    }
+                } else if (allCasesReturn && hasWildcard) {
+                    flow = ReturnFlow::AlwaysReturn;
+                }
             }
         } else if constexpr (std::is_same_v<T, std::shared_ptr<ParallelStmt>>) {
             if (stmt) { auto guardP = scopes.push(); check_block(stmt->body, ctx, scopes, retType); }
@@ -1457,8 +2411,17 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
         } else if constexpr (std::is_same_v<T, PointerSetStmt>) {
             expr_.check(stmt.pointer, ctx);
             expr_.check(stmt.value, ctx);
+        } else if constexpr (std::is_same_v<T, IndexSetStmt>) {
+            expr_.check(stmt.object, ctx);
+            expr_.check(stmt.index, ctx);
+            expr_.check(stmt.value, ctx);
         } else if constexpr (std::is_same_v<T, ExprStmt>) {
-            expr_.check(stmt.expr, ctx);
+            TypeInfo et = expr_.check(stmt.expr, ctx);
+            if (et.name == "never") flow = ReturnFlow::AlwaysReturn;
+            if (stmt.expr && std::holds_alternative<FunctionCallExpr>(stmt.expr->node)) {
+                const auto& call = std::get<FunctionCallExpr>(stmt.expr->node);
+                if (call.name == "fail") flow = ReturnFlow::AlwaysReturn;
+            }
         }
     }, s);
     return flow;
@@ -1516,6 +2479,14 @@ void TypeChecker::pass_check_program(const Program& program, TCResult& out) {
     }
     std::unordered_set<std::string> seenEnum;
     for (auto& e : program.enums) if (!seenEnum.insert(e.name).second) DiagBuilder(out, Severity::Error, "Duplicate enum: " + e.name, "TC105", e.name).emit();
+    for (auto& e : program.enums) {
+        std::unordered_set<std::string> enumMethodSeen;
+        for (auto& m : e.methods) {
+            if (!enumMethodSeen.insert(m.name).second) {
+                DiagBuilder(out, Severity::Error, "Duplicate method " + m.name + " in enum " + e.name, "TC108", e.name).emit();
+            }
+        }
+    }
     std::unordered_set<std::string> seenAlias;
     for (auto& a : program.typeAliases) if (!seenAlias.insert(a.name).second) DiagBuilder(out, Severity::Error, "Duplicate type alias: " + a.name, "TC106", a.name).emit();
     std::unordered_set<std::string> seenE;
@@ -1557,6 +2528,7 @@ void TypeChecker::pass_check_program(const Program& program, TCResult& out) {
         CheckContext ctx; ctx.program=&program; ctx.currentAction=&a;
         ScopeManager scopes; // base scope
         ctx.scopes = &scopes;
+        ctx.expectedReturnType = a.returnType.empty() ? "void" : a.returnType;
         push_opaque_params(ctx, a.typeParams);
         // Warn if the action has return-value statements but no declared return type.
         if (a.returnType.empty() && block_has_value_return(a.body)) {
@@ -1621,7 +2593,7 @@ void TypeChecker::pass_check_program(const Program& program, TCResult& out) {
             return a.returnType;
         }());
         for (auto& frame : scopes.all()) for (auto& kv : frame) if (!kv.second.used) DiagBuilder(out, Severity::Warning, "Unused variable: " + kv.first, "TC120", a.name).emit();
-        if (!returns_void(a) && rf != ReturnFlow::AlwaysReturn) DiagBuilder(out, Severity::Error, "Missing return in action declared to return " + a.returnType, "TC121", a.name).emit();
+        if (!returns_void(a) && a.returnType != "never" && a.returnType != "unit" && rf != ReturnFlow::AlwaysReturn) DiagBuilder(out, Severity::Error, "Missing return in action declared to return " + a.returnType, "TC121", a.name).emit();
     }
 }
 
@@ -1716,9 +2688,17 @@ void TypeChecker::register_imported_module_builtins(const Program& program) {
         add("regex_find", 2, 2, "string");
         add("regex_replace", 3, 3, "string");
     }
-    if (program_imports_module(&program, "builtin/crypto")) {
+    if (program_imports_module(&program, "builtin/crypto") || program_imports_module(&program, "std/crypto")) {
         add("hash_fnv1a", 1, 1, "string");
+        add("hash_sha256", 1, 1, "string");
         add("random_bytes", 1, 1, "string");
+        add("aes_encrypt", 2, 2, "string");
+        add("aes_decrypt", 2, 2, "string");
+        add("crypto.sha256", 1, 1, "string");
+        add("crypto.hash", 1, 1, "string");
+        add("crypto.aes_encrypt", 2, 2, "string");
+        add("crypto.aes_decrypt", 2, 2, "string");
+        add("crypto.random_bytes", 1, 1, "string");
     }
     if (program_imports_module(&program, "builtin/binary")) {
         add("bin_new", 0, 0, "string");
@@ -1775,7 +2755,9 @@ void TypeChecker::register_imported_module_builtins(const Program& program) {
         add("perm_grant", 1, 1, "void"); add("perm_revoke", 1, 1, "void");
         add("perm_has", 1, 1, "bool"); add("perm_list", 0, 0, "string");
     }
-    if (program_imports_module(&program, "builtin/system") || program_imports_module(&program, "builtin/process") || program_imports_module(&program, "builtin/proc")) {
+    if (program_imports_module(&program, "builtin/system") || program_imports_module(&program, "builtin/process") ||
+        program_imports_module(&program, "builtin/proc") || program_imports_module(&program, "std/process") ||
+        program_imports_module(&program, "std/system")) {
         add("system.cmd", 1, 2, "string");
         add("system.execute", 1, 3, "int");
         add("system.output", 0, 0, "string");
@@ -1795,12 +2777,14 @@ void TypeChecker::register_imported_module_builtins(const Program& program) {
         add("perf.gc.pause", 0, 0, "void");
         add("perf.gc.resume", 0, 0, "void");
     }
-    if (program_imports_module(&program, "builtin/path") || program_imports_module(&program, "builtin/erepath")) {
+    if (program_imports_module(&program, "builtin/path") || program_imports_module(&program, "builtin/erepath") ||
+        program_imports_module(&program, "std/path")) {
         add("path_join", 1, -1, "string"); add("path_dirname", 1, 1, "string");
         add("path_basename", 1, 1, "string"); add("path_ext", 1, 1, "string");
         add("file_exists", 1, 1, "bool");
     }
-    if (program_imports_module(&program, "builtin/fs") || program_imports_module(&program, "builtin/erefs")) {
+    if (program_imports_module(&program, "builtin/fs") || program_imports_module(&program, "builtin/erefs") ||
+        program_imports_module(&program, "std/fs")) {
         add("read_text", 1, 1, "string"); add("write_text", 2, 2, "void"); add("append_text", 2, 2, "void");
         add("file_exists", 1, 1, "bool"); add("is_dir", 1, 1, "bool"); add("is_file", 1, 1, "bool");
         add("mkdirs", 1, 1, "void"); add("copy_file", 2, 2, "bool");
@@ -1813,14 +2797,26 @@ void TypeChecker::register_imported_module_builtins(const Program& program) {
         add("path_join", 1, -1, "string"); add("path_dirname", 1, 1, "string");
         add("path_basename", 1, 1, "string"); add("path_ext", 1, 1, "string");
         add("file_mtime", 1, 1, "int"); add("file_size", 1, 1, "int");
-        add("file_open", 2, 2, "string"); add("file_close", 1, 1, "bool");
+        add("file_open", 1, 2, "string"); add("file_close", 1, 1, "bool");
         add("file_read", 1, 2, "string"); add("file_write", 2, 2, "string");
         add("file_seek", 2, 3, "bool"); add("file_tell", 1, 1, "int");
         add("file_flush", 1, 1, "bool");
-        add("fopen", 2, 2, "string"); add("fclose", 1, 1, "bool");
-        add("fread", 1, 2, "string"); add("fwrite", 2, 2, "string");
-        add("fseek", 2, 3, "bool"); add("ftell", 1, 1, "int");
-        add("fflush", 1, 1, "bool");
+        add("fs.open", 1, 2, "string"); add("fs.close", 1, 1, "bool");
+        add("fs.read", 1, 1, "string"); add("fs.write", 2, 2, "void");
+    }
+    if (program_imports_module(&program, "std/pipe") || program_imports_module(&program, "builtin/pipe")) {
+        add("chan_new", 0, 1, "string");
+        add("chan_send", 2, 2, "void");
+        add("chan_recv", 1, 1, "string");
+        add("chan_try_send", 2, 2, "bool");
+        add("chan_try_recv", 1, 1, "string");
+        add("chan_close", 1, 1, "void");
+        add("chan_len", 1, 1, "int");
+        add("pipe.new", 0, 1, "string");
+        add("pipe.send", 2, 2, "void");
+        add("pipe.receive", 1, 1, "string");
+        add("pipe.close", 1, 1, "void");
+        add("pipe.len", 1, 1, "int");
     }
 }
 
@@ -1834,19 +2830,11 @@ void TypeChecker::init_builtins() {
     add("args_count",0,0,"int");
     add("args_get",1,1,"string");
     add("read_line",0,0,"string");
-    add("read_text",1,1,"string");
     add("input",0,1,"string");
     add("stderr_print",1,1,"void");
     add("exec",1,1,"int");
     add("spawn",1,1,"int");
     add("exit",1,1,"void");
-    add("toint",1,1,"int");
-    add("toInt",1,1,"int");
-    add("tostr",1,1,"string");
-    add("toString",1,1,"string");
-    add("tofloat",1,1,"double");
-    add("tobool",1,1,"bool");
-    // type constructors
     add("int",1,1,"int");
     add("float",1,1,"double");
     add("string",1,1,"string");
@@ -1857,6 +2845,17 @@ void TypeChecker::init_builtins() {
     add("__builtin_decltype",1,1,"string");
     add("__builtin_offsetof",2,2,"int");
     add("__builtin_is_base_of",2,2,"bool");
+    add("alloc",0,1,"pointer");
+    add("free",1,1,"void");
+    add("realloc",2,2,"pointer");
+    add("copy",3,3,"void");
+    add("move",3,3,"void");
+    add("fill",3,3,"void");
+    add("zero",2,2,"void");
+    add("heap",1,1,"unknown");
+    add("shared",1,1,"unknown");
+    add("weak",1,1,"unknown");
+    add("buffer",1,1,"unknown");
     add("dynamic_cast",2,2,"unknown");
     add("reinterpret_cast",2,2,"unknown");
     add("bit_cast",2,2,"unknown");
@@ -1870,7 +2869,6 @@ void TypeChecker::init_builtins() {
     add("http_get_resp",1,1,"string");
     add("tcp_connect",2,2,"string");
     add("tcp.connect",2,2,"string");
-    // Dynamic module loading (JS-style require) — always available
     add("load_elan",1,1,"string");
     add("load_elan_dir",1,1,"unknown");
     add("call_action",1,-1,"any");
@@ -1892,34 +2890,25 @@ void TypeChecker::init_builtins() {
     add("char_is_digit",1,1,"bool");
     add("char_is_alpha",1,1,"bool");
     add("char_is_space",1,1,"bool");
-    add("strbuf_new",0,1,"string");
-    add("strbuf_append",2,2,"void");
-    add("strbuf_to_string",1,1,"string");
-    add("strbuf_len",1,1,"int");
-    add("strbuf_clear",1,1,"void");
-    add("strbuf_reserve",2,2,"void");
-    add("strbuf_free",1,1,"void");
-    add("list_new",0,-1,"unknown");
-    add("list_push",2,2,"void");
-    add("list_get",2,2,"string");
-    add("list_len",1,1,"int");
-    add("list_join",2,2,"string");
-    add("map",2,2,"string");   // map(list, func) -> new list handle
-    add("filter",2,2,"string"); // filter(list, func) -> new list handle
-    add("reduce",3,3,"string"); // reduce(list, func, initial) -> accumulated value
-    add("dict_new",0,0,"unknown");
-    add("dict_set",3,3,"void");
-    add("dict_get",2,2,"string");
-    add("dict_has",2,2,"bool");
-    add("dict_keys",1,1,"unknown");
-    add("dict_size",1,1,"int");
+    add("map",2,2,"string");
+    add("filter",2,2,"string");
+    add("reduce",3,3,"string");
+    add("set_new",0,-1,"set<any>");
+    add("set_of",0,-1,"set<any>");
+    add("set_add",2,2,"bool");
+    add("set_has",2,2,"bool");
+    add("set_remove",2,2,"bool");
+    add("set_size",1,1,"int");
+    add("fail",1,1,"never");
+    add("mutex_new",0,0,"string");
+    add("mutex_lock",1,1,"void");
+    add("mutex_unlock",1,1,"void");
+    add("mutex_try_lock",1,1,"bool");
     add("language_name",0,0,"string");
     add("language_version",0,0,"string");
     add("plugin_core",2,2,"string");
     add("plugin_core_files",1,1,"string");
     add("plugin_core_keys",2,2,"string");
-    // Handle method dispatch types for req:/res:/ws:/http:/sse: handles
-    // req: handle methods
     add("req.body",0,0,"string");
     add("req.query",1,1,"string");
     add("req.header",1,1,"string");
@@ -1928,7 +2917,6 @@ void TypeChecker::init_builtins() {
     add("req.cookie",1,1,"string");
     add("req.file",1,1,"string");
     add("req.save_upload",2,2,"string");
-    // res: handle methods
     add("res.html",1,1,"void");
     add("res.json",1,1,"void");
     add("res.text",1,1,"void");
@@ -1937,7 +2925,6 @@ void TypeChecker::init_builtins() {
     add("res.header",2,2,"void");
     add("res.cookie",3,6,"void");
     add("res.end",0,0,"void");
-    // ws: handle methods
     add("ws.send",1,1,"bool");
     add("ws.send_binary",1,1,"bool");
     add("ws.recv",0,0,"string");
@@ -1945,18 +2932,15 @@ void TypeChecker::init_builtins() {
     add("ws.close",0,2,"void");
     add("ws.broadcast",1,1,"bool");
     add("ws.state",0,0,"string");
-    // resp: handle methods
     add("resp.status",0,0,"int");
     add("resp.body",0,0,"string");
     add("resp.header",1,1,"string");
     add("resp.json",0,0,"string");
-    // tcp: handle methods
     add("tcp.send",1,1,"int");
     add("tcp.recv",0,0,"string");
     add("tcp.recv_timeout",0,1,"string");
     add("tcp.close",0,0,"bool");
     add("tcp.state",0,0,"string");
-    // sse: handle methods
     add("sse.emit",2,2,"void");
     add("sse.close",0,0,"void");
 

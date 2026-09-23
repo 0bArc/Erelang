@@ -1,0 +1,24 @@
+@strict
+
+namespace Math {
+    public action add(int a, int b): int {
+        return a + b;
+    }
+
+    public action mul(int a, int b): int {
+        return a * b;
+    }
+}
+
+namespace Util {
+    public action twice(int x): int {
+        return Math::mul(x, 2);
+    }
+}
+
+public action main() {
+    print Math::add(2, 3);
+    print Util::twice(4);
+}
+
+run main;

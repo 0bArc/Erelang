@@ -1,0 +1,25 @@
+@strict
+
+enum Option<T> {
+    Some(T),
+    None
+}
+
+public action map_opt<T, U>(value: Option<T>, transform: action(T) -> U): Option<U> {
+    match (value) {
+        case Some(v): { return Option<U>.Some(transform(v)); }
+        case None: { return Option<U>.None; }
+    }
+}
+
+public action main() {
+    Option<int> src = Option<int>.Some(21);
+    Option<int> out = map_opt<int, int>(src, lambda(int x) => x * 2);
+    match (out) {
+        case Some(v): { print v; }
+        case None: { print "none"; }
+    }
+    print "function-types-ok";
+}
+
+run main;

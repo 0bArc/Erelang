@@ -1,0 +1,21 @@
+@strict
+
+enum Result<T, E> {
+    Ok(T),
+    Error(E)
+}
+
+public async action get(): Result<int, string> {
+    return Result<int, string>.Ok(7);
+}
+
+public async action main() {
+    Result<int, string> done = await get();
+    match (done) {
+        case Ok(v): { print v; }
+        case Error(e): { print e; }
+    }
+    print "async-result-await-ok";
+}
+
+run main;

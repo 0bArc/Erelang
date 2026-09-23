@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <bit>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -21,8 +22,19 @@ int g_nextListId = 1;
 std::unordered_map<int, std::vector<std::string>> g_lists;
 int g_nextDictId = 1;
 std::unordered_map<int, std::unordered_map<std::string, std::string>> g_dicts;
+int g_nextTupleId = 1;
+std::unordered_map<int, std::vector<std::string>> g_tuples;
 int g_nextPtrId = 1;
 std::unordered_map<int, std::string> g_ptrs;
+std::unordered_map<int, RawMemBlock> g_rawMem;
+int g_nextOwnId = 1;
+std::unordered_map<int, OwnState> g_owns;
+int g_nextSharedId = 1;
+std::unordered_map<int, SharedState> g_shareds;
+int g_nextWeakId = 1;
+std::unordered_map<int, WeakState> g_weaks;
+int g_nextBufferId = 1;
+std::unordered_map<int, BufferState> g_buffers;
 int g_nextFileId = 1;
 std::unordered_map<int, std::unique_ptr<std::fstream>> g_fileStreams;
 int g_nextStrBufId = 1;
@@ -32,27 +44,198 @@ int g_nextSetId = 1;
 std::unordered_map<int, std::unordered_set<std::string>> g_sets;
 int g_nextQueueId = 1;
 std::unordered_map<int, std::deque<std::string>> g_queues;
+int g_nextChanId = 1;
+std::unordered_map<int, std::shared_ptr<ChannelState>> g_channels;
+int g_nextMutexId = 1;
+std::unordered_map<int, std::shared_ptr<ScriptMutex>> g_mutexes;
 int g_nextClosureId = 1;
 std::unordered_map<int, ClosureData*> g_closures;
+int g_nextFutureId = 1;
+std::unordered_map<int, std::shared_ptr<FutureState>> g_futures;
+thread_local std::shared_ptr<FutureState> tls_current_future;
+
+void notify_channels_for_cancel() {
+    for (auto& kv : g_channels) {
+        if (kv.second) kv.second->cv.notify_all();
+    }
+}
+
+namespace {
+
+struct AsyncPoolState {
+    std::mutex mu;
+    std::condition_variable taskCv;
+    std::deque<std::function<void()>> tasks;
+    std::vector<std::thread> workers;
+    int busyWorkers{0};
+    int poolSize{0};
+    bool stopping{false};
+    bool started{false};
+};
+
+AsyncPoolState& async_pool() {
+    static AsyncPoolState state;
+    return state;
+}
+
+bool try_pop_async_task(std::function<void()>& out) {
+    auto& pool = async_pool();
+    std::lock_guard<std::mutex> lock(pool.mu);
+    if (pool.tasks.empty()) return false;
+    out = std::move(pool.tasks.front());
+    pool.tasks.pop_front();
+    return true;
+}
+
+void ensure_async_pool_started() {
+    auto& pool = async_pool();
+    std::lock_guard<std::mutex> lock(pool.mu);
+    if (pool.started) return;
+    unsigned hc = std::thread::hardware_concurrency();
+    if (hc < 2) hc = 2;
+    pool.poolSize = static_cast<int>(hc);
+    pool.started = true;
+    for (int i = 0; i < pool.poolSize; ++i) {
+        pool.workers.emplace_back([] {
+            auto& p = async_pool();
+            for (;;) {
+                std::function<void()> task;
+                {
+                    std::unique_lock<std::mutex> lk(p.mu);
+                    p.taskCv.wait(lk, [&] { return p.stopping || !p.tasks.empty(); });
+                    if (p.stopping && p.tasks.empty()) return;
+                    task = std::move(p.tasks.front());
+                    p.tasks.pop_front();
+                    ++p.busyWorkers;
+                }
+                try {
+                    task();
+                } catch (...) {
+                }
+                {
+                    std::lock_guard<std::mutex> lk(p.mu);
+                    --p.busyWorkers;
+                }
+            }
+        });
+    }
+}
+
+} // namespace
+
+void async_pool_submit(std::function<void()> task) {
+    ensure_async_pool_started();
+    auto& pool = async_pool();
+    {
+        std::lock_guard<std::mutex> lock(pool.mu);
+        pool.tasks.push_back(std::move(task));
+    }
+    pool.taskCv.notify_one();
+}
+
+void async_pool_release_slot() {
+    auto& pool = async_pool();
+    if (!pool.started) return;
+    std::lock_guard<std::mutex> lock(pool.mu);
+    if (pool.busyWorkers > 0) --pool.busyWorkers;
+}
+
+void async_pool_acquire_slot() {
+    auto& pool = async_pool();
+    if (!pool.started) return;
+    std::lock_guard<std::mutex> lock(pool.mu);
+    ++pool.busyWorkers;
+}
+
+void async_pool_help_while_waiting(const std::shared_ptr<FutureState>& fut) {
+    for (;;) {
+        {
+            std::unique_lock<std::mutex> lock(fut->mu);
+            if (fut->done || fut->cancelled) return;
+        }
+        std::function<void()> task;
+        if (try_pop_async_task(task)) {
+            try {
+                task();
+            } catch (...) {
+            }
+            continue;
+        }
+        std::unique_lock<std::mutex> lock(fut->mu);
+        fut->cv.wait_for(lock, std::chrono::milliseconds(1), [&] { return fut->done || fut->cancelled; });
+        if (fut->done || fut->cancelled) return;
+    }
+}
+
+void async_pool_shutdown() {
+    auto& pool = async_pool();
+    {
+        std::lock_guard<std::mutex> lock(pool.mu);
+        if (!pool.started) return;
+        pool.stopping = true;
+    }
+    pool.taskCv.notify_all();
+    for (auto& w : pool.workers) {
+        if (w.joinable()) w.join();
+    }
+    pool.workers.clear();
+    pool.started = false;
+    pool.stopping = false;
+    pool.busyWorkers = 0;
+    pool.poolSize = 0;
+    pool.tasks.clear();
+}
 
 void reset_global_container_state() {
     g_lists.clear();
     g_dicts.clear();
+    g_tuples.clear();
     g_ptrs.clear();
-    g_fileStreams.clear(); // destroys fstreams (flushes/closes files)
+    g_rawMem.clear();
+    g_owns.clear();
+    g_shareds.clear();
+    g_weaks.clear();
+    g_buffers.clear();
+    g_fileStreams.clear();
     g_strBuffers.clear();
     g_sets.clear();
     g_queues.clear();
+    g_channels.clear();
+    g_mutexes.clear();
+    {
+        std::vector<std::shared_ptr<FutureState>> pending;
+        for (auto& kv : g_futures) {
+            if (kv.second) pending.push_back(kv.second);
+        }
+        for (auto& fut : pending) {
+            {
+                std::lock_guard<std::mutex> cancelLock(fut->mu);
+                fut->cancelled = true;
+            }
+            fut->cv.notify_all();
+            std::unique_lock<std::mutex> lock(fut->mu);
+            fut->cv.wait(lock, [&] { return fut->done; });
+        }
+    }
+    g_futures.clear();
     for (auto& kv : g_closures) { if (kv.second) { kv.second->refCount = 1; kv.second->release(); } }
     g_closures.clear();
     g_nextListId = 1;
     g_nextDictId = 1;
+    g_nextTupleId = 1;
     g_nextPtrId = 1;
+    g_nextOwnId = 1;
+    g_nextSharedId = 1;
+    g_nextWeakId = 1;
+    g_nextBufferId = 1;
     g_nextFileId = 1;
     g_nextStrBufId = 1;
     g_nextSetId = 1;
     g_nextQueueId = 1;
+    g_nextChanId = 1;
+    g_nextMutexId = 1;
     g_nextClosureId = 1;
+    g_nextFutureId = 1;
 }
 
 std::string slurp_text(const fs::path& p) {
@@ -248,6 +431,13 @@ bool parse_runtime_map_type(const std::string& typeName, std::string& keyType, s
     return false;
 }
 
+bool parse_runtime_set_type(const std::string& typeName, std::string& elementType) {
+    constexpr const char* prefix = "set<";
+    if (typeName.rfind(prefix, 0) != 0 || typeName.back() != '>') return false;
+    elementType = typeName.substr(4, typeName.size() - 5);
+    return !elementType.empty();
+}
+
 bool runtime_generic_compatible(const std::string& expected, const std::string& actual) {
     if (expected == "any" || expected == "unknown") return true;
     if (actual == "any" || actual == "unknown") return true;
@@ -289,6 +479,14 @@ bool runtime_declared_type_matches(const std::string& declaredTypeRaw, const std
         std::string actualMapValue;
         if (!parse_runtime_map_type(actualType, actualMapKey, actualMapValue)) return false;
         return runtime_generic_compatible(declaredMapKey, actualMapKey) && runtime_generic_compatible(declaredMapValue, actualMapValue);
+    }
+
+    if (declaredType == "set") return actualType.rfind("set", 0) == 0;
+    std::string declaredSetElem;
+    if (parse_runtime_set_type(declaredType, declaredSetElem)) {
+        std::string actualSetElem;
+        if (!parse_runtime_set_type(actualType, actualSetElem)) return false;
+        return runtime_generic_compatible(declaredSetElem, actualSetElem);
     }
 
     return true;
@@ -348,6 +546,153 @@ const Action* find_struct_method(const StructDecl& decl, std::string_view name) 
         if (m.name == name) return &m;
     }
     return nullptr;
+}
+
+const EnumDecl* find_enum_decl(const Program& program, std::string_view name) {
+    std::string_view bare = name;
+    if (bare.rfind("enum:", 0) == 0) bare = bare.substr(5);
+    const auto lt = bare.find('<');
+    if (lt != std::string_view::npos) bare = bare.substr(0, lt);
+    for (const auto& e : program.enums) {
+        if (e.name == bare) return &e;
+    }
+    return nullptr;
+}
+
+const Action* find_enum_method(const EnumDecl& decl, std::string_view name) {
+    for (const auto& m : decl.methods) {
+        if (m.name == name) return &m;
+    }
+    return nullptr;
+}
+
+namespace {
+
+ExprPtr make_ident(std::string name) {
+    return std::make_shared<Expr>(Expr{ ExprIdent{ std::move(name) } });
+}
+
+ExprPtr make_string(std::string text) {
+    return std::make_shared<Expr>(Expr{ ExprString{ std::move(text) } });
+}
+
+PatternPtr make_binding(std::string name) {
+    return std::make_shared<Pattern>(Pattern{ PatBinding{ std::move(name) } });
+}
+
+PatternPtr make_ctor(std::string name, std::vector<PatternPtr> args) {
+    return std::make_shared<Pattern>(Pattern{ PatCtor{ std::move(name), std::move(args) } });
+}
+
+std::shared_ptr<Block> make_return_block(ExprPtr value) {
+    auto body = std::make_shared<Block>();
+    body->stmts.push_back(ReturnStmt{ std::move(value) });
+    return body;
+}
+
+std::shared_ptr<Block> make_fail_block(std::string message) {
+    auto body = std::make_shared<Block>();
+    FunctionCallExpr call;
+    call.name = "fail";
+    call.args.push_back(make_string(std::move(message)));
+    body->stmts.push_back(ExprStmt{ std::make_shared<Expr>(Expr{ std::move(call) }) });
+    return body;
+}
+
+bool enum_has_method(const EnumDecl& decl, std::string_view name) {
+    for (const auto& m : decl.methods) {
+        if (m.name == name) return true;
+    }
+    return false;
+}
+
+std::string enum_bare_name(const std::string& name) {
+    const auto pos = name.rfind("::");
+    if (pos == std::string::npos) return name;
+    return name.substr(pos + 2);
+}
+
+Action make_option_unwrap() {
+    Action a;
+    a.name = "unwrap";
+    a.returnType = "T";
+    a.visibility = Visibility::Public;
+    MatchStmt ms;
+    ms.selector = make_ident("self");
+    ms.cases.push_back(MatchCase{ make_ctor("Some", { make_binding("v") }), make_return_block(make_ident("v")) });
+    ms.cases.push_back(MatchCase{ make_ctor("None", {}), make_fail_block("unwrap() called on `None`") });
+    a.body.stmts.push_back(std::move(ms));
+    return a;
+}
+
+Action make_option_unwrap_or() {
+    Action a;
+    a.name = "unwrap_or";
+    a.params.push_back(Param{ "default", "T" });
+    a.returnType = "T";
+    a.visibility = Visibility::Public;
+    MatchStmt ms;
+    ms.selector = make_ident("self");
+    ms.cases.push_back(MatchCase{ make_ctor("Some", { make_binding("v") }), make_return_block(make_ident("v")) });
+    ms.cases.push_back(MatchCase{ make_ctor("None", {}), make_return_block(make_ident("default")) });
+    a.body.stmts.push_back(std::move(ms));
+    return a;
+}
+
+Action make_result_unwrap() {
+    Action a;
+    a.name = "unwrap";
+    a.returnType = "T";
+    a.visibility = Visibility::Public;
+    MatchStmt ms;
+    ms.selector = make_ident("self");
+    ms.cases.push_back(MatchCase{ make_ctor("Ok", { make_binding("v") }), make_return_block(make_ident("v")) });
+    ms.cases.push_back(MatchCase{ make_ctor("Error", { make_binding("e") }), make_fail_block("unwrap() called on `Error`") });
+    a.body.stmts.push_back(std::move(ms));
+    return a;
+}
+
+Action make_result_ok() {
+    Action a;
+    a.name = "ok";
+    a.returnType = "Option<T>";
+    a.visibility = Visibility::Public;
+    MatchStmt ms;
+    ms.selector = make_ident("self");
+    {
+        FunctionCallExpr someCall;
+        someCall.name = "Option.Some";
+        someCall.args.push_back(make_ident("v"));
+        ms.cases.push_back(MatchCase{
+            make_ctor("Ok", { make_binding("v") }),
+            make_return_block(std::make_shared<Expr>(Expr{ std::move(someCall) }))
+        });
+    }
+    {
+        FunctionCallExpr noneCall;
+        noneCall.name = "Option.None";
+        ms.cases.push_back(MatchCase{
+            make_ctor("Error", { make_binding("e") }),
+            make_return_block(std::make_shared<Expr>(Expr{ std::move(noneCall) }))
+        });
+    }
+    a.body.stmts.push_back(std::move(ms));
+    return a;
+}
+
+} // namespace
+
+void inject_standard_enum_methods(Program& program) {
+    for (auto& en : program.enums) {
+        const std::string bare = enum_bare_name(en.name);
+        if (bare == "Option") {
+            if (!enum_has_method(en, "unwrap")) en.methods.push_back(make_option_unwrap());
+            if (!enum_has_method(en, "unwrap_or")) en.methods.push_back(make_option_unwrap_or());
+        } else if (bare == "Result") {
+            if (!enum_has_method(en, "unwrap")) en.methods.push_back(make_result_unwrap());
+            if (!enum_has_method(en, "ok")) en.methods.push_back(make_result_ok());
+        }
+    }
 }
 
 std::string encode_enum_variant(const std::string& tag, const std::vector<std::string>& payloads) {

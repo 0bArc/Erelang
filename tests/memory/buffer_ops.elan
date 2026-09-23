@@ -1,0 +1,23 @@
+@strict
+
+public action main() {
+    buffer<u8> data = buffer<u8>(4);
+    data[0] = 42;
+    data[1] = 7;
+    print data[0];
+    print data.len();
+    print data.cap();
+    data.push(9);
+    print data.len();
+    print data.pop();
+    data.resize(8);
+    print data.len();
+    data.reserve(16);
+    print data.cap();
+    data.clear();
+    print data.len();
+    *u8 p = data.ptr();
+    print "buffer-ok";
+}
+
+run main;

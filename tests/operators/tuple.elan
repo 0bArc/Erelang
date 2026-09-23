@@ -1,0 +1,11 @@
+@strict
+
+public action main() {
+    let pair = (1, "hello");
+    let (a, b) = pair;
+    print a;
+    print b;
+    print "operators-tuple-ok";
+}
+
+run main;

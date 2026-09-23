@@ -1,0 +1,11 @@
+@strict
+
+public async action main() {
+    string lock = mutex_new();
+    mutex_lock(lock);
+    print "locked";
+    mutex_unlock(lock);
+    print "concurrency-mutex-ok";
+}
+
+run main;

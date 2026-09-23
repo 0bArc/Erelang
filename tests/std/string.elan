@@ -1,0 +1,9 @@
+@strict
+
+public action main() {
+    string s = "ab" + "cd";
+    print s;
+    print "std-string-ok";
+}
+
+run main;

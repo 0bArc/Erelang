@@ -1,0 +1,39 @@
+@strict
+
+#include <std/pipe>
+
+public async action producer(string ch) {
+    ch.send("one");
+    ch.send("two");
+    ch.close();
+}
+
+public async action blocked(string ch) {
+    string v = ch.receive();
+    print v;
+}
+
+public async action main() {
+    string ch = pipe.new(2);
+    any fut = producer(ch);
+    print ch.receive();
+    print ch.receive();
+    await fut;
+
+    string lock = mutex_new();
+    mutex_lock(lock);
+    print "locked";
+    mutex_unlock(lock);
+
+    string hang = pipe.new();
+    any slow = blocked(hang);
+    any cancelled = slow.cancel();
+    print cancelled;
+    try {
+        await slow;
+    } catch (e) {
+        print "cancelled-ok";
+    }
+}
+
+run main;

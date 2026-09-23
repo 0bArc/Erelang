@@ -1,0 +1,26 @@
+@strict
+
+struct User {
+    string name;
+    int age;
+}
+
+public action main() {
+    User user;
+    user.name = "Ada";
+    user.age = 36;
+
+    let { name, age } = user;
+    print name;
+    print age;
+
+    Array<int> values = [10, 20, 30];
+    let [first, second] = values;
+    print first;
+    print second;
+
+    let { name: renamed } = user;
+    print renamed;
+}
+
+run main;

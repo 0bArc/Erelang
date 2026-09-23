@@ -1,0 +1,27 @@
+@strict
+
+enum Option<T> {
+    Some(T),
+    None
+}
+
+enum Result<T, E> {
+    Ok(T),
+    Error(E)
+}
+
+public action main() {
+    Option<int> o = Option<int>.Some(42);
+    let Some(x) = o;
+    print x;
+
+    Result<int, string> r = Result<int, string>.Ok(7);
+    let Ok(v) = r;
+    print v;
+
+    Option<int> empty = Option<int>.None;
+    let None() = empty;
+    print "none-ok";
+}
+
+run main;

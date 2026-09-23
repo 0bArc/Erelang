@@ -1,0 +1,13 @@
+@strict
+
+public action main() {
+    any add1 = lambda(int x) => x + 1;
+    print add1(41);
+    any sum = lambda(int a, int b) {
+        return a + b;
+    };
+    print sum(10, 20);
+    print "closures-ok";
+}
+
+run main;

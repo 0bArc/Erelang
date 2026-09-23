@@ -2,12 +2,16 @@ import * as vscode from 'vscode';
 import {
   ENTITY_RE, ACTION_RE, TYPED_FUNC_RE, FIELD_RE, STRUCT_RE, ENUM_RE,
   TYPE_ALIAS_RE, TRAIT_RE, HOOK_RE, LET_RE, GLOBAL_RE, LANGUAGE_KEYWORDS,
+  NAMESPACE_RE,
 } from './constants';
 import {
   CollectedSymbols, DocumentIndex, EntityMembers, OutlineSymbol, WordToken, RangeToken,
 } from './types';
 
 const KEYWORD_SET = new Set<string>(LANGUAGE_KEYWORDS);
+
+/** Above this, skip full-file symbol scan — keeps AI bulk edits from freezing the host. */
+export const MAX_INDEX_LINES = 8_000;
 
 const _indexCache = new Map<string, DocumentIndex>();
 
@@ -18,6 +22,17 @@ function emptySymbols(): CollectedSymbols {
     arrays: new Set(), dictionaries: new Set(),
     structs: new Set(), enums: new Set(), typeAliases: new Set(),
     structFields: new Map(), enumMembers: new Map(),
+    namespaces: new Set(), namespaceMembers: new Map(),
+  };
+}
+
+function emptyIndex(version: number): DocumentIndex {
+  return {
+    version,
+    symbols: emptySymbols(),
+    entityInstances: new Map(),
+    entityMembers: { actions: new Map(), fields: new Map() },
+    outline: [],
   };
 }
 
@@ -103,12 +118,22 @@ function buildDocumentIndex(doc: vscode.TextDocument): DocumentIndex {
   let activeStruct: string | null = null;
   let activeEnum: string | null = null;
   let currentEntity: string | null = null;
+  let currentNamespace: string | null = null;
   let braceDepth = 0;
+  let namespaceDepth = 0;
 
   const end = doc.lineCount - 1;
   for (let i = 0; i <= end; i++) {
     const text = doc.lineAt(i).text;
     let m: RegExpExecArray | null;
+
+    if ((m = NAMESPACE_RE.exec(text))) {
+      out.namespaces.add(m[1]);
+      currentNamespace = m[1];
+      if (!out.namespaceMembers.has(m[1])) out.namespaceMembers.set(m[1], new Set());
+      namespaceDepth = 0;
+      outline.push({ name: m[1], kind: 'namespace', line: i });
+    }
 
     if ((m = ENTITY_RE.exec(text))) {
       out.entities.add(m[1]);
@@ -138,10 +163,12 @@ function buildDocumentIndex(doc: vscode.TextDocument): DocumentIndex {
       out.actions.add(m[1]);
       outline.push({ name: m[1], kind: 'action', line: i });
       if (currentEntity) entityActions.get(currentEntity)?.add(m[1]);
+      if (currentNamespace) out.namespaceMembers.get(currentNamespace)?.add(m[1]);
     }
     if ((m = TYPED_FUNC_RE.exec(text))) {
       out.actions.add(m[1]);
       if (currentEntity) entityActions.get(currentEntity)?.add(m[1]);
+      if (currentNamespace) out.namespaceMembers.get(currentNamespace)?.add(m[1]);
     }
     if ((m = FIELD_RE.exec(text))) {
       out.fields.add(m[1]);
@@ -192,6 +219,12 @@ function buildDocumentIndex(doc: vscode.TextDocument): DocumentIndex {
       if (braceDepth <= 0 && text.includes('}')) currentEntity = null;
     }
 
+    if (currentNamespace !== null) {
+      namespaceDepth += (text.match(/\{/g) ?? []).length;
+      namespaceDepth -= (text.match(/\}/g) ?? []).length;
+      if (namespaceDepth <= 0 && text.includes('}')) currentNamespace = null;
+    }
+
     if (activeStruct) {
       const sf = /^\s*([A-Za-z_]\w*)\s*:\s*([A-Za-z_][\w<>,]*)/.exec(text);
       if (sf) out.structFields.get(activeStruct)?.add(sf[1]);
@@ -220,6 +253,11 @@ export function getDocumentIndex(doc: vscode.TextDocument): DocumentIndex {
   const key = doc.uri.toString();
   const hit = _indexCache.get(key);
   if (hit && hit.version === doc.version) return hit;
+  if (doc.lineCount > MAX_INDEX_LINES) {
+    const empty = emptyIndex(doc.version);
+    _indexCache.set(key, empty);
+    return empty;
+  }
   const built = buildDocumentIndex(doc);
   _indexCache.set(key, built);
   return built;

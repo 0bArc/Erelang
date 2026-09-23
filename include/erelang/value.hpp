@@ -34,6 +34,10 @@ enum class HandleKind : uint8_t {
     Queue,
     Ws,
     Http,
+    Own,
+    Shared,
+    Weak,
+    Buffer,
     Unknown
 };
 

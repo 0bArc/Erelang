@@ -1,11 +1,11 @@
 # Filesystem
 
 ```elan
-#include <builtin/fs> as fs
-#include <builtin/path> as path
+#include <std/fs>
+#include <std/path>
 ```
 
-`builtin/path` alone gives path helpers + `file_exists`. For read/write/copy/list, import `builtin/fs`.
+`std/path` (or `builtin/path`) alone gives path helpers + `file_exists`. For read/write/copy/list, import `std/fs`.
 
 ## High-level API
 
@@ -172,23 +172,18 @@ run main;
 
 `fs.list` / `fs.dirs` / `fs.files` throw if the path is missing or not a directory (they do not return an empty list for typos).
 
-## Streaming handles
-
-For reading/writing in chunks without loading the whole file:
+Streaming handles — use `fs.open` and handle methods (not bare `file_*` globals):
 
 ```elan
-@erelang
-#include <builtin/fs> as fs
+#include <std/fs>
 
 public action main {
-    h = file_open("out.bin", "wb");
-    file_write(h, "chunk1");
-    file_write(h, "chunk2");
-    file_flush(h);
-    file_close(h);
+    string h = fs.open("out.bin", "wb");
+    h.write("chunk1");
+    h.write("chunk2");
+    h.flush();
+    h.close();
 }
-
-run main;
 ```
 
 See [low-level.md](low-level.md) for the full handle API.

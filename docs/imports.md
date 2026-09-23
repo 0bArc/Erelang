@@ -68,6 +68,13 @@ Paths are relative to the importing file. Unused included actions warn with `TC1
 
 ## Import resolution
 
-- Paths relative to the importing file
-- `builtin/*` resolves internally: no file load
-- Imports are loaded recursively before the main program runs
+Resolution order for local modules:
+
+1. Path relative to the importing `.elan` file
+2. Current working directory
+3. `std/` next to the runner (if present)
+4. Embedded `mod://` payloads (compile-time embeds)
+
+`builtin/*` resolves internally: no file load. Imports load recursively before the main program runs.
+
+**Package manager boundary:** local path `#include` / `import` is the module system. There is no remote registry / `erelang.toml` package fetch. Use namespaces (`Foo::bar`) for name scoping inside a program.

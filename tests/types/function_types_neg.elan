@@ -1,0 +1,12 @@
+// expect: Expected )
+@strict
+
+public action bad(transform: fn(int)->int): int {
+    return transform(1);
+}
+
+public action main() {
+    print "unreachable";
+}
+
+run main;

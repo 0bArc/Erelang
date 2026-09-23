@@ -68,22 +68,10 @@
             { "name": "constant.character.escape.erelang", "match": "\\\\." },
             {
               "name": "meta.interpolation.erelang",
-              "begin": "\\{",
-              "beginCaptures": {
-                "0": { "name": "punctuation.definition.template-expression.begin.erelang" }
-              },
-              "end": "\\}",
-              "endCaptures": {
-                "0": { "name": "punctuation.definition.template-expression.end.erelang" }
-              },
-              "patterns": [
-                { "include": "#numbers" },
-                { "include": "#constants" },
-                {
-                  "name": "variable.other.erelang",
-                  "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
-                }
-              ]
+              "match": "\\{([A-Za-z_][A-Za-z0-9_]*)\\}",
+              "captures": {
+                "1": { "name": "variable.other.erelang" }
+              }
             }
           ]
         },
@@ -183,7 +171,7 @@
       "patterns": [
         {
           "name": "storage.type.erelang",
-          "match": "\\b(void|int|double|float|string|str|bool|char|auto|any|pointer|Array|Map|HashMap|array|map|hashmap|dictionary|u8|u16|u32|u64|i8|i16|i32|i64|uint|unsigned)\\b"
+          "match": "\\b(void|int|double|float|string|str|bool|char|auto|any|pointer|unit|never|Array|Map|HashMap|array|map|hashmap|dictionary|set|Set|u8|u16|u32|u64|i8|i16|i32|i64|uint|unsigned)\\b"
         },
         {
           "name": "storage.type.erelang",
@@ -221,7 +209,7 @@
       "patterns": [
         {
           "name": "support.function.builtin.erelang",
-          "match": "\\b(print|PRINT|sleep|input|now_ms|now_iso|toint|tofloat|tostr|toString|tobool)\\b"
+          "match": "\\b(print|PRINT|sleep|input|now_ms|now_iso|int|float|string|bool|alloc|free|realloc|copy|move|fill|zero|sizeof|alignof|heap|shared|weak|buffer)\\b"
         }
       ]
     },
@@ -240,11 +228,19 @@
     "scopeAccess": {
       "patterns": [
         {
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(::)\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+          "captures": {
+            "1": { "name": "entity.name.namespace.erelang" },
+            "2": { "name": "punctuation.accessor.erelang" },
+            "3": { "name": "entity.name.function.erelang" }
+          }
+        },
+        {
           "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(::)\\s*([A-Za-z_][A-Za-z0-9_]*)\\b",
           "captures": {
-            "1": { "name": "entity.name.type.erelang" },
+            "1": { "name": "entity.name.namespace.erelang" },
             "2": { "name": "punctuation.accessor.erelang" },
-            "3": { "name": "variable.other.constant.erelang" }
+            "3": { "name": "entity.name.type.erelang" }
           }
         }
       ]
@@ -282,6 +278,7 @@
         { "name": "keyword.operator.assignment.erelang", "match": "\\+=|-=|\\*=|/=|%=|=" },
         { "name": "keyword.operator.logical.erelang", "match": "&&|\\|\\||!" },
         { "name": "keyword.operator.arithmetic.erelang", "match": "\\+\\+|--|[+\\-*/%]" },
+        { "name": "keyword.operator.range.erelang", "match": "\\.\\.<|\\.\\." },
         { "name": "keyword.operator.erelang", "match": "::|\\.\\.\\.|\\?\\?" }
       ]
     },

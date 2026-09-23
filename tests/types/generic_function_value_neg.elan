@@ -1,0 +1,13 @@
+// expect: TC010
+@strict
+
+public action id<T>(x: T): T {
+    return x;
+}
+
+public action main() {
+    any f = id;
+    print f(3);
+}
+
+run main;

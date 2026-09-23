@@ -1,0 +1,18 @@
+@strict
+
+enum Color {
+    Red,
+    Green,
+    Blue
+}
+
+public action main() {
+    Color c = Color.Red;
+    match (c) {
+        case Red: {
+            print "red";
+        }
+    }
+}
+
+run main;

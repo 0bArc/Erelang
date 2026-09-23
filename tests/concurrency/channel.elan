@@ -1,0 +1,20 @@
+@strict
+
+#include <std/pipe>
+
+public async action producer(string ch) {
+    ch.send("one");
+    ch.send("two");
+    ch.close();
+}
+
+public async action main() {
+    string ch = pipe.new(2);
+    any fut = producer(ch);
+    print ch.receive();
+    print ch.receive();
+    await fut;
+    print "concurrency-chan-ok";
+}
+
+run main;

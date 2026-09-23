@@ -171,6 +171,10 @@ int Runtime::run(const Program& program) const {
     // Park thread-builtin workers on every exit path (including exceptions) so
     // they can never outlive this Program/Runtime.
     struct ParkGuard { ~ParkGuard() { Runtime::park_worker_threads(); } } parkGuard;
+    struct DebugMainGuard {
+        DebugMainGuard() { Runtime::debug_enter_main(); }
+        ~DebugMainGuard() { Runtime::debug_leave_main(); }
+    } debugMainGuard;
     std::string entry = program.runTarget.value_or("main");
     const Action* a = find_action(program, entry);
     if (!a) throw std::runtime_error("Action not found: " + entry);
@@ -213,6 +217,11 @@ int Runtime::run(const Program& program) const {
     }
 
     prepare_action_slots(rootEnv, *a);
+    if (a->isAsync) async_root_enter();
+    struct AsyncRootGuard {
+        bool active;
+        ~AsyncRootGuard() { if (active) async_root_leave(); }
+    } asyncRootGuard{a->isAsync};
     exec_block(a->body, program, ctx, rootEnv);
     join_threads(ctx.threads);
 
@@ -228,6 +237,7 @@ int Runtime::run(const Program& program) const {
     dispatch_plugin_hooks(program, "onunload", true);
 
     currentProgram_ = nullptr;
+    async_pool_shutdown();
     return 0;
 }
 

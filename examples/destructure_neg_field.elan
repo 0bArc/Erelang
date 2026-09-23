@@ -1,0 +1,13 @@
+@strict
+
+struct User {
+    string name;
+    int age;
+}
+
+public action main() {
+    User user;
+    let { missing } = user;
+}
+
+run main;

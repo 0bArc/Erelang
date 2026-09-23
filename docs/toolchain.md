@@ -23,6 +23,14 @@
 # Run a script
 erelang script.elan
 
+# Format a script (subset: indent, braces, action layout)
+erelang --fmt script.elan
+erelang --fmt --check script.elan   # exit 1 if would change
+
+# Emit markdown API list from public actions/structs/enums
+erelang --docgen script.elan
+erelang --docgen script.elan --out api.md
+
 # Emit intermediate representation
 erelang --emit-ir script.elan --out script.eir
 
@@ -33,11 +41,14 @@ erelang --emit-asm script.elan --out script.asm
 erelang --help
 ```
 
+The VS Code extension (`erevos-language/`) provides highlighting, completions, and diagnostics in-process. It is **not** a DAP debugger or a separate language-server process.
+
 ## CMake options
 
 | Flag | Effect |
 |------|--------|
-| `ERELANG_EXPERIMENTAL=ON` | threads + monitor builtins |
+| `ERELANG_EXPERIMENTAL=ON` (default) | threads + monitor builtins |
+| `ERELANG_EXPERIMENTAL=OFF` | stubs return `error:experimental_disabled` |
 | `BUILD_SHARED_RUNTIME=ON` | build `erelang.dll` |
 | `ERELANG_EMBED_PAYLOAD=ON` | embed static lib in runner for portability |
 | `ERELANG_BUNDLE_MINGW_RUNTIME=ON` | copy MinGW DLLs next to exe |

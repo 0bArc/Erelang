@@ -217,9 +217,21 @@ test('textmate grammar keeps method and property scopes distinct', () => {
     grammar.repository.memberAccess.patterns[1].captures['2'].name,
     'variable.other.constant.erelang',
   );
-  assert.ok(grammar.repository.strings.patterns[0].patterns.some(
+  const interp = grammar.repository.strings.patterns[0].patterns.find(
     p => p.name === 'meta.interpolation.erelang',
-  ));
+  );
+  assert.ok(interp);
+  assert.ok(interp.match, 'interpolation must be a single match, not begin/end');
+  assert.ok(!interp.begin, 'interpolation must not open a begin/end subcontext');
+  assert.ok(!interp.patterns, 'interpolation must not include nested grammar rules');
+  assert.match(interp.match, /\[A-Za-z_\]/);
   assert.ok(grammar.repository.foreachHeader.patterns[0].match);
   assert.ok(!grammar.repository.foreachHeader.patterns[0].begin);
+});
+
+test('large documents skip full symbol index', () => {
+  const { MAX_INDEX_LINES } = require('../out/symbols');
+  const doc = document(new Array(MAX_INDEX_LINES + 1).fill('action big() {}'));
+  const symbols = collect(doc);
+  assert.equal(symbols.actions.size, 0);
 });

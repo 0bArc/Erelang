@@ -1,0 +1,16 @@
+@strict
+
+#include <std/fs>
+
+public action main() {
+    string path = "tests_tmp_file_handle.txt";
+    fs.write(path, "ABCDEFGH");
+    string h = fs.open(path, "r");
+    string t = h.read(8);
+    h.close();
+    print t;
+    fs.remove(path);
+    print "std-file-handle-ok";
+}
+
+run main;

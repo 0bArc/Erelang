@@ -1,0 +1,11 @@
+@strict
+
+#include <builtin/network> as net
+
+public action main() {
+    print net.json_encode("{\"a\":1}");
+    any v = net.json_decode("{\"x\":1}");
+    print "std-json-ok";
+}
+
+run main;

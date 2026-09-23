@@ -1,0 +1,15 @@
+@strict
+
+public action main() {
+    let pair = (1, "hello");
+    let (a, b) = pair;
+    print a;
+    print b;
+
+    let (x, name, active) = (42, "Sander", true);
+    print x;
+    print name;
+    print active;
+}
+
+run main;

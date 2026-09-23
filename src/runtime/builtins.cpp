@@ -932,40 +932,6 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         std::cerr << argS(0) << "\n";
         return {};
     }
-    if (nameStr == "option_none" || nameStr == "option.none") {
-        return "option:none";
-    }
-    if (nameStr == "option_some" || nameStr == "option.some") {
-        return std::string("option:some:") + argS(0);
-    }
-    if (nameStr == "option_is_some" || nameStr == "option.is_some") {
-        const std::string v = argS(0);
-        return (v.rfind("option:some:", 0) == 0) ? "true" : "false";
-    }
-    if (nameStr == "option_unwrap_or" || nameStr == "option.unwrap_or") {
-        const std::string v = argS(0);
-        if (v.rfind("option:some:", 0) == 0) {
-            return v.substr(std::string("option:some:").size());
-        }
-        return argS(1);
-    }
-    if (nameStr == "result_ok" || nameStr == "result.ok") {
-        return std::string("result:ok:") + argS(0);
-    }
-    if (nameStr == "result_err" || nameStr == "result.err") {
-        return std::string("result:err:") + argS(0);
-    }
-    if (nameStr == "result_is_ok" || nameStr == "result.is_ok") {
-        const std::string v = argS(0);
-        return (v.rfind("result:ok:", 0) == 0) ? "true" : "false";
-    }
-    if (nameStr == "result_unwrap_or" || nameStr == "result.unwrap_or") {
-        const std::string v = argS(0);
-        if (v.rfind("result:ok:", 0) == 0) {
-            return v.substr(std::string("result:ok:").size());
-        }
-        return argS(1);
-    }
     if (nameStr == "input") {
         if (!args.empty()) {
             std::string msg = argS(0);
@@ -999,7 +965,8 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         return {};
     }
     if (nameStr == "file_open") {
-        std::string mode = argS(1);
+        std::string mode = args.size() >= 2 ? argS(1) : std::string("r+");
+        if (mode.empty()) mode = "r+";
         std::ios::openmode openMode = std::ios::binary;
         if (mode == "r" || mode == "rb") {
             openMode |= std::ios::in;
@@ -1316,14 +1283,17 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
     // Level and guard are no-ops at runtime (typechecker enforces)
     if (nameStr == "debug.level.set") { return argS(0); }
     if (nameStr == "debug.guard") { return argS(0); }
+    if (nameStr == "fail") {
+        throw std::runtime_error(argS(0));
+    }
     // Thread helpers (spawn/join/kill live in experimental threads module)
-    if (nameStr == "thread.sleep") {
+    if (nameStr == "thread.sleep" || nameStr == "thread_sleep") {
         int ms = static_cast<int>(to_int(argS(0)));
         std::this_thread::sleep_for(std::chrono::milliseconds(ms));
         return {};
     }
     // thread.result stub until result tracking is wired deeper
-    if (nameStr == "thread.result") {
+    if (nameStr == "thread.result" || nameStr == "thread_result") {
         return {};
     }
     if (nameStr == "strbuf_new") {
@@ -1382,7 +1352,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         it->second.reserve(static_cast<std::size_t>(cap));
         return {};
     }
-    if (nameStr == "set_new") {
+    if (nameStr == "set_new" || nameStr == "set_of") {
         const int id = g_nextSetId++;
         g_sets[id] = {};
         for (const auto& a : args) g_sets[id].insert(eval_string(*a, env));
@@ -1521,6 +1491,169 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         g_queues[id].clear();
         return {};
     }
+    if (nameStr == "chan_new") {
+        const int id = g_nextChanId++;
+        auto ch = std::make_shared<ChannelState>();
+        if (!args.empty()) {
+            int cap = static_cast<int>(to_int(argS(0)));
+            if (cap < 0) cap = 0;
+            ch->capacity = cap;
+        }
+        g_channels[id] = ch;
+        return std::string("chan:") + std::to_string(id);
+    }
+    if (nameStr == "chan_send") {
+        const std::string h = argS(0);
+        if (h.rfind("chan:", 0) != 0) throw std::runtime_error("chan_send: invalid handle");
+        const int id = to_int(h.substr(5));
+        auto it = g_channels.find(id);
+        if (it == g_channels.end() || !it->second) throw std::runtime_error("chan_send: unknown channel");
+        auto ch = it->second;
+        std::unique_lock<std::mutex> lock(ch->mu);
+        while (true) {
+            if (tls_current_future && tls_current_future->cancelled) {
+                throw std::runtime_error("future cancelled");
+            }
+            if (ch->closed || ch->capacity == 0 || static_cast<int>(ch->q.size()) < ch->capacity) {
+                break;
+            }
+            ch->cv.wait_for(lock, std::chrono::milliseconds(25));
+        }
+        if (tls_current_future && tls_current_future->cancelled) {
+            throw std::runtime_error("future cancelled");
+        }
+        if (ch->closed) throw std::runtime_error("chan_send: channel closed");
+        ch->q.push_back(argS(1));
+        ch->cv.notify_all();
+        return {};
+    }
+    if (nameStr == "chan_recv") {
+        const std::string h = argS(0);
+        if (h.rfind("chan:", 0) != 0) throw std::runtime_error("chan_recv: invalid handle");
+        const int id = to_int(h.substr(5));
+        auto it = g_channels.find(id);
+        if (it == g_channels.end() || !it->second) throw std::runtime_error("chan_recv: unknown channel");
+        auto ch = it->second;
+        std::unique_lock<std::mutex> lock(ch->mu);
+        while (true) {
+            if (tls_current_future && tls_current_future->cancelled) {
+                throw std::runtime_error("future cancelled");
+            }
+            if (ch->closed || !ch->q.empty()) {
+                break;
+            }
+            ch->cv.wait_for(lock, std::chrono::milliseconds(25));
+        }
+        if (tls_current_future && tls_current_future->cancelled) {
+            throw std::runtime_error("future cancelled");
+        }
+        if (ch->q.empty()) throw std::runtime_error("chan_recv: channel closed");
+        std::string out = std::move(ch->q.front());
+        ch->q.pop_front();
+        ch->cv.notify_all();
+        return out;
+    }
+    if (nameStr == "chan_try_send") {
+        const std::string h = argS(0);
+        if (h.rfind("chan:", 0) != 0) return "false";
+        const int id = to_int(h.substr(5));
+        auto it = g_channels.find(id);
+        if (it == g_channels.end() || !it->second) return "false";
+        auto ch = it->second;
+        std::lock_guard<std::mutex> lock(ch->mu);
+        if (ch->closed) return "false";
+        if (ch->capacity > 0 && static_cast<int>(ch->q.size()) >= ch->capacity) return "false";
+        ch->q.push_back(argS(1));
+        ch->cv.notify_all();
+        return "true";
+    }
+    if (nameStr == "chan_try_recv") {
+        const std::string h = argS(0);
+        if (h.rfind("chan:", 0) != 0) return {};
+        const int id = to_int(h.substr(5));
+        auto it = g_channels.find(id);
+        if (it == g_channels.end() || !it->second) return {};
+        auto ch = it->second;
+        std::lock_guard<std::mutex> lock(ch->mu);
+        if (ch->q.empty()) return {};
+        std::string out = std::move(ch->q.front());
+        ch->q.pop_front();
+        ch->cv.notify_all();
+        return out;
+    }
+    if (nameStr == "chan_close") {
+        const std::string h = argS(0);
+        if (h.rfind("chan:", 0) != 0) return {};
+        const int id = to_int(h.substr(5));
+        auto it = g_channels.find(id);
+        if (it == g_channels.end() || !it->second) return {};
+        {
+            std::lock_guard<std::mutex> lock(it->second->mu);
+            it->second->closed = true;
+        }
+        it->second->cv.notify_all();
+        return {};
+    }
+    if (nameStr == "chan_len") {
+        const std::string h = argS(0);
+        if (h.rfind("chan:", 0) != 0) return "0";
+        const int id = to_int(h.substr(5));
+        auto it = g_channels.find(id);
+        if (it == g_channels.end() || !it->second) return "0";
+        std::lock_guard<std::mutex> lock(it->second->mu);
+        return std::to_string(static_cast<long long>(it->second->q.size()));
+    }
+    if (nameStr == "mutex_new") {
+        const int id = g_nextMutexId++;
+        g_mutexes[id] = std::make_shared<ScriptMutex>();
+        return std::string("mutex:") + std::to_string(id);
+    }
+    if (nameStr == "mutex_lock") {
+        const std::string h = argS(0);
+        if (h.rfind("mutex:", 0) != 0) throw std::runtime_error("mutex_lock: invalid handle");
+        const int id = to_int(h.substr(6));
+        auto it = g_mutexes.find(id);
+        if (it == g_mutexes.end() || !it->second) throw std::runtime_error("mutex_lock: unknown mutex");
+        it->second->mu.lock();
+        return {};
+    }
+    if (nameStr == "mutex_unlock") {
+        const std::string h = argS(0);
+        if (h.rfind("mutex:", 0) != 0) throw std::runtime_error("mutex_unlock: invalid handle");
+        const int id = to_int(h.substr(6));
+        auto it = g_mutexes.find(id);
+        if (it == g_mutexes.end() || !it->second) throw std::runtime_error("mutex_unlock: unknown mutex");
+        it->second->mu.unlock();
+        return {};
+    }
+    if (nameStr == "mutex_try_lock") {
+        const std::string h = argS(0);
+        if (h.rfind("mutex:", 0) != 0) return "false";
+        const int id = to_int(h.substr(6));
+        auto it = g_mutexes.find(id);
+        if (it == g_mutexes.end() || !it->second) return "false";
+        return it->second->mu.try_lock() ? "true" : "false";
+    }
+    if (nameStr == "future_cancel") {
+        const std::string h = argS(0);
+        if (h.rfind("future:", 0) != 0) return "false";
+        const int id = to_int(h.substr(7));
+        auto it = g_futures.find(id);
+        if (it == g_futures.end() || !it->second) return "false";
+        {
+            std::lock_guard<std::mutex> lock(it->second->mu);
+            if (it->second->done) return "false";
+            it->second->cancelled = true;
+            it->second->failed = true;
+            it->second->error = "future cancelled";
+            if (!it->second->done) {
+                // leave done false until worker finishes or await observes cancel
+            }
+        }
+        it->second->cv.notify_all();
+        notify_channels_for_cancel();
+        return "true";
+    }
     if (nameStr == "char_is_digit" || nameStr == "char.is_digit") {
         const std::string s = argS(0);
         if (s.empty()) return "false";
@@ -1612,7 +1745,12 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         int newListId = g_nextListId++;
         for (const auto& elem : lit->second) {
             Env callEnv;
-            for (const auto& cv : cd->captured) callEnv.vars[cv.name] = cv.value;
+            for (const auto& cv : cd->captured) {
+                if (cv.cell) {
+                    callEnv.cells[cv.name] = cv.cell;
+                    callEnv.vars[cv.name] = *cv.cell;
+                }
+            }
             if (!cd->body.params.empty()) callEnv.vars[cd->body.params[0].name] = elem;
             ExecContext child;
             exec_block(cd->body.body, *currentProgram_, child, callEnv);
@@ -1637,7 +1775,12 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         int newListId = g_nextListId++;
         for (const auto& elem : lit->second) {
             Env callEnv;
-            for (const auto& cv : cd->captured) callEnv.vars[cv.name] = cv.value;
+            for (const auto& cv : cd->captured) {
+                if (cv.cell) {
+                    callEnv.cells[cv.name] = cv.cell;
+                    callEnv.vars[cv.name] = *cv.cell;
+                }
+            }
             if (!cd->body.params.empty()) callEnv.vars[cd->body.params[0].name] = elem;
             ExecContext child;
             exec_block(cd->body.body, *currentProgram_, child, callEnv);
@@ -1666,7 +1809,12 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         std::string acc = initial;
         for (const auto& elem : lit->second) {
             Env callEnv;
-            for (const auto& cv : cd->captured) callEnv.vars[cv.name] = cv.value;
+            for (const auto& cv : cd->captured) {
+                if (cv.cell) {
+                    callEnv.cells[cv.name] = cv.cell;
+                    callEnv.vars[cv.name] = *cv.cell;
+                }
+            }
             if (cd->body.params.size() > 0) callEnv.vars[cd->body.params[0].name] = acc;
             if (cd->body.params.size() > 1) callEnv.vars[cd->body.params[1].name] = elem;
             ExecContext child;
@@ -2178,7 +2326,6 @@ std::optional<std::string> dispatch_imported_builtin_modules(
             return r;
         }
     }
-#ifdef ERELANG_EXPERIMENTAL
     if (program_imports_module(program, "builtin/threads")) {
         if (auto r = __erelang_builtin_threads_dispatch(runtime, name, argv); !r.empty()) {
             return r;
@@ -2189,7 +2336,6 @@ std::optional<std::string> dispatch_imported_builtin_modules(
             return r;
         }
     }
-#endif
     return std::nullopt;
 }
 

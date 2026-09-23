@@ -136,6 +136,17 @@ bool compile_node(const Expr& e, Chunk& out, const Runtime::Env* env) {
     if (std::holds_alternative<BinaryExpr>(e.node)) {
         const auto& binary = std::get<BinaryExpr>(e.node);
         if (!binary.left || !binary.right) return false;
+        switch (binary.op) {
+            case BinOp::Add:
+            case BinOp::Sub:
+            case BinOp::Mul:
+            case BinOp::Div:
+            case BinOp::EQ:
+            case BinOp::NE:
+                return false;
+            default:
+                break;
+        }
         if (!compile_node(*binary.left, out, env)) return false;
         if (!compile_node(*binary.right, out, env)) return false;
         emit_u8(out, static_cast<uint8_t>(OpCode::BinOp));

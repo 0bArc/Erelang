@@ -1,7 +1,450 @@
+
 @erelang
+@strict
 
-public action main() {
+enum Option<T> {
+    Some(T),
+    None
+}
 
+public action assert(bool ok) {
+    if (!ok) { fail("assert failed"); }
+}
+
+
+// ============================================================
+// Erelang Memory Test
+// Tests:
+//   - raw pointers
+//   - allocation / free
+//   - pointer arithmetic
+//   - heap<T>
+//   - shared<T>
+//   - weak<T>
+//   - buffer<T>
+//   - copy / move
+//   - fill / zero
+//   - realloc
+//   - sizeof / alignof
+// ============================================================
+
+
+// ------------------------------------------------------------
+// Test raw pointers
+// ------------------------------------------------------------
+
+public action test_raw_pointer {
+    print "== raw pointer ==";
+
+    int value = 42;
+
+    *int p = &value;
+
+    assert(*p == 42);
+
+    *p = 100;
+
+    assert(value == 100);
+
+    print "raw pointer: OK";
+}
+
+
+// ------------------------------------------------------------
+// Test heap allocation
+// ------------------------------------------------------------
+
+public action test_alloc {
+    print "== alloc/free ==";
+
+    *int p = alloc<int>();
+
+    *p = 1234;
+
+    assert(*p == 1234);
+
+    free(p);
+
+    print "alloc/free: OK";
+}
+
+
+// ------------------------------------------------------------
+// Test array-style allocation + pointer arithmetic
+// ------------------------------------------------------------
+
+public action test_alloc_array {
+    print "== pointer arithmetic ==";
+
+    *int p = alloc<int>(4);
+
+    *(p + 0) = 10;
+    *(p + 1) = 20;
+    *(p + 2) = 30;
+    *(p + 3) = 40;
+
+    assert(*(p + 0) == 10);
+    assert(*(p + 1) == 20);
+    assert(*(p + 2) == 30);
+    assert(*(p + 3) == 40);
+
+    free(p);
+
+    print "pointer arithmetic: OK";
+}
+
+
+// ------------------------------------------------------------
+// Test heap<T>
+// ------------------------------------------------------------
+
+public action test_heap {
+    print "== heap<T> ==";
+
+    heap<int> value = heap<int>(42);
+
+    assert(*value == 42);
+
+    *value = 99;
+
+    assert(*value == 99);
+
+    print "heap<T>: OK";
+}
+
+
+// ------------------------------------------------------------
+// Test heap<T> move semantics
+// ------------------------------------------------------------
+
+public action test_heap_move {
+    print "== heap<T> move ==";
+
+    heap<int> first = heap<int>(123);
+
+    // Ownership should move into second.
+    heap<int> second = first;
+
+    assert(*second == 123);
+
+    print "heap<T> move: OK";
+}
+
+
+// ------------------------------------------------------------
+// Test shared<T>
+// ------------------------------------------------------------
+
+public action test_shared {
+    print "== shared<T> ==";
+
+    shared<int> first = shared<int>(42);
+    shared<int> second = first;
+
+    assert(*first == 42);
+    assert(*second == 42);
+
+    *second = 55;
+
+    assert(*first == 55);
+    assert(*second == 55);
+
+    print "shared<T>: OK";
+}
+
+
+// ------------------------------------------------------------
+// Test weak<T>
+// ------------------------------------------------------------
+
+public action test_weak {
+    print "== weak<T> ==";
+
+    shared<int> owner = shared<int>(77);
+
+    weak<int> observer = weak(owner);
+
+    Option<int> value = observer.get();
+
+    match (value) {
+        case Some(v): {
+            assert(v == 77);
+        }
+
+        case None: {
+            fail("weak.get() unexpectedly returned None");
+        }
+    }
+
+    print "weak<T>: OK";
+}
+
+
+// ------------------------------------------------------------
+// Test buffer<T>
+// ------------------------------------------------------------
+
+public action test_buffer {
+    print "== buffer<T> ==";
+
+    buffer<u8> data = buffer<u8>(8);
+
+    data[0] = 10;
+    data[1] = 20;
+    data[2] = 30;
+    data[3] = 40;
+
+    assert(data[0] == 10);
+    assert(data[1] == 20);
+    assert(data[2] == 30);
+    assert(data[3] == 40);
+
+    assert(data.len() == 8);
+
+    print "buffer<T>: OK";
+}
+
+
+// ------------------------------------------------------------
+// Test buffer resize
+// ------------------------------------------------------------
+
+public action test_buffer_resize {
+    print "== buffer resize ==";
+
+    buffer<int> data = buffer<int>(4);
+
+    data[0] = 1;
+    data[1] = 2;
+    data[2] = 3;
+    data[3] = 4;
+
+    data.resize(8);
+
+    assert(data.len() == 8);
+
+    assert(data[0] == 1);
+    assert(data[1] == 2);
+    assert(data[2] == 3);
+    assert(data[3] == 4);
+
+    print "buffer resize: OK";
+}
+
+
+// ------------------------------------------------------------
+// Test zero
+// ------------------------------------------------------------
+
+public action test_zero {
+    print "== zero ==";
+
+    *int p = alloc<int>(4);
+
+    *(p + 0) = 10;
+    *(p + 1) = 20;
+    *(p + 2) = 30;
+    *(p + 3) = 40;
+
+    zero(p, 4);
+
+    assert(*(p + 0) == 0);
+    assert(*(p + 1) == 0);
+    assert(*(p + 2) == 0);
+    assert(*(p + 3) == 0);
+
+    free(p);
+
+    print "zero: OK";
+}
+
+
+// ------------------------------------------------------------
+// Test fill
+// ------------------------------------------------------------
+
+public action test_fill {
+    print "== fill ==";
+
+    *u8 p = alloc<u8>(8);
+
+    fill(p, 0xAA, 8);
+
+    assert(*(p + 0) == 0xAA);
+    assert(*(p + 1) == 0xAA);
+    assert(*(p + 2) == 0xAA);
+    assert(*(p + 3) == 0xAA);
+
+    free(p);
+
+    print "fill: OK";
+}
+
+
+// ------------------------------------------------------------
+// Test copy
+// ------------------------------------------------------------
+
+public action test_copy {
+    print "== copy ==";
+
+    *int source = alloc<int>(4);
+    *int target = alloc<int>(4);
+
+    *(source + 0) = 10;
+    *(source + 1) = 20;
+    *(source + 2) = 30;
+    *(source + 3) = 40;
+
+    copy(target, source, 4);
+
+    assert(*(target + 0) == 10);
+    assert(*(target + 1) == 20);
+    assert(*(target + 2) == 30);
+    assert(*(target + 3) == 40);
+
+    free(source);
+    free(target);
+
+    print "copy: OK";
+}
+
+
+// ------------------------------------------------------------
+// Test move
+// ------------------------------------------------------------
+
+public action test_move {
+    print "== move ==";
+
+    *int source = alloc<int>(4);
+    *int target = alloc<int>(4);
+
+    *(source + 0) = 100;
+    *(source + 1) = 200;
+    *(source + 2) = 300;
+    *(source + 3) = 400;
+
+    move(target, source, 4);
+
+    assert(*(target + 0) == 100);
+    assert(*(target + 1) == 200);
+    assert(*(target + 2) == 300);
+    assert(*(target + 3) == 400);
+
+    free(source);
+    free(target);
+
+    print "move: OK";
+}
+
+
+// ------------------------------------------------------------
+// Test realloc
+// ------------------------------------------------------------
+
+public action test_realloc {
+    print "== realloc ==";
+
+    *int p = alloc<int>(2);
+
+    *(p + 0) = 111;
+    *(p + 1) = 222;
+
+    p = realloc(p, 4);
+
+    assert(*(p + 0) == 111);
+    assert(*(p + 1) == 222);
+
+    *(p + 2) = 333;
+    *(p + 3) = 444;
+
+    assert(*(p + 2) == 333);
+    assert(*(p + 3) == 444);
+
+    free(p);
+
+    print "realloc: OK";
+}
+
+
+// ------------------------------------------------------------
+// Test sizeof / alignof
+// ------------------------------------------------------------
+
+public action test_layout {
+    print "== sizeof / alignof ==";
+
+    int size = sizeof<int>();
+    int alignment = alignof<int>();
+
+    assert(size > 0);
+    assert(alignment > 0);
+
+    print "sizeof(int): " + string(size);
+    print "alignof(int): " + string(alignment);
+
+    print "layout: OK";
+}
+
+
+// ------------------------------------------------------------
+// Test buffer pointer access
+// ------------------------------------------------------------
+
+public action test_buffer_pointer {
+    print "== buffer pointer ==";
+
+    buffer<int> data = buffer<int>(4);
+
+    data[0] = 50;
+    data[1] = 60;
+    data[2] = 70;
+    data[3] = 80;
+
+    *int p = data.ptr();
+
+    assert(*(p + 0) == 50);
+    assert(*(p + 1) == 60);
+    assert(*(p + 2) == 70);
+    assert(*(p + 3) == 80);
+
+    print "buffer pointer: OK";
+}
+
+
+// ------------------------------------------------------------
+// Run everything
+// ------------------------------------------------------------
+
+public action main {
+    print "";
+    print "================================";
+    print "      ERELANG MEMORY TEST";
+    print "================================";
+    print "";
+
+    test_raw_pointer();
+    test_alloc();
+    test_alloc_array();
+    test_heap();
+    test_heap_move();
+    test_shared();
+    test_weak();
+    test_buffer();
+    test_buffer_resize();
+    test_zero();
+    test_fill();
+    test_copy();
+    test_move();
+    test_realloc();
+    test_layout();
+    test_buffer_pointer();
+
+    print "";
+    print "================================";
+    print " ALL MEMORY TESTS PASSED";
+    print "================================";
 }
 
 run main;

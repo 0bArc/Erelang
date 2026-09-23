@@ -1,0 +1,21 @@
+@strict
+
+struct Pair<A, B> {
+    A first;
+    B second;
+}
+
+public action main() {
+    Pair<int, string> p;
+    p.first = 1;
+    p.second = "hi";
+    let { first, second } = p;
+    print first;
+    print second;
+    let (a, b) = (first, second);
+    print a;
+    print b;
+    print "destructure-tuple-generic-ok";
+}
+
+run main;

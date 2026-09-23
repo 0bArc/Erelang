@@ -1,4 +1,5 @@
 export const ENTITY_RE       = /^\s*(?:public|private|export)?\s*entity\s+([A-Za-z_]\w*)/;
+export const NAMESPACE_RE    = /^\s*namespace\s+([A-Za-z_]\w*)/;
 export const ACTION_RE       = /^\s*(?:public|private|export)?\s*(?:async\s+)?action\s+([A-Za-z_]\w*)/;
 export const TYPED_FUNC_RE   =
   /^\s*(?:public|private|export)?\s*(?:async\s+)?(?:void|int|double|float|string|str|bool|char|auto|any|pointer|Array(?:<[^>\n]{0,80}>)?|Map(?:<[^>\n]{0,80}>)?|HashMap(?:<[^>\n]{0,80}>)?|[A-Za-z_]\w*(?:<[^>\n]{0,80}>)?)\s+([A-Za-z_]\w*)\s*(?=\()/;
@@ -14,18 +15,24 @@ export const INCLUDE_ALIAS_RE = /^\s*#\s*include\s*(<[^>]+>|"[^"]+"|[^\s;]+)\s*(
 // Matches: import <path> as alias  |  import "path" as alias  |  import 'path' as alias  |  import bareident as alias
 export const IMPORT_ALIAS_RE  = /^\s*import\s+(?:<([^>]+)>|"([^"]+)"|'([^']+)'|([A-Za-z_][\w./-]*))\s*(?:as\s+([A-Za-z_]\w*))?/;
 
-const FS_METHODS    = ['read','write','append','exists','is_dir','is_file','mkdir','copy','move','remove','list','dirs','files','size','mtime','cwd','chdir','join','parent','dirname','name','basename','ext'];
+const FS_METHODS    = ['read','write','append','exists','is_dir','is_file','mkdir','copy','move','remove','list','dirs','files','size','mtime','cwd','chdir','join','parent','dirname','name','basename','ext','open','close','seek','tell','flush'];
 const PATH_METHODS  = ['join','parent','dirname','name','basename','ext','exists'];
 
 export const MODULE_METHODS: Record<string, string[]> = {
   'builtin/fs':       FS_METHODS,
   'builtin/erefs':    FS_METHODS,
+  'std/fs':           FS_METHODS,
   'builtin/path':     PATH_METHODS,
   'builtin/erepath':  PATH_METHODS,
+  'std/path':         PATH_METHODS,
+  'std/pipe':         ['new','send','receive','recv','try_send','try_receive','try_recv','close','len'],
+  'builtin/pipe':     ['new','send','receive','recv','try_send','try_receive','try_recv','close','len'],
   'builtin/regex':    ['match','find','find_all','replace','split','capture','group','compile','free','test'],
-  'builtin/crypto':   ['hash','random_bytes','hash_fnv1a'],
+  'builtin/crypto':   ['hash','sha256','random_bytes','aes_encrypt','aes_decrypt'],
+  'std/crypto':       ['hash','sha256','random_bytes','aes_encrypt','aes_decrypt'],
   'builtin/network':  ['get','get_auth','post','post_auth','put','put_auth','patch','patch_auth','delete','delete_auth','head','download','encode','status','json_encode','json_decode','get_resp','create_server','create_server_tls','url_encode'],
   'builtin/net':      ['get','get_auth','post','post_auth','put','put_auth','patch','patch_auth','delete','delete_auth','head','download','encode','status','json_encode','json_decode','get_resp','create_server','create_server_tls','url_encode'],
+  'std/net':          ['get','get_auth','post','post_auth','put','put_auth','patch','patch_auth','delete','delete_auth','head','download','encode','status','json_encode','json_decode','get_resp','create_server','create_server_tls','url_encode'],
   'builtin/websocket':['connect','send','send_binary','recv','recv_timeout','close','broadcast','state'],
   'builtin/ws':       ['connect','send','send_binary','recv','recv_timeout','close','broadcast','state'],
   'builtin/tcp':      ['connect'],
@@ -39,6 +46,7 @@ export const MODULE_METHODS: Record<string, string[]> = {
   'builtin/system':   ['cmd','execute','output','last_exit'],
   'builtin/process':  ['shell','execute','spawn','output','exit_code','opts','kill','wait','alive'],
   'builtin/proc':     ['shell','execute','spawn','output','exit_code','opts','kill','wait','alive'],
+  'std/process':      ['shell','execute','spawn','output','exit_code','opts','kill','wait','alive'],
   'builtin/performance': ['profile.begin','profile.end','profile.duration','profile.calls','profile.report','mem.usage','mem.peak','gc.collect','gc.threshold','gc.pause','gc.resume'],
   'builtin/perf':        ['profile.begin','profile.end','profile.duration','profile.calls','profile.report','mem.usage','mem.peak','gc.collect','gc.threshold','gc.pause','gc.resume'],
 };
@@ -62,13 +70,14 @@ export const DICTIONARY_METHODS = [
 
 export const LANGUAGE_KEYWORDS = [
   'entity','action','field','let','const','global','new','int','double','string',
-  'bool','char','auto','Array','Map','HashMap','constexpr','static','struct',
+  'bool','char','auto','void','unit','never','Array','Map','HashMap','Set','set','constexpr','static','struct',
   'enum','type','trait','import','export','run','if','else','for','while','switch','match','case','default',
   'break','continue','return','match','try','catch','async','await','namespace',
   'lambda','map','filter','reduce',
   'unsafe','repeat','do','extern',
   'static_cast','dynamic_cast','reinterpret_cast','bit_cast',
   'sizeof','typeof','decltype','alignof','offsetof','is_base_of',
+  'heap','shared','weak','buffer',
   '#include','#if','#elif','#else','#endif','#ifdef','#ifndef','#define',
 ];
 
@@ -76,33 +85,30 @@ export const BUILT_INS: readonly string[] = [
   'print','PRINT','sleep','now_ms','now_iso','env','username','computer_name',
   'machine_guid','uuid','rand_int','hwid','args_count','args_get','input',
   'os.args','os.args_count','os.args_get',
-  'toint','toInt','tofloat','tostr','toString',
-  'int','float','string','bool',  // type constructors
+  'int','float','string','bool',
   'dynamic_cast','reinterpret_cast','bit_cast','bitcast','to_json','from_json',
   'sizeof','typeof','decltype','alignof','offsetof','is_base_of',
+  'alloc','free','realloc','copy','move','fill','zero',
+  'heap','shared','weak','buffer',
   'string.starts_with','string.ends_with','string.find','string.substr','string.len',
   'string.strip','string.lstrip','string.rstrip','string.lower','string.upper',
   'string.replace','string.split','string.contains',
-  'ptr_new','ptr_get','ptr_set','ptr_free','ptr_valid','malloc','free',
-  'realloc','memcpy','memset',
-  'read_text','write_text','append_text','file_exists','is_dir','is_file','mkdirs','copy_file',
-  'move_file','delete_file','list_files','list_dirs','list_regular_files','cwd','chdir',
   'exec','os.exec','spawn','os.spawn','exit','read_line','stdin_read',
-  'stderr_print','file_mtime','file_size',
+  'stderr_print',
   'option_none','option_some','option_is_some','option_unwrap_or',
   'option.none','option.some','option.is_some','option.unwrap_or',
   'result_ok','result_err','result_is_ok','result_unwrap_or',
   'result.ok','result.err','result.is_ok','result.unwrap_or',
-  'file_open','file_close','file_read','file_write','file_seek','file_tell',
-  'file_flush','fopen','fclose','fread','fwrite','fseek','ftell','fflush',
-  'path_join','path_dirname','path_basename','path_ext',
-  'strbuf_new','strbuf_append','strbuf_clear','strbuf_len',
-  'strbuf_to_string','strbuf_free','strbuf_reserve',
   'color.red','color.green','color.yellow','color.blue','color.magenta',
   'color.cyan','color.bold','color.reset',
-  'set_new','set_add','set_has','set_remove','set_size','set_values',
+  'set_new','set_of','set_add','set_has','set_remove','set_size','set_values',
   'set_union','set_intersect','set_diff',
   'queue_new','queue_push','queue_pop','queue_peek','queue_len','queue_clear',
+  'mutex_new','mutex_lock','mutex_unlock','mutex_try_lock',
+  'fail',
+  'pipe.new','pipe.send','pipe.receive','pipe.close','pipe.len',
+  'fs.open','fs.read','fs.write','fs.append','fs.exists','fs.close',
+  'crypto.sha256','crypto.aes_encrypt','crypto.aes_decrypt','crypto.hash','crypto.random_bytes',
   'table_new','table_put','table_get','table_has','table_remove','table_rows',
   'table_columns','table_row_keys','table_clear_row','table_count_row',
   'http_get','http_get_auth','http_post','http_post_auth',
@@ -118,7 +124,6 @@ export const BUILT_INS: readonly string[] = [
   'network.debug.last','network.debug.clear','network.debug.log_tail',
   'language_name','language_version','language_about','language_limitations',
   'data_new','data_set','data_get','data_has','data_keys','data_save','data_load',
-  'hash_fnv1a','random_bytes',
   'regex_match','regex_find','regex_find_all','regex_replace','regex_split','regex_capture','regex_group','regex_compile','regex_free','regex_test',
   'perm_grant','perm_revoke','perm_has','perm_list',
   'bin_new','bin_from_hex','bin_len','bin_push_u8','bin_get_u8','bin_hex',

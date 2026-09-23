@@ -1,0 +1,17 @@
+@strict
+
+struct Box {
+    int n;
+}
+
+public action main() {
+    Box a;
+    a.n = 1;
+    Box b = a;
+    b.n = 99;
+    print a.n;
+    print b.n;
+    print "structs-copy-ok";
+}
+
+run main;

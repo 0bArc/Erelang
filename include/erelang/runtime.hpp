@@ -90,11 +90,26 @@ public:
     struct Env {
         ValueMap vars;
         std::unordered_map<std::string, ObjPtr> objects;
+        std::unordered_map<std::string, std::shared_ptr<Value>> cells;
         std::vector<Value> slots;
         std::unordered_map<std::string, int> slotIndex;
         std::vector<std::string> slotNames;
         bool useSlots{false};
     };
+
+    static void debug_enable(bool on);
+    static void debug_wait_attach();
+    static bool debug_enabled();
+    static void debug_set_breakpoints(std::unordered_set<int> lines);
+    static void debug_add_breakpoint(int line);
+    static void debug_clear_breakpoints();
+    static void debug_set_source_path(std::string path);
+    static void debug_request_continue();
+    static void debug_request_step();
+    static void debug_request_quit();
+    static void debug_enter_main();
+    static void debug_leave_main();
+    static void debug_hook(int line, const Env& env);
 
 private:
     struct ExecContext {
@@ -127,6 +142,10 @@ private:
 
     Value eval_value(const Expr& e, const Env& env) const;
     std::string eval_string(const Expr& e, const Env& env) const;
+    Value invoke_async_action(const Action& action, const std::vector<ExprPtr>& args, const Env& env, bool returnFuture) const;
+    Value await_future_value(const Value& value) const;
+    Value invoke_enum_method(const Action& method, const Value& selfValue, const std::vector<ExprPtr>& args, size_t argOffset, const Env& env) const;
+    std::optional<Value> dispatch_value_method(const Value& recv, std::string_view method, const std::vector<Value>& args) const;
 
     Value env_get(const Env& env, const std::string& name) const;
     void env_set(Env& env, const std::string& name, Value value) const;

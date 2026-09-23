@@ -1,0 +1,15 @@
+@strict
+
+struct Node {
+    int v;
+    Node next;
+}
+
+public action main() {
+    Node n;
+    n.v = 1;
+    print n.v;
+    print "types-recursive-ok";
+}
+
+run main;

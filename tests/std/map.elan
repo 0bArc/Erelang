@@ -1,0 +1,9 @@
+@strict
+
+public action main() {
+    Map<string, int> m = {"a": 1};
+    print m["a"];
+    print "std-map-ok";
+}
+
+run main;

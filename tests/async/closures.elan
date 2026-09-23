@@ -1,0 +1,9 @@
+@strict
+
+public async action main() {
+    any f = lambda(int x) => x + 1;
+    print f(40);
+    print "async-closures-ok";
+}
+
+run main;

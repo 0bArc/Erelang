@@ -1,0 +1,22 @@
+@strict
+
+enum Option<T> {
+    Some(T),
+    None
+}
+
+type IntList = Array<int>;
+type MaybeInt = Option<int>;
+
+public action main() {
+    IntList nums = [1, 2, 3];
+    MaybeInt m = Option<int>.None;
+    print nums[0];
+    match (m) {
+        case Some(v): { print v; }
+        case None: { print "none"; }
+    }
+    print "types-alias-ok";
+}
+
+run main;

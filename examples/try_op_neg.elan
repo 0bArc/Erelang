@@ -1,0 +1,15 @@
+@strict
+
+enum Option<T> {
+    Some(T),
+    None
+}
+
+
+public action bad(): int {
+    Option<int> o = Option<int>.Some(1);
+    int x = o?;
+    return x;
+}
+
+run bad;

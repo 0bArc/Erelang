@@ -1,0 +1,17 @@
+@strict
+
+public action main() {
+    heap<int> a = heap<int>(7);
+    print *a;
+    heap<int> b = a;
+    print *b;
+    try {
+        print *a;
+        print "use-after-move-missed";
+    } catch (e) {
+        print "use-after-move";
+    }
+    print "heap-move-ok";
+}
+
+run main;

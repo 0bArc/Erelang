@@ -1,0 +1,100 @@
+@strict
+
+struct Step {
+    int pos;
+    int value;
+    string tree;
+}
+
+public action tok_kind(int pos): string {
+    if (pos == 0) { return "num"; }
+    if (pos == 1) { return "op"; }
+    if (pos == 2) { return "num"; }
+    if (pos == 3) { return "op"; }
+    if (pos == 4) { return "num"; }
+    if (pos == 5) { return "op"; }
+    if (pos == 6) { return "num"; }
+    return "eof";
+}
+
+public action tok_text(int pos): string {
+    if (pos == 0) { return "1"; }
+    if (pos == 1) { return "+"; }
+    if (pos == 2) { return "2"; }
+    if (pos == 3) { return "*"; }
+    if (pos == 4) { return "3"; }
+    if (pos == 5) { return "-"; }
+    if (pos == 6) { return "4"; }
+    return "";
+}
+
+public action parse_primary(int pos): Step {
+    Step out;
+    string kind = tok_kind(pos);
+    if (kind == "num") {
+        out.pos = pos + 1;
+        out.value = toint(tok_text(pos));
+        out.tree = tok_text(pos);
+        return out;
+    }
+    out.pos = pos;
+    out.value = 0;
+    out.tree = "?";
+    return out;
+}
+
+public action parse_term(int pos): Step {
+    Step left = parse_primary(pos);
+    int keep = 1;
+    while (keep == 1) {
+        string kind = tok_kind(left.pos);
+        string text = tok_text(left.pos);
+        if (kind == "op" && text == "*") {
+            Step mul_r = parse_primary(left.pos + 1);
+            left.value = left.value * mul_r.value;
+            left.tree = "(* " + left.tree + " " + mul_r.tree + ")";
+            left.pos = mul_r.pos;
+        } else if (kind == "op" && text == "/") {
+            Step div_r = parse_primary(left.pos + 1);
+            left.value = left.value / div_r.value;
+            left.tree = "(/ " + left.tree + " " + div_r.tree + ")";
+            left.pos = div_r.pos;
+        } else {
+            keep = 0;
+        }
+    }
+    return left;
+}
+
+public action parse_expr(int pos): Step {
+    Step left = parse_term(pos);
+    int keep = 1;
+    while (keep == 1) {
+        string kind = tok_kind(left.pos);
+        string text = tok_text(left.pos);
+        if (kind == "op" && text == "+") {
+            Step add_r = parse_term(left.pos + 1);
+            left.value = left.value + add_r.value;
+            left.tree = "(+ " + left.tree + " " + add_r.tree + ")";
+            left.pos = add_r.pos;
+        } else if (kind == "op" && text == "-") {
+            Step sub_r = parse_term(left.pos + 1);
+            left.value = left.value - sub_r.value;
+            left.tree = "(- " + left.tree + " " + sub_r.tree + ")";
+            left.pos = sub_r.pos;
+        } else {
+            keep = 0;
+        }
+    }
+    return left;
+}
+
+public action main() {
+    print "tokens: 1 + 2 * 3 - 4";
+    Step result = parse_expr(0);
+    print "tree: {result.tree}";
+    print "value: {result.value}";
+    print "pos: {result.pos}";
+}
+
+run main;

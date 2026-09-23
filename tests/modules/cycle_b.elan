@@ -1,0 +1,7 @@
+@strict
+
+#include "cycle_a.elan"
+
+public action from_b(): int {
+    return 2;
+}

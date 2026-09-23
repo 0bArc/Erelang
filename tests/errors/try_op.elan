@@ -1,0 +1,38 @@
+@strict
+
+enum Result<T, E> {
+    Ok(T),
+    Error(E)
+}
+
+public action get_ok(): Result<int, string> {
+    return Result<int, string>.Ok(99);
+}
+
+public action get_err(): Result<int, string> {
+    return Result<int, string>.Error("boom");
+}
+
+public action foo_ok(): Result<int, string> {
+    int x = get_ok()?;
+    return Result<int, string>.Ok(x);
+}
+
+public action foo_err(): Result<int, string> {
+    int x = get_err()?;
+    return Result<int, string>.Ok(x);
+}
+
+public action main() {
+    match (foo_ok()) {
+        case Ok(v): { print v; }
+        case Error(e): { print e; }
+    }
+    match (foo_err()) {
+        case Ok(v): { print v; }
+        case Error(e): { print e; }
+    }
+    print "errors-try-ok";
+}
+
+run main;

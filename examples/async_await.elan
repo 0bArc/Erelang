@@ -1,0 +1,29 @@
+@strict
+
+public async action slow(): int {
+    return 7;
+}
+
+public async action boom(): int {
+    return 1 / 0;
+}
+
+public action sync_caller(): int {
+    return slow();
+}
+
+public async action main(): int {
+    int x = await slow();
+    print x;
+    int y = sync_caller();
+    print y;
+    try {
+        int z = await boom();
+        print z;
+    } catch (err) {
+        print err;
+    }
+    return x;
+}
+
+run main;

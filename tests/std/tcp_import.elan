@@ -1,0 +1,9 @@
+@strict
+
+#include <builtin/tcp> as tcp
+
+public action main() {
+    print "std-tcp-import-ok";
+}
+
+run main;

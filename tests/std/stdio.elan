@@ -1,0 +1,8 @@
+@strict
+
+public action main() {
+    stderr_print("std-stderr-ok");
+    print "std-stdio-ok";
+}
+
+run main;

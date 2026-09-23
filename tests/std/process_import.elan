@@ -1,0 +1,9 @@
+@strict
+
+#include <builtin/system> as sys
+
+public action main() {
+    print "std-process-import-ok";
+}
+
+run main;

@@ -1,0 +1,13 @@
+@strict
+
+#include <builtin/crypto> as crypto
+
+public action main() {
+    string key = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+    string ct = crypto.aes_encrypt(key, "hello");
+    string pt = crypto.aes_decrypt(key, ct);
+    print pt;
+    print string.len(ct);
+}
+
+run main;

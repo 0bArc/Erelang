@@ -1,0 +1,18 @@
+@strict
+
+public action main() {
+    int n = 1;
+    any bump = lambda() {
+        n = n + 1;
+        return n;
+    };
+    print bump();
+    print bump();
+    print n;
+    if (n != 3) {
+        fail("closure capture did not mutate outer local");
+    }
+    print "closures-capture-mutate";
+}
+
+run main;

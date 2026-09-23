@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <atomic>
 #include "erelang/lexer.hpp"
+#include "erelang/value.hpp"
 
 namespace erelang {
 
@@ -28,6 +29,7 @@ struct ExprIdent { std::string name; };
 
 struct Expr; using ExprPtr = std::shared_ptr<Expr>;
 struct BinaryExpr { BinOp op; ExprPtr left; ExprPtr right; };
+struct RangeExpr { ExprPtr start; ExprPtr end; bool exclusive{false}; }; // a .. b or a ..< b
 struct TernaryExpr { ExprPtr cond; ExprPtr thenExpr; ExprPtr elseExpr; };
 struct UnaryExpr { UnOp op; ExprPtr expr; };
 struct NewExpr { std::string typeName; std::vector<ExprPtr> args; };
@@ -50,6 +52,18 @@ struct DictLiteralExpr {
     std::vector<ExprPtr> entries; // alternating key-string, value pairs
 };
 
+struct TupleLiteralExpr {
+    std::vector<ExprPtr> elements;
+};
+
+struct TryExpr {
+    ExprPtr inner;
+};
+
+struct AwaitExpr {
+    ExprPtr inner;
+};
+
 struct Block; // forward for recursive AST
 
 struct PrintStmt { ExprPtr value; };
@@ -60,7 +74,17 @@ struct WaitAllStmt {};
 struct PauseStmt {};
 struct InputStmt { std::string name; };
 struct FireStmt { std::string name; };
-struct LetStmt { bool isConst{false}; std::string name; ExprPtr value; std::string declaredType; };
+
+struct Pattern;
+using PatternPtr = std::shared_ptr<Pattern>;
+
+struct LetStmt {
+    bool isConst{false};
+    std::string name;
+    ExprPtr value;
+    std::string declaredType;
+    PatternPtr pattern;
+};
 struct ReturnStmt { std::optional<ExprPtr> value; };
 struct SetStmt { bool isMember{false}; std::string varOrField; std::string objectName; ExprPtr value; };
 struct MethodCallStmt { std::string objectName; std::string method; std::vector<ExprPtr> args; };
@@ -68,21 +92,36 @@ struct IfStmt { ExprPtr cond; std::shared_ptr<Block> thenBlk; std::shared_ptr<Bl
 struct SwitchCase { std::string value; std::shared_ptr<Block> body; };
 struct SwitchStmt { ExprPtr selector; std::vector<SwitchCase> cases; std::shared_ptr<Block> defaultBlk; };
 
-struct Pattern;
-using PatternPtr = std::shared_ptr<Pattern>;
 struct PatWildcard {};
 struct PatBinding { std::string name; };
 struct PatCtor {
     std::string name;
     std::vector<PatternPtr> args;
 };
+struct PatField {
+    std::string field;
+    PatternPtr pattern;
+};
+struct PatStruct {
+    std::vector<PatField> fields;
+};
+struct PatArray {
+    std::vector<PatternPtr> elements;
+};
+struct PatTuple {
+    std::vector<PatternPtr> elements;
+};
+struct PatOr {
+    std::vector<PatternPtr> alts;
+};
 struct Pattern {
-    std::variant<PatWildcard, PatBinding, PatCtor> node;
+    std::variant<PatWildcard, PatBinding, PatCtor, PatStruct, PatArray, PatTuple, PatOr> node;
 };
 
 struct MatchCase {
     PatternPtr pattern;
     std::shared_ptr<Block> body;
+    ExprPtr guard; // optional: case Pat if cond:
 };
 struct MatchStmt { ExprPtr selector; std::vector<MatchCase> cases; };
 struct WhileStmt { ExprPtr cond; std::shared_ptr<Block> body; };
@@ -100,12 +139,16 @@ struct ForInStmt { std::string var; std::string varType; std::optional<std::stri
 struct TryCatchStmt { std::shared_ptr<Block> tryBlk; std::string catchVar; std::shared_ptr<Block> catchBlk; };
 struct UnsafeStmt { std::shared_ptr<Block> body; };
 struct PointerSetStmt { ExprPtr pointer; ExprPtr value; };
+struct IndexSetStmt { ExprPtr object; ExprPtr index; ExprPtr value; };
 struct ExprStmt { ExprPtr expr; };
 struct ImportStmt {};
 
-using Statement = std::variant<PrintStmt, SleepStmt, ActionCallStmt, std::shared_ptr<ParallelStmt>, WaitAllStmt, PauseStmt, InputStmt, FireStmt, LetStmt, ReturnStmt, SetStmt, MethodCallStmt, IfStmt, SwitchStmt, MatchStmt, WhileStmt, DoWhileStmt, RepeatStmt, ForStmt, ForInStmt, TryCatchStmt, UnsafeStmt, PointerSetStmt, ExprStmt, BreakStmt, ContinueStmt, ImportStmt>;
+using Statement = std::variant<PrintStmt, SleepStmt, ActionCallStmt, std::shared_ptr<ParallelStmt>, WaitAllStmt, PauseStmt, InputStmt, FireStmt, LetStmt, ReturnStmt, SetStmt, MethodCallStmt, IfStmt, SwitchStmt, MatchStmt, WhileStmt, DoWhileStmt, RepeatStmt, ForStmt, ForInStmt, TryCatchStmt, UnsafeStmt, PointerSetStmt, IndexSetStmt, ExprStmt, BreakStmt, ContinueStmt, ImportStmt>;
 
-struct Block { std::vector<Statement> stmts; };
+struct Block {
+    std::vector<Statement> stmts;
+    std::vector<int> lines; // 1-based, parallel to stmts; empty = unknown
+};
 
 struct ParallelStmt { Block body; };
 
@@ -164,7 +207,7 @@ struct LambdaExpr {
 
 // Now all expression structs are complete — define Expr
 struct Expr {
-    std::variant<ExprString, ExprNull, ExprNumber, ExprBool, ExprIdent, BinaryExpr, TernaryExpr, UnaryExpr, NewExpr, MemberExpr, IndexExpr, FunctionCallExpr, LambdaExpr, ListLiteralExpr, DictLiteralExpr, PostfixExpr, PrefixExpr, CompoundAssignExpr> node;
+    std::variant<ExprString, ExprNull, ExprNumber, ExprBool, ExprIdent, BinaryExpr, RangeExpr, TernaryExpr, UnaryExpr, NewExpr, MemberExpr, IndexExpr, FunctionCallExpr, LambdaExpr, ListLiteralExpr, DictLiteralExpr, TupleLiteralExpr, TryExpr, AwaitExpr, PostfixExpr, PrefixExpr, CompoundAssignExpr> node;
 };
 
 struct Action {
@@ -186,10 +229,10 @@ struct FuncType {
     std::string returnType;
 };
 
-// Captured variable in a closure
+// Captured variable in a closure (shared cell = mutable capture of outer local)
 struct ClosedVar {
     std::string name;
-    std::string value;   // snapshot at creation time
+    std::shared_ptr<Value> cell;
     std::string type;
 };
 
@@ -259,6 +302,7 @@ struct EnumDecl {
     std::string name;
     std::vector<TypeParam> typeParams;
     std::vector<EnumVariant> variants;
+    std::vector<Action> methods;
 };
 struct TypeAliasDecl {
     std::string name;
@@ -329,6 +373,7 @@ private:
     SwitchStmt parse_switch();
     MatchStmt parse_match();
     PatternPtr parse_pattern(bool topLevel);
+    PatternPtr parse_pattern_atom(bool topLevel);
     StructDecl parse_struct();
     EnumDecl parse_enum();
     TypeAliasDecl parse_type_alias();
@@ -350,6 +395,7 @@ private:
     ExprPtr parse_bitand();
     ExprPtr parse_equality();
     ExprPtr parse_relational();
+    ExprPtr parse_range();
     ExprPtr parse_shift();
     ExprPtr parse_additive();
     ExprPtr parse_multiplicative();

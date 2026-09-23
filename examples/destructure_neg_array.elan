@@ -1,0 +1,8 @@
+@strict
+
+public action main() {
+    string s = "hi";
+    let [a, b] = s;
+}
+
+run main;

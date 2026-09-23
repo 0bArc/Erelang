@@ -1,0 +1,10 @@
+// expect: Unknown action or builtin
+@strict
+
+public action main() {
+    file_open("x", "r");
+    chan_send("chan:0", "y");
+    future_cancel("future:0");
+}
+
+run main;

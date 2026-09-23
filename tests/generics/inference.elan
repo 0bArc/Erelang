@@ -1,0 +1,13 @@
+@strict
+
+public action id<T>(x: T): T {
+    return x;
+}
+
+public action main() {
+    print id(42);
+    print id("hi");
+    print "generics-infer-ok";
+}
+
+run main;

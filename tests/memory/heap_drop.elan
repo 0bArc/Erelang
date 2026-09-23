@@ -1,0 +1,9 @@
+@strict
+
+public action main() {
+    heap<int> a = heap<int>(3);
+    print *a;
+    print "heap-drop-ok";
+}
+
+run main;

@@ -33,7 +33,7 @@ option(BUILD_SHARED_RUNTIME "Build erelang as a shared DLL (erelang.dll). OFF = 
 option(BUILD_DEBUGGER_EXE "Build debug.exe helper via --make-debug after erelang links" OFF)
 option(ERELANG_BUNDLE_MINGW_RUNTIME "Copy MinGW runtime DLLs next to erelang.exe for portable sharing" ON)
 option(ERELANG_AUTO_UPDATE_EXTENSION "Auto package/install VS Code extension after erelang build" OFF)
-option(ERELANG_EXPERIMENTAL "Build creation kit, thread and monitor builtins" OFF)
+option(ERELANG_EXPERIMENTAL "Build creation kit, thread and monitor builtins" ON)
 
 set(_ERELANG_EXPERIMENTAL_SOURCES experimental/disabled_builtin_stubs.cpp)
 if (ERELANG_EXPERIMENTAL)
@@ -71,10 +71,12 @@ add_library(erelang STATIC
     src/parser.cpp
     src/runtime/core.cpp
     src/runtime/helpers.cpp
+    src/runtime/memory.cpp
     src/runtime/value.cpp
     src/runtime/bytecode.cpp
     src/runtime/eval.cpp
     src/runtime/actions.cpp
+    src/runtime/debug.cpp
     src/runtime/imports.cpp
     src/runtime/builtins.cpp
   src/erodsl/spec.cpp
@@ -261,10 +263,12 @@ elseif (BUILD_SHARED_RUNTIME)
     src/codegen_x64.cpp
     src/runtime/core.cpp
     src/runtime/helpers.cpp
+    src/runtime/memory.cpp
     src/runtime/value.cpp
     src/runtime/bytecode.cpp
     src/runtime/eval.cpp
     src/runtime/actions.cpp
+    src/runtime/debug.cpp
     src/runtime/imports.cpp
     src/runtime/builtins.cpp
     src/runtime/cabi_exports.cpp

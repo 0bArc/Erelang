@@ -27,6 +27,17 @@ The typechecker emits `TC***` codes before the script runs. **Errors** stop exec
 | `TC149` | Pattern variant used where a different enum type was expected |
 | `TC150` | Unknown enum variant (construction or pattern) |
 | `TC151` | Enum variant payload type mismatch |
+| `TC153` | Unknown field in struct/entity destructuring pattern |
+| `TC154` | Struct pattern used on non-struct/entity value |
+| `TC155` | Array pattern used on non-array value |
+| `TC156` | Pattern form used in the wrong context (`let` vs `match`) |
+| `TC157` | Tuple arity mismatch (literal or destructuring) |
+| `TC158` | `?` used on non-Result/Option or incomplete type |
+| `TC159` | `?` Option/Result or error-type incompatibility with function return |
+| `TC160` | `await` used outside an `async` action |
+| `TC161` | Non-exhaustive `match` on an enum (missing variants; use `_` or cover all) |
+| `TC162` | Match guard expression is not `bool` |
+| `TC163` | Range `..` / `..<` bounds are not `int` |
 
 ## Warning codes
 

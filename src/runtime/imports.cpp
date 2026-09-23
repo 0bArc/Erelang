@@ -78,7 +78,7 @@ std::optional<std::string> resolve_builtin_module_method(
 
         const std::string normalizedPath = normalize_import_path(importDecl.path);
 
-        if (path_is(normalizedPath, {"builtin/fs", "builtin/erefs"})) {
+        if (path_is(normalizedPath, {"builtin/fs", "builtin/erefs", "std/fs"})) {
             if (methodName == "read") return std::string("read_text");
             if (methodName == "write") return std::string("write_text");
             if (methodName == "append") return std::string("append_text");
@@ -105,9 +105,16 @@ std::optional<std::string> resolve_builtin_module_method(
             if (methodName == "load_elan" || methodName == "load_elan_dir" || methodName == "call_action") {
                 return methodName;
             }
+            if (methodName == "open") return std::string("file_open");
+            if (methodName == "close") return std::string("file_close");
+            if (methodName == "read_bytes" || methodName == "read_handle") return std::string("file_read");
+            if (methodName == "write_bytes" || methodName == "write_handle") return std::string("file_write");
+            if (methodName == "seek") return std::string("file_seek");
+            if (methodName == "tell") return std::string("file_tell");
+            if (methodName == "flush") return std::string("file_flush");
         }
 
-        if (path_is(normalizedPath, {"builtin/path", "builtin/erepath"})) {
+        if (path_is(normalizedPath, {"builtin/path", "builtin/erepath", "std/path"})) {
             if (methodName == "join") return std::string("path_join");
             if (methodName == "parent" || methodName == "dirname") return std::string("path_dirname");
             if (methodName == "name" || methodName == "basename") return std::string("path_basename");
@@ -145,12 +152,25 @@ std::optional<std::string> resolve_builtin_module_method(
             if (methodName.rfind("perf.", 0) == 0) return methodName;
         }
 
-        if (path_is(normalizedPath, {"builtin/crypto"})) {
+        if (path_is(normalizedPath, {"builtin/crypto", "std/crypto"})) {
             if (methodName == "hash" || methodName == "hash_fnv1a") return std::string("hash_fnv1a");
+            if (methodName == "sha256" || methodName == "hash_sha256") return std::string("hash_sha256");
             if (methodName == "random_bytes") return std::string("random_bytes");
+            if (methodName == "aes_encrypt") return std::string("aes_encrypt");
+            if (methodName == "aes_decrypt") return std::string("aes_decrypt");
         }
 
-        if (path_is(normalizedPath, {"builtin/network", "builtin/net"})) {
+        if (path_is(normalizedPath, {"std/pipe", "builtin/pipe"})) {
+            if (methodName == "new") return std::string("chan_new");
+            if (methodName == "send") return std::string("chan_send");
+            if (methodName == "receive" || methodName == "recv") return std::string("chan_recv");
+            if (methodName == "try_send") return std::string("chan_try_send");
+            if (methodName == "try_receive" || methodName == "try_recv") return std::string("chan_try_recv");
+            if (methodName == "close") return std::string("chan_close");
+            if (methodName == "len" || methodName == "size") return std::string("chan_len");
+        }
+
+        if (path_is(normalizedPath, {"builtin/network", "builtin/net", "std/net"})) {
             if (methodName == "get") return std::string("http_get");
             if (methodName == "get_auth") return std::string("http_get_auth");
             if (methodName == "post") return std::string("http_post");
@@ -308,7 +328,7 @@ void bind_builtin_module_aliases(const Program& program, ValueMap& vars) {
         const std::string normalizedPath = normalize_import_path(importDecl.path);
         const std::string& alias = *importDecl.alias;
 
-        if (path_is(normalizedPath, {"builtin/fs", "builtin/erefs"})) {
+        if (path_is(normalizedPath, {"builtin/fs", "builtin/erefs", "std/fs"})) {
             bind_alias(alias, "read", "read_text");
             bind_alias(alias, "write", "write_text");
             bind_alias(alias, "append", "append_text");
@@ -334,10 +354,16 @@ void bind_builtin_module_aliases(const Program& program, ValueMap& vars) {
             bind_alias(alias, "name", "path_basename");
             bind_alias(alias, "basename", "path_basename");
             bind_alias(alias, "ext", "path_ext");
-            bind_same(alias, {"load_elan", "load_elan_dir", "call_action", "list_files", "list_dirs", "list_regular_files", "read_text", "write_text", "is_dir", "is_file", "file_size", "file_mtime"});
+            bind_alias(alias, "open", "file_open");
+            bind_alias(alias, "close", "file_close");
+            bind_alias(alias, "read_bytes", "file_read");
+            bind_alias(alias, "write_bytes", "file_write");
+            bind_alias(alias, "seek", "file_seek");
+            bind_alias(alias, "tell", "file_tell");
+            bind_alias(alias, "flush", "file_flush");
         }
 
-        if (path_is(normalizedPath, {"builtin/path", "builtin/erepath"})) {
+        if (path_is(normalizedPath, {"builtin/path", "builtin/erepath", "std/path"})) {
             bind_alias(alias, "join", "path_join");
             bind_alias(alias, "parent", "path_dirname");
             bind_alias(alias, "dirname", "path_dirname");
@@ -379,12 +405,27 @@ void bind_builtin_module_aliases(const Program& program, ValueMap& vars) {
                               "perf.gc.pause", "perf.gc.resume"});
         }
 
-        if (path_is(normalizedPath, {"builtin/crypto"})) {
+        if (path_is(normalizedPath, {"builtin/crypto", "std/crypto"})) {
             bind_alias(alias, "hash", "hash_fnv1a");
-            bind_same(alias, {"hash_fnv1a", "random_bytes"});
+            bind_alias(alias, "sha256", "hash_sha256");
+            bind_alias(alias, "aes_encrypt", "aes_encrypt");
+            bind_alias(alias, "aes_decrypt", "aes_decrypt");
+            bind_alias(alias, "random_bytes", "random_bytes");
         }
 
-        if (path_is(normalizedPath, {"builtin/network", "builtin/net"})) {
+        if (path_is(normalizedPath, {"std/pipe", "builtin/pipe"})) {
+            bind_alias(alias, "new", "chan_new");
+            bind_alias(alias, "send", "chan_send");
+            bind_alias(alias, "receive", "chan_recv");
+            bind_alias(alias, "recv", "chan_recv");
+            bind_alias(alias, "try_send", "chan_try_send");
+            bind_alias(alias, "try_receive", "chan_try_recv");
+            bind_alias(alias, "try_recv", "chan_try_recv");
+            bind_alias(alias, "close", "chan_close");
+            bind_alias(alias, "len", "chan_len");
+        }
+
+        if (path_is(normalizedPath, {"builtin/network", "builtin/net", "std/net"})) {
             bind_alias(alias, "get", "http_get");
             bind_alias(alias, "get_auth", "http_get_auth");
             bind_alias(alias, "post", "http_post");

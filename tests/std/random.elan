@@ -1,0 +1,8 @@
+@strict
+
+public action main() {
+    print rand_int(1, 3);
+    print "std-random-ok";
+}
+
+run main;

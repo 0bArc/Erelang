@@ -40,6 +40,9 @@ constexpr uint8_t EX_NULL     = 14;
 constexpr uint8_t EX_POSTFIX  = 15;
 constexpr uint8_t EX_PREFIX   = 16;
 constexpr uint8_t EX_COMPOUND = 17;
+constexpr uint8_t EX_TUPLELIT = 18;
+constexpr uint8_t EX_TRY      = 19;
+constexpr uint8_t EX_RANGE    = 20;
 
 // Stmt variant tags
 constexpr uint8_t ST_PRINT    = 0;
@@ -69,6 +72,7 @@ constexpr uint8_t ST_PAUSE    = 23;
 constexpr uint8_t ST_IMPORT   = 24;
 constexpr uint8_t ST_EXPR     = 25;
 constexpr uint8_t ST_MATCH    = 26;
+constexpr uint8_t ST_IDXSET   = 27;
 
 class Writer {
 public:
@@ -143,6 +147,10 @@ constexpr uint8_t PAT_NULL = 0;
 constexpr uint8_t PAT_WILDCARD = 1;
 constexpr uint8_t PAT_BINDING = 2;
 constexpr uint8_t PAT_CTOR = 3;
+constexpr uint8_t PAT_STRUCT = 4;
+constexpr uint8_t PAT_ARRAY = 5;
+constexpr uint8_t PAT_TUPLE = 6;
+constexpr uint8_t PAT_OR = 7;
 
 void writePattern(Writer& w, const Pattern* p) {
     if (!p) { w.u8(PAT_NULL); return; }
@@ -156,6 +164,25 @@ void writePattern(Writer& w, const Pattern* p) {
             w.u8(PAT_CTOR); w.str(node.name);
             w.u32(static_cast<uint32_t>(node.args.size()));
             for (const auto& a : node.args) writePattern(w, a.get());
+        } else if constexpr (std::is_same_v<T, PatStruct>) {
+            w.u8(PAT_STRUCT);
+            w.u32(static_cast<uint32_t>(node.fields.size()));
+            for (const auto& f : node.fields) {
+                w.str(f.field);
+                writePattern(w, f.pattern.get());
+            }
+        } else if constexpr (std::is_same_v<T, PatArray>) {
+            w.u8(PAT_ARRAY);
+            w.u32(static_cast<uint32_t>(node.elements.size()));
+            for (const auto& e : node.elements) writePattern(w, e.get());
+        } else if constexpr (std::is_same_v<T, PatTuple>) {
+            w.u8(PAT_TUPLE);
+            w.u32(static_cast<uint32_t>(node.elements.size()));
+            for (const auto& e : node.elements) writePattern(w, e.get());
+        } else if constexpr (std::is_same_v<T, PatOr>) {
+            w.u8(PAT_OR);
+            w.u32(static_cast<uint32_t>(node.alts.size()));
+            for (const auto& a : node.alts) writePattern(w, a.get());
         }
     }, p->node);
 }
@@ -173,6 +200,39 @@ PatternPtr readPattern(Reader& r) {
         for (uint32_t i = 0; i < n; ++i) ctor.args.push_back(readPattern(r));
         return std::make_shared<Pattern>(Pattern{std::move(ctor)});
     }
+    if (tag == PAT_STRUCT) {
+        PatStruct ps;
+        const uint32_t n = r.u32();
+        ps.fields.reserve(n);
+        for (uint32_t i = 0; i < n; ++i) {
+            PatField f;
+            f.field = r.str();
+            f.pattern = readPattern(r);
+            ps.fields.push_back(std::move(f));
+        }
+        return std::make_shared<Pattern>(Pattern{std::move(ps)});
+    }
+    if (tag == PAT_ARRAY) {
+        PatArray pa;
+        const uint32_t n = r.u32();
+        pa.elements.reserve(n);
+        for (uint32_t i = 0; i < n; ++i) pa.elements.push_back(readPattern(r));
+        return std::make_shared<Pattern>(Pattern{std::move(pa)});
+    }
+    if (tag == PAT_TUPLE) {
+        PatTuple pt;
+        const uint32_t n = r.u32();
+        pt.elements.reserve(n);
+        for (uint32_t i = 0; i < n; ++i) pt.elements.push_back(readPattern(r));
+        return std::make_shared<Pattern>(Pattern{std::move(pt)});
+    }
+    if (tag == PAT_OR) {
+        PatOr por;
+        const uint32_t n = r.u32();
+        por.alts.reserve(n);
+        for (uint32_t i = 0; i < n; ++i) por.alts.push_back(readPattern(r));
+        return std::make_shared<Pattern>(Pattern{std::move(por)});
+    }
     return nullptr;
 }
 
@@ -188,6 +248,9 @@ void writeExpr(Writer& w, const Expr* e) {
         else if constexpr (std::is_same_v<T, ExprBool>)   { w.u8(EX_BOOL); w.u8(v.v ? 1 : 0); }
         else if constexpr (std::is_same_v<T, ExprIdent>)  { w.u8(EX_IDENT); w.str(v.name); }
         else if constexpr (std::is_same_v<T, BinaryExpr>) { w.u8(EX_BINARY); w.u8(static_cast<uint8_t>(v.op)); writeExpr(w, v.left.get()); writeExpr(w, v.right.get()); }
+        else if constexpr (std::is_same_v<T, RangeExpr>) {
+            w.u8(EX_RANGE); writeExpr(w, v.start.get()); writeExpr(w, v.end.get()); w.u8(v.exclusive ? 1 : 0);
+        }
         else if constexpr (std::is_same_v<T, UnaryExpr>)  { w.u8(EX_UNARY); w.u8(static_cast<uint8_t>(v.op)); writeExpr(w, v.expr.get()); }
         else if constexpr (std::is_same_v<T, FunctionCallExpr>) {
             w.u8(EX_CALL); w.str(v.name); w.u32(static_cast<uint32_t>(v.args.size()));
@@ -209,6 +272,13 @@ void writeExpr(Writer& w, const Expr* e) {
         else if constexpr (std::is_same_v<T, DictLiteralExpr>) {
             w.u8(EX_DICTLIT); w.u32(static_cast<uint32_t>(v.entries.size()));
             for (auto& a : v.entries) writeExpr(w, a.get());
+        }
+        else if constexpr (std::is_same_v<T, TupleLiteralExpr>) {
+            w.u8(EX_TUPLELIT); w.u32(static_cast<uint32_t>(v.elements.size()));
+            for (auto& a : v.elements) writeExpr(w, a.get());
+        }
+        else if constexpr (std::is_same_v<T, TryExpr>) {
+            w.u8(EX_TRY); writeExpr(w, v.inner.get());
         }
         else if constexpr (std::is_same_v<T, LambdaExpr>) {
             w.u8(EX_LAMBDA);
@@ -239,6 +309,10 @@ ExprPtr readExpr(Reader& r) {
         case EX_BOOL:    return std::make_shared<Expr>(Expr{ExprBool{r.u8() != 0}});
         case EX_IDENT:   return std::make_shared<Expr>(Expr{ExprIdent{r.str()}});
         case EX_BINARY:  { auto op = static_cast<BinOp>(r.u8()); auto l = readExpr(r); auto r2 = readExpr(r); return std::make_shared<Expr>(Expr{BinaryExpr{op, l, r2}}); }
+        case EX_RANGE: {
+            auto s = readExpr(r); auto e = readExpr(r); auto excl = r.u8() != 0;
+            return std::make_shared<Expr>(Expr{RangeExpr{s, e, excl}});
+        }
         case EX_UNARY:   { auto op = static_cast<UnOp>(r.u8()); auto e = readExpr(r); return std::make_shared<Expr>(Expr{UnaryExpr{op, e}}); }
         case EX_CALL:    {
             auto name = r.str(); auto n = r.u32(); std::vector<ExprPtr> args; args.reserve(n);
@@ -265,6 +339,14 @@ ExprPtr readExpr(Reader& r) {
             auto n = r.u32(); std::vector<ExprPtr> entries; entries.reserve(n);
             for (uint32_t i = 0; i < n; ++i) entries.push_back(readExpr(r));
             return std::make_shared<Expr>(Expr{DictLiteralExpr{std::move(entries)}});
+        }
+        case EX_TUPLELIT: {
+            auto n = r.u32(); std::vector<ExprPtr> elems; elems.reserve(n);
+            for (uint32_t i = 0; i < n; ++i) elems.push_back(readExpr(r));
+            return std::make_shared<Expr>(Expr{TupleLiteralExpr{std::move(elems)}});
+        }
+        case EX_TRY: {
+            return std::make_shared<Expr>(Expr{TryExpr{readExpr(r)}});
         }
         case EX_LAMBDA: {
             LambdaExpr lambda;
@@ -323,7 +405,9 @@ void writeStmt(Writer& w, const Statement& s) {
             for (auto& t : v.typeArgs) w.str(t);
         }
         else if constexpr (std::is_same_v<T, LetStmt>) {
-            w.u8(ST_LET); w.u8(v.isConst ? 1 : 0); w.str(v.name); w.str(v.declaredType); writeExpr(w, v.value.get());
+            w.u8(ST_LET); w.u8(v.isConst ? 1 : 0); w.str(v.name); w.str(v.declaredType);
+            writePattern(w, v.pattern.get());
+            writeExpr(w, v.value.get());
         }
         else if constexpr (std::is_same_v<T, ReturnStmt>) {
             w.u8(ST_RETURN);
@@ -352,6 +436,7 @@ void writeStmt(Writer& w, const Statement& s) {
             w.u32(static_cast<uint32_t>(v.cases.size()));
             for (auto& c : v.cases) {
                 writePattern(w, c.pattern.get());
+                w.u8(c.guard ? 1 : 0); if (c.guard) writeExpr(w, c.guard.get());
                 w.u8(c.body ? 1 : 0); if (c.body) writeBlock(w, c.body.get());
             }
         }
@@ -393,6 +478,9 @@ void writeStmt(Writer& w, const Statement& s) {
         else if constexpr (std::is_same_v<T, PointerSetStmt>) {
             w.u8(ST_PTRSET); writeExpr(w, v.pointer.get()); writeExpr(w, v.value.get());
         }
+        else if constexpr (std::is_same_v<T, IndexSetStmt>) {
+            w.u8(ST_IDXSET); writeExpr(w, v.object.get()); writeExpr(w, v.index.get()); writeExpr(w, v.value.get());
+        }
         else if constexpr (std::is_same_v<T, std::shared_ptr<ParallelStmt>>) {
             w.u8(ST_PARALLEL);
             if (v) writeBlock(w, &v->body); else w.u32(0);
@@ -426,7 +514,14 @@ Statement readStmt(Reader& r) {
             for (uint32_t i = 0; i < nta; ++i) call.typeArgs.push_back(r.str());
             return call;
         }
-        case ST_LET: { auto isC = r.u8() != 0; auto name = r.str(); auto dt = r.str(); auto v = readExpr(r); return LetStmt{isC, name, v, dt}; }
+        case ST_LET: {
+            auto isC = r.u8() != 0;
+            auto name = r.str();
+            auto dt = r.str();
+            auto pat = readPattern(r);
+            auto v = readExpr(r);
+            return LetStmt{isC, name, v, dt, pat};
+        }
         case ST_RETURN: { if (r.u8()) { auto v = readExpr(r); return ReturnStmt{v}; } return ReturnStmt{}; }
         case ST_SET: { auto isM = r.u8() != 0; auto vf = r.str(); auto on = r.str(); auto val = readExpr(r); return SetStmt{isM, vf, on, val}; }
         case ST_METHOD: {
@@ -458,6 +553,7 @@ Statement readStmt(Reader& r) {
             for (uint32_t i = 0; i < n; ++i) {
                 MatchCase mc;
                 mc.pattern = readPattern(r);
+                if (r.u8()) mc.guard = readExpr(r);
                 mc.body = r.u8() ? readBlock(r) : nullptr;
                 cases.push_back(std::move(mc));
             }
@@ -490,6 +586,10 @@ Statement readStmt(Reader& r) {
         }
         case ST_UNSAFE: { auto b = r.u8() ? readBlock(r) : nullptr; return UnsafeStmt{b}; }
         case ST_PTRSET: { auto p = readExpr(r); auto v = readExpr(r); return PointerSetStmt{p, v}; }
+        case ST_IDXSET: {
+            auto o = readExpr(r); auto i = readExpr(r); auto v = readExpr(r);
+            return IndexSetStmt{o, i, v};
+        }
         case ST_PARALLEL: { return std::make_shared<ParallelStmt>(ParallelStmt{*readBlock(r)}); }
         case ST_SLEEP:   { return SleepStmt{r.i64()}; }
         case ST_INPUT:   { return InputStmt{r.str()}; }
@@ -731,7 +831,7 @@ std::vector<uint8_t> serialize_program(const Program& prog) {
 
     // Magic + version
     out.insert(out.end(), {'E','R','A','S'}); // "ERAS" = ERelang AST Serialized
-    w.u32(2); // format version
+    w.u32(4); // format version
 
     w.u8(prog.strict ? 1 : 0);
     w.u8(prog.debug ? 1 : 0);
@@ -794,7 +894,7 @@ std::optional<Program> deserialize_program(const uint8_t* data, size_t size) {
 
         // Magic
         if (r.u8() != 'E' || r.u8() != 'R' || r.u8() != 'A' || r.u8() != 'S') return std::nullopt;
-        if (r.u32() != 2) return std::nullopt; // version
+        if (r.u32() != 4) return std::nullopt; // version
 
         Program prog;
         prog.strict = r.u8() != 0;

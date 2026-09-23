@@ -58,6 +58,8 @@ enum class TokenKind {
     Ushr,           // >>>
     Pow,            // **
     PowAssign,      // **=
+    DotDot,         // ..
+    DotDotLt,       // ..<
     DocComment,     // ///... or /** ... */
     Keyword,        // reserved keywords (configurable)
     Bad,            // bad/unrecognized token (for error recovery)

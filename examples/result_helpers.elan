@@ -1,0 +1,30 @@
+@strict
+
+enum Option<T> {
+    Some(T),
+    None
+}
+
+enum Result<T, E> {
+    Ok(T),
+    Error(E)
+}
+
+public action main() {
+    print Result<int, string>.Ok(42).unwrap();
+    print Option<int>.Some(42).unwrap();
+
+    match (Result<int, string>.Ok(42).ok()) {
+        case Some(v): { print v; }
+        case None: { print "no"; }
+    }
+    match (Result<int, string>.Error("bad").ok()) {
+        case Some(v): { print v; }
+        case None: { print "none"; }
+    }
+
+    print Option<int>.Some(42).unwrap_or(10);
+    print Option<int>.None.unwrap_or(10);
+}
+
+run main;

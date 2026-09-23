@@ -1,0 +1,10 @@
+action hidden(): int {
+    return 7;
+}
+
+public action main() {
+    print hidden();
+    print "modules-vis-ok";
+}
+
+run main;

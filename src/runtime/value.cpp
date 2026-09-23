@@ -77,6 +77,10 @@ HandleKind handle_kind_from_prefix(std::string_view prefix) {
     if (prefix == "queue") return HandleKind::Queue;
     if (prefix == "ws") return HandleKind::Ws;
     if (prefix == "http" || prefix == "req" || prefix == "res" || prefix == "resp") return HandleKind::Http;
+    if (prefix == "heap" || prefix == "own") return HandleKind::Own;
+    if (prefix == "shared") return HandleKind::Shared;
+    if (prefix == "weak") return HandleKind::Weak;
+    if (prefix == "buffer" || prefix == "buf") return HandleKind::Buffer;
     return HandleKind::Unknown;
 }
 
@@ -92,6 +96,10 @@ std::string_view handle_kind_prefix(HandleKind kind) {
         case HandleKind::Queue: return "queue:";
         case HandleKind::Ws: return "ws:";
         case HandleKind::Http: return "http:";
+        case HandleKind::Own: return "heap:";
+        case HandleKind::Shared: return "shared:";
+        case HandleKind::Weak: return "weak:";
+        case HandleKind::Buffer: return "buffer:";
         case HandleKind::Unknown: return "handle:";
     }
     return "handle:";

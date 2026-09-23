@@ -2,20 +2,22 @@
   "name": "erelang-language",
   "displayName": "Erelang Language",
   "publisher": "localdev",
-  "description": "Syntax highlighting and language basics for Erelang (.ere/.elan)",
-  "version": "0.0.29",
+  "description": "LSP, DAP debugger, and syntax highlighting for Erelang (.elan)",
+  "version": "0.0.34",
   "engines": {
-    "vscode": "^1.104.0"
+    "vscode": "^1.85.0"
   },
   "activationEvents": [
     "onLanguage:erelang",
     "onLanguage:erelangManifest",
     "onLanguage:erelangCore",
-    "onCommand:erelang.debugCompletionContext"
+    "onCommand:erelang.debugCompletionContext",
+    "onDebugResolve:erelang"
   ],
   "icon": "icon.png",
   "categories": [
-    "Programming Languages"
+    "Programming Languages",
+    "Debuggers"
   ],
   "contributes": {
     "commands": [
@@ -146,6 +148,11 @@
           "type": "boolean",
           "default": false,
           "description": "Write completion-branch debug traces to the Erelang Language Debug output channel."
+        },
+        "erelang.executablePath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to erelang.exe (for LSP --check and DAP). Empty = search build/bin and PATH."
         }
       }
     },
@@ -157,9 +164,7 @@
           "erelang"
         ],
         "extensions": [
-          ".ere",
-          ".elan",
-          ".0bs"
+          ".elan"
         ],
         "icon": {
           "light": "./icons/erelang-light.png",
@@ -210,6 +215,64 @@
         "language": "erelang",
         "path": "./snippets/erevos.code-snippets"
       }
+    ],
+    "debuggers": [
+      {
+        "type": "erelang",
+        "label": "Erelang",
+        "languages": ["erelang"],
+        "program": "./out/debugAdapter.js",
+        "runtime": "node",
+        "configurationAttributes": {
+          "launch": {
+            "required": ["program"],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "Path to .elan script",
+                "default": "${file}"
+              },
+              "cwd": {
+                "type": "string",
+                "description": "Working directory",
+                "default": "${workspaceFolder}"
+              },
+              "erelangPath": {
+                "type": "string",
+                "description": "Optional path to erelang.exe",
+                "default": ""
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Stop on first statement (use a breakpoint)",
+                "default": false
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "erelang",
+            "request": "launch",
+            "name": "Erelang: Launch current file",
+            "program": "${file}",
+            "cwd": "${workspaceFolder}"
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "Erelang: Launch",
+            "description": "Launch an .elan script with breakpoints",
+            "body": {
+              "type": "erelang",
+              "request": "launch",
+              "name": "Erelang: Launch ${1:file}",
+              "program": "^\"\\${file}\"",
+              "cwd": "^\"\\${workspaceFolder}\""
+            }
+          }
+        ]
+      }
     ]
   },
   "main": "./out/extension.js",
@@ -222,9 +285,16 @@
     "test": "npm run compile && node --test test/*.test.js",
     "postinstall": "node ./node_modules/vscode/bin/install"
   },
+  "dependencies": {
+    "@vscode/debugadapter": "^1.68.0",
+    "@vscode/debugprotocol": "^1.68.0",
+    "vscode-languageclient": "^9.0.1",
+    "vscode-languageserver": "^9.0.1",
+    "vscode-languageserver-textdocument": "^1.0.12"
+  },
   "devDependencies": {
     "@types/node": "^25.3.3",
-    "@types/vscode": "^1.104.0",
+    "@types/vscode": "^1.85.0",
     "@vscode/vsce": "^3.6.2",
     "typescript": "^5.5.4",
     "vsce": "^2.15.0"

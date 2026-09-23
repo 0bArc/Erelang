@@ -12,6 +12,7 @@
 #include <cstring>
 #include <fstream>
 #include <sstream>
+#include <string_view>
 
 namespace erelang {
 namespace fs = std::filesystem;
@@ -332,8 +333,12 @@ bool is_identifier_text(std::string_view text) {
 }
 
 const StructDecl* find_struct_decl(const Program& program, std::string_view name) {
+    std::string_view bare = name;
+    if (bare.rfind("struct:", 0) == 0) bare = bare.substr(7);
+    const auto lt = bare.find('<');
+    if (lt != std::string_view::npos) bare = bare.substr(0, lt);
     for (const auto& s : program.structs) {
-        if (s.name == name) return &s;
+        if (s.name == bare) return &s;
     }
     return nullptr;
 }
@@ -343,6 +348,77 @@ const Action* find_struct_method(const StructDecl& decl, std::string_view name) 
         if (m.name == name) return &m;
     }
     return nullptr;
+}
+
+std::string encode_enum_variant(const std::string& tag, const std::vector<std::string>& payloads) {
+    std::string encoded = std::string("enumvar:") + tag;
+    for (const auto& payload : payloads) {
+        encoded.push_back('\x1f');
+        encoded += std::to_string(payload.size());
+        encoded.push_back(':');
+        encoded += payload;
+    }
+    return encoded;
+}
+
+bool decode_enum_variant(const std::string& encoded, std::string& tagOut, std::vector<std::string>& payloadsOut) {
+    payloadsOut.clear();
+    constexpr const char* kEnumVar = "enumvar:";
+    if (encoded.rfind(kEnumVar, 0) != 0) {
+        tagOut = encoded;
+        return false;
+    }
+    const std::string body = encoded.substr(std::char_traits<char>::length(kEnumVar));
+    const size_t sep = body.find('\x1f');
+    if (sep == std::string::npos) {
+        tagOut = body;
+        return true;
+    }
+    tagOut = body.substr(0, sep);
+    const std::string rest = body.substr(sep + 1);
+
+    auto all_digits = [](std::string_view s) {
+        if (s.empty()) return false;
+        for (char c : s) {
+            if (c < '0' || c > '9') return false;
+        }
+        return true;
+    };
+
+    std::vector<std::string> prefixed;
+    size_t pos = 0;
+    bool okPrefixed = true;
+    while (pos < rest.size()) {
+        if (pos > 0) {
+            if (rest[pos] != '\x1f') { okPrefixed = false; break; }
+            ++pos;
+        }
+        const size_t colon = rest.find(':', pos);
+        if (colon == std::string::npos) { okPrefixed = false; break; }
+        const std::string lenStr = rest.substr(pos, colon - pos);
+        if (!all_digits(lenStr)) { okPrefixed = false; break; }
+        size_t len = 0;
+        try { len = static_cast<size_t>(std::stoull(lenStr)); } catch (...) { okPrefixed = false; break; }
+        if (colon + 1 + len > rest.size()) { okPrefixed = false; break; }
+        prefixed.push_back(rest.substr(colon + 1, len));
+        pos = colon + 1 + len;
+    }
+    if (okPrefixed && pos == rest.size()) {
+        payloadsOut = std::move(prefixed);
+        return true;
+    }
+
+    pos = 0;
+    while (pos < rest.size()) {
+        const size_t next = rest.find('\x1f', pos);
+        if (next == std::string::npos) {
+            payloadsOut.push_back(rest.substr(pos));
+            break;
+        }
+        payloadsOut.push_back(rest.substr(pos, next - pos));
+        pos = next + 1;
+    }
+    return true;
 }
 
 } // namespace erelang

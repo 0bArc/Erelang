@@ -1,0 +1,17 @@
+@strict
+
+trait Comparable<T> {
+    action compare(other: T): int;
+}
+
+public action max<T: Comparable<T>>(a: T, b: T): T {
+    if (a.compare(b) > 0) { return a; }
+    return b;
+}
+
+public action main() {
+    int x = max(1, "hello");
+    print x;
+}
+
+run main;

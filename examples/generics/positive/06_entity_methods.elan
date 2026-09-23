@@ -1,0 +1,22 @@
+@strict
+
+entity Container<T> {
+    T item;
+
+    public action get(): T {
+        return self.item;
+    }
+}
+
+public action convert<U>(value: U): U {
+    return value;
+}
+
+public action main() {
+    Container<int> c = new Container<int>();
+    c.item = 7;
+    print c.get();
+    print convert<string>("ok");
+}
+
+run main;

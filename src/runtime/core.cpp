@@ -127,6 +127,12 @@ int Runtime::run_with_imports(const std::vector<Program>& modules, const Program
                 combined.typeAliases.push_back(t);
             }
         }
+        for (const auto& tr : mod.traits) {
+            if (!std::any_of(combined.traits.begin(), combined.traits.end(),
+                             [&](const TraitDecl& existing) { return existing.name == tr.name; })) {
+                combined.traits.push_back(tr);
+            }
+        }
         for (const auto& g : mod.globals) {
             if (!std::any_of(combined.globals.begin(), combined.globals.end(),
                              [&](const GlobalDecl& existing) { return existing.name == g.name; })) {
@@ -181,7 +187,8 @@ int Runtime::run(const Program& program) const {
         rootEnv.vars[g.name] = globalVars_[g.name];
     }
     for (const auto& en : program.enums) {
-        for (const auto& member : en.members) {
+        for (const auto& variant : en.variants) {
+            const std::string& member = variant.name;
             const std::string scopedColon = en.name + "::" + member;
             const std::string scopedDot = en.name + "." + member;
             rootEnv.vars[scopedColon] = member;
@@ -376,7 +383,8 @@ int Runtime::run_single_action(const Program& program, std::string_view actionNa
             }
         }
         for (const auto& en : program.enums) {
-            for (const auto& member : en.members) {
+            for (const auto& variant : en.variants) {
+                const std::string& member = variant.name;
                 const std::string scopedColon = en.name + "::" + member;
                 const std::string scopedDot = en.name + "." + member;
                 globalVars_[scopedColon] = member;

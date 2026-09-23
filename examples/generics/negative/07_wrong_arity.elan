@@ -1,0 +1,13 @@
+@strict
+
+struct Pair<A, B> {
+    A first;
+    B second;
+}
+
+public action main() {
+    Pair<int> p;
+    print "should-fail";
+}
+
+run main;

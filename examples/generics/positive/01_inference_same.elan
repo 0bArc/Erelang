@@ -1,0 +1,14 @@
+@strict
+
+public action same<T>(a: T, b: T): T {
+    return a;
+}
+
+public action main() {
+    int i = same(1, 2);
+    string s = same("a", "b");
+    print i;
+    print s;
+}
+
+run main;

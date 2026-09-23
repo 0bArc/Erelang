@@ -1,0 +1,12 @@
+@strict
+
+public action make<T>(): T {
+    return null;
+}
+
+public action main() {
+    int x = make();
+    print x;
+}
+
+run main;

@@ -245,9 +245,9 @@ std::vector<Token> Lexer::lex() {
         }
         if (c == '%') { if (i+1 < src_.size() && src_[i+1]=='=') { push(TokenKind::PercentAssign, "%="); i+=2; col+=2; } else { push(TokenKind::Percent, "%"); ++i; ++col; } continue; }
         if (c == '!') {
-            if (i+1<src_.size() && src_[i+1]=='=') { push(TokenKind::BangEqual, "!="); i+=2; col+=2; }
-            else { push(TokenKind::Bang, "!"); ++i; ++col; }
-            continue;
+            if (i+2 < src_.size() && src_[i+1]=='=' && src_[i+2]=='=') { push(TokenKind::StrictNotEqual, "!=="); i+=3; col+=3; continue; }
+            if (i+1<src_.size() && src_[i+1]=='=') { push(TokenKind::BangEqual, "!="); i+=2; col+=2; continue; }
+            push(TokenKind::Bang, "!"); ++i; ++col; continue;
         }
         if (c == '=') {
             if (i+2 < src_.size() && src_[i+1]=='=' && src_[i+2]=='=') { push(TokenKind::StrictEqual, "==="); i+=3; col+=3; continue; }
@@ -270,12 +270,6 @@ std::vector<Token> Lexer::lex() {
             if (i+1<src_.size() && src_[i+1]=='>') { push(TokenKind::Shr, ">>"); i+=2; col+=2; continue; }
             if (i+1<src_.size() && src_[i+1]=='=') { push(TokenKind::GreaterEqual, ">="); i+=2; col+=2; }
             else { push(TokenKind::Greater, ">"); ++i; ++col; }
-            continue;
-        }
-        if (c == '!') {
-            if (i+2 < src_.size() && src_[i+1]=='=' && src_[i+2]=='=') { push(TokenKind::StrictNotEqual, "!=="); i+=3; col+=3; }
-            else if (i+1<src_.size() && src_[i+1]=='=') { push(TokenKind::BangEqual, "!="); i+=2; col+=2; }
-            else { push(TokenKind::Bang, "!"); ++i; ++col; }
             continue;
         }
         if (c == '|') {

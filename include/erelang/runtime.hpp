@@ -103,6 +103,7 @@ private:
         bool breakSignal = false;
         bool continueSignal = false;
         Value returnValue;
+        std::unordered_map<std::string, Value> returnFields;
     };
 
     mutable const Program* currentProgram_ = nullptr;
@@ -111,6 +112,7 @@ private:
     mutable std::unordered_set<std::string> globalNames_;
     mutable std::unordered_map<std::string, ExprPtr> interpolationExprCache_;
     mutable std::mutex interpolationExprCacheMutex_;
+    mutable std::unordered_map<std::string, Value> lastReturnFields_;
     std::vector<PluginRecord> pluginRecords_;
 
     mutable std::vector<Action> dynamicActions_;

@@ -1,0 +1,21 @@
+@strict
+
+struct Pair<A, B> {
+    A first;
+    B second;
+}
+
+public action makePair<A, B>(a: A, b: B): Pair<A, B> {
+    Pair<A, B> p;
+    p.first = a;
+    p.second = b;
+    return p;
+}
+
+public action main() {
+    Pair<int, string> p = makePair<int, string>(42, "hello");
+    print p.first;
+    print p.second;
+}
+
+run main;

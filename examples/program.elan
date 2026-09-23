@@ -1,14 +1,7 @@
 @erelang
 
-#include "lib/debugger.elan"
-
 public action main() {
-  int n = 2;
-  trace("n", tostr(n));
-  breakpoint("before add");
-  n = n + 3;
-  trace("n", tostr(n));
-  step("done");
+
 }
 
 run main;

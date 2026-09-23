@@ -15,6 +15,18 @@ The typechecker emits `TC***` codes before the script runs. **Errors** stop exec
 | `TC110` | `run` target not found |
 | `TC111` | No `run` directive and no `main` action |
 | `TC121` | Non-void action missing `return` |
+| `TC140` | Opaque type parameter used in operator without a trait constraint |
+| `TC141` | Cannot infer type parameter; pass explicit `<...>` args |
+| `TC142` | Unknown trait constraint |
+| `TC143` | Concrete type does not satisfy trait (missing method) |
+| `TC144` | Type argument count mismatch |
+| `TC145` | Match binding count mismatch for variant |
+| `TC146` | Enum variant payload arity mismatch |
+| `TC147` | Method not provided by type-parameter constraints |
+| `TC148` | Match used on non-enum value |
+| `TC149` | Pattern variant used where a different enum type was expected |
+| `TC150` | Unknown enum variant (construction or pattern) |
+| `TC151` | Enum variant payload type mismatch |
 
 ## Warning codes
 

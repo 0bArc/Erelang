@@ -228,7 +228,8 @@ std::basic_ostream<CharT, Traits>& operator<<(std::basic_ostream<CharT, Traits>&
 enum class ValueBinOp {
     Add, Sub, Mul, Div, Mod, Pow,
     Eq, Ne, Lt, Le, Gt, Ge,
-    And, Or, Coalesce
+    And, Or, Coalesce,
+    BitAnd, BitXor, BitOr, Shl, Shr, StrictEq, StrictNe
 };
 enum class ValueUnOp { Neg, Not, BitNot };
 

@@ -1,0 +1,17 @@
+@strict
+
+struct Box<T> {
+    T value;
+
+    public action get(): T {
+        return self.value;
+    }
+}
+
+public action main() {
+    Box<int> box;
+    box.value = 42;
+    print box.get();
+}
+
+run main;

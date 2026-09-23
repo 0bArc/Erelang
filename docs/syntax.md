@@ -819,6 +819,75 @@ Status s = Status.Active;
 if (s == Status.Completed) { ... }
 ```
 
+## Generics
+
+User-defined type parameters on structs, entities, enums, aliases, and actions. Bodies are checked **opaque**: operations on `T` require a trait constraint (not C++-style late validation).
+
+```elan
+struct Pair<A, B> {
+    A first;
+    B second;
+}
+
+enum Option<T> {
+    Some(T),
+    None
+}
+
+type StringMap<T> = Map<string, T>;
+
+public action identity<T>(value: T): T {
+    return value;
+}
+
+trait Comparable<T> {
+    action compare(other: T): int;
+}
+
+public action max<T: Comparable<T>>(a: T, b: T): T {
+    if (a.compare(b) > 0) { return a; }
+    return b;
+}
+
+int x = identity(42);
+Option<int> o = Option<int>.Some(1);
+match (o) {
+    case Some(v): { print v; }
+    case None: { print "empty"; }
+}
+```
+
+Constraints use `T: Trait` and `T: Trait & Other`. Instantiation is monomorphized under canonical names such as `identity<int>` and `struct:Pair<int, string>`.
+
+## Match (enum patterns)
+
+`match` destructures enum values. Patterns are variant constructors with nested bindings:
+
+```elan
+match (value) {
+    case Some(v): { print v; }
+    case None: { print "empty"; }
+}
+
+match (result) {
+    case Ok(Some(n)): { print n; }
+    case Ok(None): { print "empty"; }
+    case Error(e): { print e; }
+}
+
+match (pair) {
+    case Values(a, b): { print a; print b; }
+}
+```
+
+- Scrutinee must be an enum (`Option`, `Result`, or user enum).
+- Bindings are scoped to the case body; payload types use specialized type arguments.
+- Nested variant patterns are allowed when a payload is an enum.
+- Wildcard `_` is allowed in payload positions and as a catch-all case.
+- No exhaustiveness checking, no guards, no `let Some(x) = ...` declaration destructuring, no struct field patterns.
+
+See `examples/match.elan` and negative cases `examples/match_neg_*.elan`.
+
 ## Extern Declarations (C ABI)
 
 ```elan

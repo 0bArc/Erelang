@@ -1,0 +1,16 @@
+@strict
+
+enum PairInt {
+    Values(int, int)
+}
+
+public action main() {
+    PairInt p = PairInt.Values(1, 2);
+    match (p) {
+        case Values(a): {
+            print a;
+        }
+    }
+}
+
+run main;

@@ -62,6 +62,13 @@ ValueBinOp to_value_bin_op(BinOp op) {
         case BinOp::And: return ValueBinOp::And;
         case BinOp::Or: return ValueBinOp::Or;
         case BinOp::Coalesce: return ValueBinOp::Coalesce;
+        case BinOp::BitAnd: return ValueBinOp::BitAnd;
+        case BinOp::BitXor: return ValueBinOp::BitXor;
+        case BinOp::BitOr: return ValueBinOp::BitOr;
+        case BinOp::Shl: return ValueBinOp::Shl;
+        case BinOp::Shr: return ValueBinOp::Shr;
+        case BinOp::StrictEQ: return ValueBinOp::StrictEq;
+        case BinOp::StrictNE: return ValueBinOp::StrictNe;
     }
     return ValueBinOp::Add;
 }
@@ -117,10 +124,13 @@ bool compile_node(const Expr& e, Chunk& out, const Runtime::Env* env) {
     if (std::holds_alternative<UnaryExpr>(e.node)) {
         const auto& unary = std::get<UnaryExpr>(e.node);
         if (!unary.expr) return false;
-        if (unary.op != UnOp::Neg && unary.op != UnOp::Not) return false;
+        if (unary.op != UnOp::Neg && unary.op != UnOp::Not && unary.op != UnOp::BitNot) return false;
         if (!compile_node(*unary.expr, out, env)) return false;
         emit_u8(out, static_cast<uint8_t>(OpCode::UnOp));
-        emit_u8(out, static_cast<uint8_t>(unary.op == UnOp::Neg ? ValueUnOp::Neg : ValueUnOp::Not));
+        ValueUnOp un = ValueUnOp::Not;
+        if (unary.op == UnOp::Neg) un = ValueUnOp::Neg;
+        else if (unary.op == UnOp::BitNot) un = ValueUnOp::BitNot;
+        emit_u8(out, static_cast<uint8_t>(un));
         return true;
     }
     if (std::holds_alternative<BinaryExpr>(e.node)) {

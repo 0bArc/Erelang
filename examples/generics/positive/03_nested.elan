@@ -1,0 +1,32 @@
+@strict
+
+struct Pair<A, B> {
+    A first;
+    B second;
+}
+
+enum Option<T> {
+    Some(T),
+    None
+}
+
+public action acceptNested(m: Map<string, Array<int>>, pairs: Array<Pair<int, string>>, opt: Option<Array<Pair<int, string> > >) {
+    print "nested-ok";
+}
+
+public action main() {
+    Pair<int, string> row;
+    row.first = 1;
+    row.second = "a";
+    Array<Pair<int, string>> pairs = [row];
+    Array<int> nums = [1, 2];
+    Map<string, Array<int>> nestedMap = {"k": nums};
+    Option<Array<Pair<int, string> > > maybePairs = Option<Array<Pair<int, string> > >.None;
+    acceptNested(nestedMap, pairs, maybePairs);
+    match (maybePairs) {
+        case Some(v): { print "some"; }
+        case None: { print "none"; }
+    }
+}
+
+run main;

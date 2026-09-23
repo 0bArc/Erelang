@@ -1,0 +1,46 @@
+@strict
+
+struct Pair<A, B> {
+    A first;
+    B second;
+}
+
+enum Option<T> {
+    Some(T),
+    None
+}
+
+enum Result<T, E> {
+    Ok(T),
+    Error(E)
+}
+
+public action buildKitchen(): Result<Option<Array<Pair<int, string> > >, string> {
+    Pair<int, string> row;
+    row.first = 1;
+    row.second = "one";
+    Array<Pair<int, string>> rows = [row];
+    Option<Array<Pair<int, string> > > wrapped = Option<Array<Pair<int, string> > >.Some(rows);
+    return Result<Option<Array<Pair<int, string> > >, string>.Ok(wrapped);
+}
+
+public action main() {
+    Result<Option<Array<Pair<int, string> > >, string> r = buildKitchen();
+    match (r) {
+        case Ok(opt): {
+            match (opt) {
+                case Some(arr): {
+                    print arr[0];
+                }
+                case None: {
+                    print "no-array";
+                }
+            }
+        }
+        case Error(err): {
+            print err;
+        }
+    }
+}
+
+run main;

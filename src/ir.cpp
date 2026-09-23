@@ -253,6 +253,11 @@ private:
                     emit("not", {dst, v.value});
                     return {dst, "bool"};
                 }
+                if (node.op == UnOp::BitNot) {
+                    const std::string dst = new_temp();
+                    emit("bitnot", {dst, v.value});
+                    return {dst, "int"};
+                }
                 return {"#0", "unknown"};
             } else if constexpr (std::is_same_v<T, BinaryExpr>) {
                 auto l = lower_expr(node.left);
@@ -272,6 +277,13 @@ private:
                     case BinOp::GE: emit("cmp_ge", {dst, l.value, r.value}); return {dst, "bool"};
                     case BinOp::And: emit("and", {dst, l.value, r.value}); return {dst, "bool"};
                     case BinOp::Or: emit("or", {dst, l.value, r.value}); return {dst, "bool"};
+                    case BinOp::BitAnd: emit("bitand", {dst, l.value, r.value}); return {dst, "int"};
+                    case BinOp::BitXor: emit("bitxor", {dst, l.value, r.value}); return {dst, "int"};
+                    case BinOp::BitOr: emit("bitor", {dst, l.value, r.value}); return {dst, "int"};
+                    case BinOp::Shl: emit("shl", {dst, l.value, r.value}); return {dst, "int"};
+                    case BinOp::Shr: emit("shr", {dst, l.value, r.value}); return {dst, "int"};
+                    case BinOp::StrictEQ: emit("cmp_seq", {dst, l.value, r.value}); return {dst, "bool"};
+                    case BinOp::StrictNE: emit("cmp_sne", {dst, l.value, r.value}); return {dst, "bool"};
                     default: return {"#0", "unknown"};
                 }
             } else if constexpr (std::is_same_v<T, TernaryExpr>) {
@@ -465,6 +477,34 @@ private:
                 if (s.defaultBlk) {
                     emit("label", {defaultLabel});
                     lower_block(*s.defaultBlk);
+                }
+                emit("label", {endLabel});
+            } else if constexpr (std::is_same_v<T, MatchStmt>) {
+                auto sel = lower_expr(s.selector);
+                const std::string endLabel = new_label("match_end");
+                for (const auto& c : s.cases) {
+                    const std::string caseLabel = new_label("match_case");
+                    const std::string nextLabel = new_label("match_next");
+                    const std::string cmp = new_temp();
+                    std::string tag;
+                    if (c.pattern && std::holds_alternative<PatCtor>(c.pattern->node)) {
+                        tag = std::get<PatCtor>(c.pattern->node).name;
+                    } else if (c.pattern && std::holds_alternative<PatWildcard>(c.pattern->node)) {
+                        tag.clear();
+                    }
+                    if (tag.empty() && c.pattern && std::holds_alternative<PatWildcard>(c.pattern->node)) {
+                        emit("label", {caseLabel});
+                        if (c.body) lower_block(*c.body);
+                        emit("jmp", {endLabel});
+                        continue;
+                    }
+                    emit("cmp_eq", {cmp, sel.value, quote_string(tag)});
+                    emit("jnz", {cmp, caseLabel});
+                    emit("jmp", {nextLabel});
+                    emit("label", {caseLabel});
+                    if (c.body) lower_block(*c.body);
+                    emit("jmp", {endLabel});
+                    emit("label", {nextLabel});
                 }
                 emit("label", {endLabel});
             } else if constexpr (std::is_same_v<T, ActionCallStmt>) {

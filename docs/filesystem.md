@@ -179,12 +179,15 @@ Streaming handles — use `fs.open` and handle methods (not bare `file_*` global
 
 public action main {
     string h = fs.open("out.bin", "wb");
+    h.buffer(4096);
     h.write("chunk1");
     h.write("chunk2");
     h.flush();
     h.close();
 }
 ```
+
+`h.buffer(n)` sets the in-memory read/write buffer size (default 4096). Writes coalesce until the buffer fills or `flush` / `close` / `seek`. Reads refill from the stream in chunks of `n`. Pass `0` for unbuffered IO.
 
 See [low-level.md](low-level.md) for the full handle API.
 

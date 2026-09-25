@@ -1,0 +1,86 @@
+@strict
+
+enum Instr {
+    Const(int),
+    ConstStr(string),
+    Add,
+    Sub,
+    Mul,
+    Div,
+    CmpEq,
+    CmpNe,
+    CmpLt,
+    Load(int),
+    Store(int),
+    Label(int),
+    Jump(int),
+    JumpIfFalse(int),
+    Print,
+    PrintStr,
+    Pop,
+    Call(string, int),
+    MkEnum(string, int),
+    MkStruct(string),
+    GetField(string),
+    SetField(string),
+    JumpIfNotVariant(string, int),
+    GetPayload(int),
+    Return
+}
+
+enum InstrList {
+    Nil,
+    Cons(Instr, InstrList)
+}
+
+enum FuncList {
+    FNil,
+    FCons(string, int, InstrList, int, FuncList)
+}
+
+struct IrModule {
+    InstrList code;
+    FuncList funcs;
+    int label_count;
+    int local_count;
+}
+
+public action ir_prepend(InstrList xs, Instr i): InstrList {
+    return InstrList.Cons(i, xs);
+}
+
+public action ir_append(InstrList xs, Instr i): InstrList {
+    match (xs) {
+        case Nil: { return InstrList.Cons(i, InstrList.Nil); }
+        case Cons(h, rest): {
+            return InstrList.Cons(h, ir_append(rest, i));
+        }
+    }
+    return InstrList.Cons(i, InstrList.Nil);
+}
+
+public action ir_concat(InstrList a, InstrList b): InstrList {
+    match (a) {
+        case Nil: { return b; }
+        case Cons(h, rest): {
+            return InstrList.Cons(h, ir_concat(rest, b));
+        }
+    }
+    return b;
+}
+
+public action ir_reverse(InstrList xs): InstrList {
+    InstrList acc = InstrList.Nil;
+    InstrList cur = xs;
+    int keep = 1;
+    while (keep == 1) {
+        match (cur) {
+            case Nil: { keep = 0; }
+            case Cons(h, rest): {
+                acc = InstrList.Cons(h, acc);
+                cur = rest;
+            }
+        }
+    }
+    return acc;
+}

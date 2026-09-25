@@ -118,7 +118,7 @@ std::optional<std::string> hint_for_unknown_call(const std::string& name) {
 
 bool is_module_private_builtin_name(const std::string& name) {
     static const std::unordered_set<std::string> kPrivate = {
-        "file_open", "file_close", "file_read", "file_write", "file_seek", "file_tell", "file_flush",
+        "file_open", "file_close", "file_read", "file_write", "file_seek", "file_tell", "file_flush", "file_buffer",
         "fopen", "fclose", "fread", "fwrite", "fseek", "ftell", "fflush",
         "hash_fnv1a", "hash_sha256", "random_bytes", "aes_encrypt", "aes_decrypt",
         "dict_new", "dict_set", "dict_get", "dict_has", "dict_keys", "dict_size",
@@ -131,6 +131,8 @@ bool is_module_private_builtin_name(const std::string& name) {
         "read_text", "write_text", "append_text", "file_exists", "is_dir", "is_file",
         "mkdirs", "copy_file", "move_file", "delete_file", "list_files", "list_dirs", "list_regular_files",
         "cwd", "chdir", "path_join", "path_dirname", "path_basename", "path_ext", "file_mtime", "file_size",
+        "udp_bind",
+        "log_set_level", "log_to_file", "log_write", "log_debug", "log_info", "log_warn", "log_error",
     };
     return kPrivate.count(name) != 0;
 }
@@ -540,7 +542,13 @@ TypeInfo TypeChecker::resolve_type(const std::string& syntax, const Program* pro
 }
 
 bool TypeChecker::is_opaque_type(const TypeInfo& t, const CheckContext& ctx) const {
-    return ctx.opaqueTypeParams.count(t.name) != 0;
+    if (ctx.opaqueTypeParams.count(t.name) != 0) return true;
+    const auto pos = t.name.find("::");
+    if (pos != std::string::npos) {
+        const std::string base = t.name.substr(0, pos);
+        if (ctx.opaqueTypeParams.count(base) != 0) return true;
+    }
+    return false;
 }
 
 void TypeChecker::push_opaque_params(CheckContext& ctx, const std::vector<TypeParam>& params) const {
@@ -635,21 +643,52 @@ bool TypeChecker::check_constraints(const std::vector<TypeParam>& typeParams,
             if (lt != std::string::npos) base = base.substr(0, lt);
             for (const auto& s : program->structs) if (s.name == base) { sd = &s; break; }
             for (const auto& e : program->entities) if (e.name == base) { ent = &e; break; }
+
+            std::unordered_map<std::string, std::string> assocSubst = subst;
+            for (const auto& atName : trait->associatedTypes) {
+                const std::string aliasName = base + "::" + atName;
+                const TypeAliasDecl* foundAlias = nullptr;
+                for (const auto& al : program->typeAliases) {
+                    if (al.name == aliasName) { foundAlias = &al; break; }
+                }
+                if (!foundAlias) {
+                    DiagBuilder(out, Severity::Error,
+                        "Type '" + concrete + "' does not satisfy trait '" + needed.name +
+                        "' (missing associated type '" + atName + "'; declare `type " + aliasName + " = ...;`)",
+                        "TC164", ctxName).emit();
+                    ok = false;
+                    continue;
+                }
+                assocSubst[atName] = foundAlias->targetType;
+            }
+
             for (const auto& method : trait->methods) {
                 bool found = false;
+                std::string actualRet;
                 auto check_action = [&](const Action& a) {
                     if (a.name != method.name) return;
                     if (a.params.size() != method.params.size()) return;
                     found = true;
+                    actualRet = a.returnType;
                 };
                 if (sd) for (const auto& m : sd->methods) check_action(m);
                 if (ent) for (const auto& m : ent->methods) check_action(m);
-                // Primitive types: no structural methods unless builtin later.
                 if (!found && concrete != "int" && concrete != "string" && concrete != "bool" && concrete != "double") {
                     DiagBuilder(out, Severity::Error,
                         "Type '" + concrete + "' does not satisfy trait '" + needed.name + "' (missing method '" + method.name + "')",
                         "TC143", ctxName).emit();
                     ok = false;
+                } else if (found && !method.returnType.empty() && !actualRet.empty()) {
+                    const std::string expectedRet = substitute_type_string(method.returnType, assocSubst);
+                    TypeInfo expT = resolve_type(expectedRet, program, nullptr);
+                    TypeInfo actT = resolve_type(actualRet, program, nullptr);
+                    if (expT.name != "unknown" && actT.name != "unknown" && !is_assignable(actT, expT)) {
+                        DiagBuilder(out, Severity::Error,
+                            "Type '" + concrete + "' associated return mismatch for '" + method.name +
+                            "': expected " + expT.name + ", got " + actT.name,
+                            "TC165", ctxName).emit();
+                        ok = false;
+                    }
                 }
             }
         }
@@ -799,9 +838,36 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
                         }
                     }
                     if (!resolvedEnum) {
-                        DiagBuilder(result_, Severity::Error, "Use before declaration: " + node.name, "TC010", ctx.actionName())
-                            .hint("Add `" + node.name + " = ...;` above this line, or import the symbol")
-                            .emit();
+                        const Action* act = nullptr;
+                        auto ait = tc_.actions_.find(node.name);
+                        if (ait != tc_.actions_.end()) {
+                            act = ait->second;
+                        } else if (node.name.find("::") == std::string::npos) {
+                            const std::string suffix = "::" + node.name;
+                            for (const auto& kv : tc_.actions_) {
+                                const std::string& cand = kv.first;
+                                if (cand.size() > suffix.size() &&
+                                    cand.rfind(suffix) == cand.size() - suffix.size()) {
+                                    if (act) { act = nullptr; break; }
+                                    act = kv.second;
+                                }
+                            }
+                        }
+                        if (act) {
+                            tc_.actionUsage_[act->name].referenced = true;
+                            std::string ft = "action(";
+                            for (size_t i = 0; i < act->params.size(); ++i) {
+                                if (i) ft += ", ";
+                                ft += act->params[i].type.empty() ? "any" : act->params[i].type;
+                            }
+                            ft += ")->";
+                            ft += act->returnType.empty() ? "any" : act->returnType;
+                            inferred = {ft};
+                        } else {
+                            DiagBuilder(result_, Severity::Error, "Use before declaration: " + node.name, "TC010", ctx.actionName())
+                                .hint("Add `" + node.name + " = ...;` above this line, or import the symbol")
+                                .emit();
+                        }
                     }
                 }
             }
@@ -1505,6 +1571,23 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
                                     "TC147", ctx.actionName()).emit();
                                 inferred = {"unknown"};
                             } else {
+                                // Associated type names in trait method returns become T::Name
+                                auto cit2 = ctx.typeParamConstraints.find(owner->type.name);
+                                if (cit2 != ctx.typeParamConstraints.end() && ctx.program &&
+                                    ret != "void" && ret != "unknown" &&
+                                    ctx.opaqueTypeParams.count(ret) == 0) {
+                                    for (const auto& constraint : cit2->second) {
+                                        for (const auto& tr : ctx.program->traits) {
+                                            if (tr.name != constraint.name) continue;
+                                            for (const auto& at : tr.associatedTypes) {
+                                                if (at == ret) {
+                                                    ret = owner->type.name + "::" + at;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                                 inferred = {ret};
                             }
                             enumConstructed = true; // skip normal call resolve
@@ -2167,7 +2250,7 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                         DiagBuilder(result_, Severity::Error,
                             "Assignment type mismatch on " + stmt.varOrField + ": variable is " + v->type.name + ", value is " + valT.name,
                             "TC052", ctx.actionName())
-                            .hint("Cast/coerce with toint/tostr/tobool, or redeclare with typed form: `" + valT.name + " " + stmt.varOrField + " = ...;`")
+                            .hint("Cast/coerce with int()/string()/float()/bool(), or redeclare with typed form: `" + valT.name + " " + stmt.varOrField + " = ...;`")
                             .emit();
                     }
                     v->assigned = true;
@@ -2552,6 +2635,7 @@ void TypeChecker::pass_check_program(const Program& program, TCResult& out) {
             bool isOpaqueParam = false;
             for (const auto& tp : a.typeParams) {
                 if (tp.name == p.type) { isOpaqueParam = true; break; }
+                if (p.type.rfind(tp.name + "::", 0) == 0) { isOpaqueParam = true; break; }
             }
             if (isOpaqueParam) {
                 paramType = TypeInfo{p.type};
@@ -2589,7 +2673,10 @@ void TypeChecker::pass_check_program(const Program& program, TCResult& out) {
         }
         auto rf = stmt.check_block(a.body, ctx, scopes, [&]() -> std::string {
             if (a.returnType.empty()) return "void";
-            for (const auto& tp : a.typeParams) if (tp.name == a.returnType) return a.returnType;
+            for (const auto& tp : a.typeParams) {
+                if (tp.name == a.returnType) return a.returnType;
+                if (a.returnType.rfind(tp.name + "::", 0) == 0) return a.returnType;
+            }
             return a.returnType;
         }());
         for (auto& frame : scopes.all()) for (auto& kv : frame) if (!kv.second.used) DiagBuilder(out, Severity::Warning, "Unused variable: " + kv.first, "TC120", a.name).emit();
@@ -2656,6 +2743,8 @@ void TypeChecker::register_imported_module_builtins(const Program& program) {
         add("net.json_encode", 1, 1, "string");
         add("net.json_decode", 1, 1, "string");
         add("net.get_resp", 1, 1, "string");
+        add("net.udp_bind", 2, 2, "string");
+        add("net.udp", 2, 2, "string");
         add("network.ip.flush", 0, 0, "string");
         add("network.ip.release", 0, 1, "string");
         add("network.ip.renew", 0, 1, "string");
@@ -2801,8 +2890,25 @@ void TypeChecker::register_imported_module_builtins(const Program& program) {
         add("file_read", 1, 2, "string"); add("file_write", 2, 2, "string");
         add("file_seek", 2, 3, "bool"); add("file_tell", 1, 1, "int");
         add("file_flush", 1, 1, "bool");
+        add("file_buffer", 1, 2, "bool");
         add("fs.open", 1, 2, "string"); add("fs.close", 1, 1, "bool");
         add("fs.read", 1, 1, "string"); add("fs.write", 2, 2, "void");
+    }
+    if (program_imports_module(&program, "builtin/log") || program_imports_module(&program, "std/log")) {
+        add("log_set_level", 1, 1, "bool");
+        add("log_to_file", 1, 1, "bool");
+        add("log_write", 2, 2, "void");
+        add("log_debug", 1, 1, "void");
+        add("log_info", 1, 1, "void");
+        add("log_warn", 1, 1, "void");
+        add("log_error", 1, 1, "void");
+        add("log.set_level", 1, 1, "bool");
+        add("log.to_file", 1, 1, "bool");
+        add("log.write", 2, 2, "void");
+        add("log.debug", 1, 1, "void");
+        add("log.info", 1, 1, "void");
+        add("log.warn", 1, 1, "void");
+        add("log.error", 1, 1, "void");
     }
     if (program_imports_module(&program, "std/pipe") || program_imports_module(&program, "builtin/pipe")) {
         add("chan_new", 0, 1, "string");
@@ -2835,6 +2941,10 @@ void TypeChecker::init_builtins() {
     add("exec",1,1,"int");
     add("spawn",1,1,"int");
     add("exit",1,1,"void");
+    add("mini_ir_run",1,1,"string");
+    add("mini_ir.run",1,1,"string");
+    add("mini_ir_run_file",1,1,"string");
+    add("mini_ir.run_file",1,1,"string");
     add("int",1,1,"int");
     add("float",1,1,"double");
     add("string",1,1,"string");
@@ -2852,6 +2962,12 @@ void TypeChecker::init_builtins() {
     add("move",3,3,"void");
     add("fill",3,3,"void");
     add("zero",2,2,"void");
+    add("mem_stats",0,0,"string");
+    add("mem.stats",0,0,"string");
+    add("mem_alive",0,0,"int");
+    add("mem.alive",0,0,"int");
+    add("mem_reset_stats",0,0,"void");
+    add("mem.reset_stats",0,0,"void");
     add("heap",1,1,"unknown");
     add("shared",1,1,"unknown");
     add("weak",1,1,"unknown");

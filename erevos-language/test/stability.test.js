@@ -211,7 +211,11 @@ test('textmate grammar keeps method and property scopes distinct', () => {
   assert.equal(patterns[2].captures['2'].name, 'variable.other.property.erelang');
   assert.equal(
     grammar.repository.scopeAccess.patterns[0].captures['3'].name,
-    'variable.other.constant.erelang',
+    'entity.name.function.erelang',
+  );
+  assert.equal(
+    grammar.repository.scopeAccess.patterns[1].captures['3'].name,
+    'entity.name.type.erelang',
   );
   assert.equal(
     grammar.repository.memberAccess.patterns[1].captures['2'].name,

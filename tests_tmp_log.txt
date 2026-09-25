@@ -1,0 +1,12 @@
+[info] hello-log
+[warn] careful
+[info] hello-log
+[warn] careful
+[info] hello-log
+[warn] careful
+[info] hello-log
+[warn] careful
+[info] hello-log
+[warn] careful
+[info] hello-log
+[warn] careful

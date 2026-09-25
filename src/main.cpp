@@ -173,6 +173,7 @@ int main(int argc, char** argv) {
             {
                 std::istringstream iss(source);
                 std::string line;
+                std::string filtered;
                 while (std::getline(iss, line)) {
                     std::string trimmed = line;
                     while (!trimmed.empty() && (trimmed.back()=='\r' || trimmed.back()=='\n')) trimmed.pop_back();
@@ -199,8 +200,12 @@ int main(int argc, char** argv) {
                                 load_prog(ip.string());
                             }
                         }
+                    } else {
+                        filtered += line;
+                        filtered.push_back('\n');
                     }
                 }
+                source = std::move(filtered);
             }
             const auto& language = resolve_language(p);
             Program prog = lex_program(std::move(source), language, key);

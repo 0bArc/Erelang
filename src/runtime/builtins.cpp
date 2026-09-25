@@ -8,11 +8,14 @@
 #include "erelang/runtime.hpp"
 #include "erelang/version.hpp"
 #include "erelang/features/serialization.hpp"
+#include "erelang/mini_ir_vm.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <mutex>
 #include <random>
 #include <sstream>
 #include <stdexcept>
@@ -906,6 +909,12 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         int code = (int)to_int(argS(0));
         std::exit(code);
         }
+    if (nameStr == "mini_ir_run" || nameStr == "mini_ir.run") {
+        return erelang::mini_ir::encode_result(erelang::mini_ir::run_text(argS(0)));
+    }
+    if (nameStr == "mini_ir_run_file" || nameStr == "mini_ir.run_file") {
+        return erelang::mini_ir::encode_result(erelang::mini_ir::run_file(fsPath(0).string()));
+    }
     if (nameStr == "run_file") {
     // Run a file with default OS association (like double-click). No output capture; returns empty.
     std::string fp = argS(0);
@@ -987,6 +996,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         if (!(*file)) return {};
         const int id = g_nextFileId++;
         g_fileStreams[id] = std::move(file);
+        g_fileBufs[id] = FileBufState{};
         return std::string("file:") + std::to_string(id);
     }
     if (nameStr == "file_close") {
@@ -995,8 +1005,38 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         const int id = to_int(handle.substr(5));
         auto it = g_fileStreams.find(id);
         if (it == g_fileStreams.end()) return "false";
+        auto bit = g_fileBufs.find(id);
+        if (bit != g_fileBufs.end() && it->second && it->second->is_open() && !bit->second.writePending.empty()) {
+            it->second->write(bit->second.writePending.data(),
+                              static_cast<std::streamsize>(bit->second.writePending.size()));
+            it->second->flush();
+            bit->second.writePending.clear();
+        }
         if (it->second && it->second->is_open()) it->second->close();
         g_fileStreams.erase(it);
+        g_fileBufs.erase(id);
+        return "true";
+    }
+    if (nameStr == "file_buffer") {
+        const std::string handle = argS(0);
+        if (handle.rfind("file:", 0) != 0) return "false";
+        const int id = to_int(handle.substr(5));
+        if (!g_fileStreams.count(id)) return "false";
+        long long n = args.size() >= 2 ? to_int(argS(1)) : 4096;
+        if (n < 0) n = 0;
+        auto& buf = g_fileBufs[id];
+        if (!buf.writePending.empty()) {
+            auto fit = g_fileStreams.find(id);
+            if (fit != g_fileStreams.end() && fit->second) {
+                fit->second->write(buf.writePending.data(),
+                                   static_cast<std::streamsize>(buf.writePending.size()));
+                fit->second->flush();
+            }
+            buf.writePending.clear();
+        }
+        buf.capacity = static_cast<std::size_t>(n);
+        buf.readCache.clear();
+        buf.readPos = 0;
         return "true";
     }
     if (nameStr == "file_read") {
@@ -1006,19 +1046,53 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         auto it = g_fileStreams.find(id);
         if (it == g_fileStreams.end() || !it->second) return {};
         auto& stream = *it->second;
+        auto& buf = g_fileBufs[id];
         if (!stream.good()) {
             stream.clear();
         }
+        auto refill = [&]() {
+            if (buf.capacity == 0) return;
+            if (buf.readPos < buf.readCache.size()) return;
+            buf.readCache.assign(buf.capacity, '\0');
+            stream.read(buf.readCache.data(), static_cast<std::streamsize>(buf.capacity));
+            buf.readCache.resize(static_cast<std::size_t>(stream.gcount()));
+            buf.readPos = 0;
+        };
         if (args.size() >= 2) {
             const long long count = std::max<long long>(0, to_int(argS(1)));
-            std::string out(static_cast<std::size_t>(count), '\0');
-            stream.read(out.data(), static_cast<std::streamsize>(count));
-            out.resize(static_cast<std::size_t>(stream.gcount()));
+            std::string out;
+            out.reserve(static_cast<std::size_t>(count));
+            while (static_cast<long long>(out.size()) < count) {
+                if (buf.capacity == 0) {
+                    const long long need = count - static_cast<long long>(out.size());
+                    std::string chunk(static_cast<std::size_t>(need), '\0');
+                    stream.read(chunk.data(), static_cast<std::streamsize>(need));
+                    chunk.resize(static_cast<std::size_t>(stream.gcount()));
+                    out += chunk;
+                    break;
+                }
+                refill();
+                if (buf.readPos >= buf.readCache.size()) break;
+                const std::size_t avail = buf.readCache.size() - buf.readPos;
+                const std::size_t take = std::min(avail, static_cast<std::size_t>(count - static_cast<long long>(out.size())));
+                out.append(buf.readCache, buf.readPos, take);
+                buf.readPos += take;
+            }
             return out;
         }
-        std::ostringstream ss;
-        ss << stream.rdbuf();
-        return ss.str();
+        if (buf.capacity == 0) {
+            std::ostringstream ss;
+            ss << stream.rdbuf();
+            return ss.str();
+        }
+        std::string out;
+        for (;;) {
+            refill();
+            if (buf.readPos >= buf.readCache.size()) break;
+            out.append(buf.readCache, buf.readPos, buf.readCache.size() - buf.readPos);
+            buf.readPos = buf.readCache.size();
+        }
+        return out;
     }
     if (nameStr == "file_write") {
         const std::string handle = argS(0);
@@ -1027,9 +1101,19 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         auto it = g_fileStreams.find(id);
         if (it == g_fileStreams.end() || !it->second) return "0";
         auto& stream = *it->second;
+        auto& buf = g_fileBufs[id];
         const std::string data = argS(1);
-        stream.write(data.data(), static_cast<std::streamsize>(data.size()));
-        if (!stream.good()) return "0";
+        if (buf.capacity == 0) {
+            stream.write(data.data(), static_cast<std::streamsize>(data.size()));
+            if (!stream.good()) return "0";
+            return std::to_string(static_cast<long long>(data.size()));
+        }
+        buf.writePending += data;
+        while (buf.writePending.size() >= buf.capacity) {
+            stream.write(buf.writePending.data(), static_cast<std::streamsize>(buf.capacity));
+            if (!stream.good()) return "0";
+            buf.writePending.erase(0, buf.capacity);
+        }
         return std::to_string(static_cast<long long>(data.size()));
     }
     if (nameStr == "file_seek") {
@@ -1039,6 +1123,14 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         auto it = g_fileStreams.find(id);
         if (it == g_fileStreams.end() || !it->second) return "false";
         auto& stream = *it->second;
+        auto& buf = g_fileBufs[id];
+        if (!buf.writePending.empty()) {
+            stream.write(buf.writePending.data(), static_cast<std::streamsize>(buf.writePending.size()));
+            stream.flush();
+            buf.writePending.clear();
+        }
+        buf.readCache.clear();
+        buf.readPos = 0;
         const long long offset = to_int(argS(1));
         std::string whence = args.size() >= 3 ? argS(2) : "set";
         std::ios::seekdir dir = std::ios::beg;
@@ -1059,7 +1151,13 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         auto pos = stream.tellg();
         if (pos < 0) pos = stream.tellp();
         if (pos < 0) return "-1";
-        return std::to_string(static_cast<long long>(pos));
+        auto bit = g_fileBufs.find(id);
+        long long adj = static_cast<long long>(pos);
+        if (bit != g_fileBufs.end()) {
+            adj += static_cast<long long>(bit->second.writePending.size());
+            adj -= static_cast<long long>(bit->second.readCache.size() - bit->second.readPos);
+        }
+        return std::to_string(adj);
     }
     if (nameStr == "file_flush") {
         const std::string handle = argS(0);
@@ -1067,9 +1165,68 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         const int id = to_int(handle.substr(5));
         auto it = g_fileStreams.find(id);
         if (it == g_fileStreams.end() || !it->second) return "false";
+        auto bit = g_fileBufs.find(id);
+        if (bit != g_fileBufs.end() && !bit->second.writePending.empty()) {
+            it->second->write(bit->second.writePending.data(),
+                              static_cast<std::streamsize>(bit->second.writePending.size()));
+            bit->second.writePending.clear();
+        }
         it->second->flush();
         return it->second->good() ? "true" : "false";
     }
+
+    // Logging module (std/log): level-filtered lines to stderr and optional file.
+    {
+        static int g_logLevel = 1; // 0=debug 1=info 2=warn 3=error
+        static std::string g_logFilePath;
+        static std::mutex g_logMu;
+        auto level_rank = [](const std::string& s) -> int {
+            std::string l = s;
+            for (char& c : l) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (l == "debug") return 0;
+            if (l == "info") return 1;
+            if (l == "warn" || l == "warning") return 2;
+            if (l == "error") return 3;
+            return 1;
+        };
+        auto level_name = [](int r) -> const char* {
+            switch (r) {
+                case 0: return "debug";
+                case 1: return "info";
+                case 2: return "warn";
+                default: return "error";
+            }
+        };
+        auto emit_log = [&](int rank, const std::string& msg) -> std::string {
+            if (rank < g_logLevel) return {};
+            std::ostringstream line;
+            line << "[" << level_name(rank) << "] " << msg << "\n";
+            const std::string text = line.str();
+            std::lock_guard<std::mutex> lock(g_logMu);
+            std::cerr << text;
+            if (!g_logFilePath.empty()) {
+                std::ofstream out(g_logFilePath, std::ios::binary | std::ios::app);
+                if (out) out << text;
+            }
+            return {};
+        };
+        if (nameStr == "log_set_level") {
+            g_logLevel = level_rank(argS(0));
+            return "true";
+        }
+        if (nameStr == "log_to_file") {
+            g_logFilePath = argS(0);
+            return "true";
+        }
+        if (nameStr == "log_write") {
+            return emit_log(level_rank(argS(0)), argS(1));
+        }
+        if (nameStr == "log_debug") return emit_log(0, argS(0));
+        if (nameStr == "log_info") return emit_log(1, argS(0));
+        if (nameStr == "log_warn") return emit_log(2, argS(0));
+        if (nameStr == "log_error") return emit_log(3, argS(0));
+    }
+
     if (nameStr == "file_exists") {
         std::error_code ec;
         return std::filesystem::exists(fsPath(0), ec) && !ec ? std::string("true") : std::string("false");

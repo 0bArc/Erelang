@@ -1,0 +1,1986 @@
+@strict
+
+enum Tok {
+    Ident,
+    Keyword,
+    Number,
+    String,
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    EqEq,
+    BangEq,
+    Bang,
+    Lt,
+    AndAnd,
+    OrOr,
+    Assign,
+    LParen,
+    RParen,
+    LBrace,
+    RBrace,
+    Comma,
+    Colon,
+    Dot,
+    At,
+    Hash,
+    Semi,
+    Eof,
+    Error
+}
+
+struct Token {
+    Tok kind;
+    string text;
+    int start;
+    int end;
+    int line;
+    int column;
+}
+
+enum TokenList {
+    Nil,
+    Cons(Token, TokenList)
+}
+
+enum BinOpKind {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Eq,
+    Ne,
+    Lt,
+    And,
+    Or
+}
+
+enum UnOpKind {
+    Neg,
+    Not
+}
+
+enum Expr {
+    IntLit(int, int, int),
+    BoolLit(bool, int, int),
+    StringLit(string, int, int),
+    Name(string, int, int),
+    Unary(UnOpKind, Expr, int, int),
+    BinOp(BinOpKind, Expr, Expr, int, int),
+    Assign(string, Expr, int, int),
+    Call(string, Expr, int, int),
+    Member(Expr, string, int, int),
+    ArgNil,
+    ArgCons(Expr, Expr)
+}
+
+enum Stmt {
+    Empty,
+    Let(string, Expr, int, int),
+    VarDecl(string, string, Expr, bool, int, int),
+    AssignStmt(string, Expr, int, int),
+    FieldAssign(Expr, string, Expr, int, int),
+    ExprStmt(Expr, int, int),
+    Print(Expr, int, int),
+    Return(Expr, bool, int, int),
+    If(Expr, Stmt, Stmt, int, int),
+    While(Expr, Stmt, int, int),
+    Match(Expr, Stmt, int, int),
+    Arm(string, string, Stmt, Stmt),
+    ArmEnd,
+    Block(Stmt),
+    Seq(Stmt, Stmt),
+    SeqList(StmtList)
+}
+
+enum StmtList {
+    StmtNil,
+    StmtCons(Stmt, StmtList)
+}
+
+enum Decl {
+    ActionDecl(string, Decl, string, Stmt, int, int),
+    EnumDecl(string, Decl, int, int),
+    StructDecl(string, Decl, int, int),
+    TopStmt(Stmt),
+    ParamNil,
+    ParamCons(string, string, Decl),
+    FieldNil,
+    FieldCons(string, string, Decl),
+    VariantNil,
+    VariantCons(string, string, Decl),
+    DeclNil,
+    DeclCons(Decl, Decl)
+}
+
+struct Program {
+    Decl decls;
+    bool ok;
+}
+
+enum Severity {
+    Error,
+    Warning
+}
+
+struct Diagnostic {
+    string message;
+    int line;
+    int column;
+    Severity severity;
+}
+
+enum DiagList {
+    Nil,
+    Cons(string, int, int, DiagList)
+}
+
+struct ParseResult {
+    Stmt program;
+    DiagList diags;
+    bool ok;
+}
+
+struct ProgramResult {
+    Program program;
+    DiagList diags;
+    bool ok;
+}
+
+struct ExprResult {
+    Expr expr;
+    TokenList rest;
+    DiagList diags;
+    bool ok;
+}
+
+struct StmtResult {
+    Stmt stmt;
+    TokenList rest;
+    DiagList diags;
+    bool ok;
+}
+
+struct DeclResult {
+    Decl decl;
+    TokenList rest;
+    DiagList diags;
+    bool ok;
+}
+
+public action is_tok(Token t, string name): bool {
+    return tok_name(t.kind) == name;
+}
+
+public action is_kw(Token t, string word): bool {
+    if (is_tok(t, "Keyword")) {
+        return t.text == word;
+    }
+    return false;
+}
+
+public action is_type_name(Token t): bool {
+    if (is_kw(t, "int")) { return true; }
+    if (is_kw(t, "string")) { return true; }
+    if (is_kw(t, "bool")) { return true; }
+    if (is_tok(t, "Ident")) { return true; }
+    return false;
+}
+
+public action skip_generic_args(TokenList ts): TokenList {
+    Token t = peek_token(ts);
+    if (!(is_tok(t, "Lt") && t.text == "<")) {
+        return ts;
+    }
+    Token first = peek_token(advance_token(ts));
+    if (!(is_tok(first, "Ident") || is_tok(first, "Keyword"))) {
+        return ts;
+    }
+    TokenList cur = advance_token(ts);
+    int depth = 1;
+    while (depth > 0) {
+        Token next = peek_token(cur);
+        if (is_tok(next, "Eof")) {
+            return ts;
+        }
+        if (is_tok(next, "RParen") || is_tok(next, "RBrace") || is_tok(next, "LBrace") || is_tok(next, "Semi") || is_tok(next, "Assign") || is_tok(next, "EqEq") || is_tok(next, "BangEq") || is_tok(next, "AndAnd") || is_tok(next, "OrOr") || is_tok(next, "Plus") || is_tok(next, "Minus") || is_tok(next, "Star") || is_tok(next, "Slash") || is_tok(next, "Bang")) {
+            return ts;
+        }
+        if (is_tok(next, "Lt") && next.text == ">") {
+            depth = depth - 1;
+        } else if (is_tok(next, "Lt") && next.text == "<") {
+            depth = depth + 1;
+        } else if (is_tok(next, "Lt")) {
+            return ts;
+        }
+        cur = advance_token(cur);
+    }
+    return cur;
+}
+
+public action qualify_call_name(string owner, string field): string {
+    if (owner == "string") {
+        if (field == "len") { return "string.len"; }
+        if (field == "substr") { return "string.substr"; }
+        if (field == "find") { return "string.find"; }
+        if (field == "strip") { return "string.strip"; }
+        if (field == "starts_with") { return "string.starts_with"; }
+        if (field == "ends_with") { return "string.ends_with"; }
+        if (field == "replace") { return "string.replace"; }
+        if (field == "lower") { return "string.lower"; }
+        if (field == "upper") { return "string.upper"; }
+        return field;
+    }
+    if (owner == "fs") {
+        if (field == "read") { return "fs.read"; }
+        if (field == "write") { return "fs.write"; }
+        if (field == "exists") { return "fs.exists"; }
+        return field;
+    }
+    if (owner == "path") {
+        if (field == "join") { return "path.join"; }
+        if (field == "dirname") { return "path.dirname"; }
+        return field;
+    }
+    return field;
+}
+
+public action peek_token(TokenList ts): Token {
+    match (ts) {
+        case Cons(t, rest): { return t; }
+        case Nil: {
+            return make_token(Tok.Eof, "", 0, 0, 1, 1);
+        }
+    }
+    return make_token(Tok.Eof, "", 0, 0, 1, 1);
+}
+
+public action advance_token(TokenList ts): TokenList {
+    match (ts) {
+        case Cons(t, rest): { return rest; }
+        case Nil: { return TokenList.Nil; }
+    }
+    return TokenList.Nil;
+}
+
+public action merge_diags(DiagList a, DiagList b): DiagList {
+    match (a) {
+        case Nil: { return b; }
+        case Cons(msg0, line0, col0, rest0): { }
+    }
+    match (b) {
+        case Nil: { return a; }
+        case Cons(msg1, line1, col1, rest1): { }
+    }
+    DiagList out = b;
+    DiagList cur = a;
+    int keep = 1;
+    while (keep == 1) {
+        match (cur) {
+            case Nil: { keep = 0; }
+            case Cons(msg, line, col, rest): {
+                out = DiagList.Cons(msg, line, col, out);
+                cur = rest;
+            }
+        }
+    }
+    DiagList rev = DiagList.Nil;
+    cur = out;
+    keep = 1;
+    while (keep == 1) {
+        match (cur) {
+            case Nil: { keep = 0; }
+            case Cons(msg, line, col, rest): {
+                rev = DiagList.Cons(msg, line, col, rev);
+                cur = rest;
+            }
+        }
+    }
+    return rev;
+}
+
+public action skip_attrs(TokenList ts): TokenList {
+    Token t = peek_token(ts);
+    if (is_tok(t, "At")) {
+        TokenList r1 = advance_token(ts);
+        Token name = peek_token(r1);
+        if (is_tok(name, "Ident") || is_tok(name, "Keyword")) {
+            return skip_attrs(advance_token(r1));
+        }
+        return r1;
+    }
+    return ts;
+}
+
+public action parse_arg_list(TokenList ts): ExprResult {
+    ExprResult out;
+    out.ok = true;
+    out.diags = DiagList.Nil;
+    out.rest = ts;
+    out.expr = Expr.ArgNil;
+
+    Token t = peek_token(ts);
+    if (is_tok(t, "RParen")) {
+        return out;
+    }
+    ExprResult first = parse_expr(ts);
+    out.diags = first.diags;
+    if (!first.ok) {
+        out.ok = false;
+        out.rest = first.rest;
+        return out;
+    }
+    Expr args = Expr.ArgCons(first.expr, Expr.ArgNil);
+    TokenList cur = first.rest;
+    int keep = 1;
+    while (keep == 1) {
+        Token c = peek_token(cur);
+        if (is_tok(c, "Comma")) {
+            ExprResult next = parse_expr(advance_token(cur));
+            out.diags = merge_diags(out.diags, next.diags);
+            if (!next.ok) {
+                out.ok = false;
+                out.rest = next.rest;
+                return out;
+            }
+            args = arg_append(args, next.expr);
+            cur = next.rest;
+        } else {
+            keep = 0;
+        }
+    }
+    out.expr = args;
+    out.rest = cur;
+    return out;
+}
+
+public action arg_append(Expr args, Expr e): Expr {
+    Expr acc = Expr.ArgNil;
+    Expr cur = args;
+    int keep = 1;
+    while (keep == 1) {
+        match (cur) {
+            case ArgNil: { keep = 0; }
+            case ArgCons(h, rest): {
+                acc = Expr.ArgCons(h, acc);
+                cur = rest;
+            }
+            case IntLit(v, l, c): { keep = 0; }
+            case BoolLit(v, l, c): { keep = 0; }
+            case StringLit(v, l, c): { keep = 0; }
+            case Name(n, l, c): { keep = 0; }
+            case Unary(op, x, l, c): { keep = 0; }
+            case BinOp(op, a, b, l, c): { keep = 0; }
+            case Assign(n, v, l, c): { keep = 0; }
+            case Call(n, a, l, c): { keep = 0; }
+            case Member(o, f, l, c): { keep = 0; }
+        }
+    }
+    Expr out = Expr.ArgCons(e, Expr.ArgNil);
+    cur = acc;
+    keep = 1;
+    while (keep == 1) {
+        match (cur) {
+            case ArgNil: { keep = 0; }
+            case ArgCons(h, rest): {
+                out = Expr.ArgCons(h, out);
+                cur = rest;
+            }
+            case IntLit(v, l, c): { keep = 0; }
+            case BoolLit(v, l, c): { keep = 0; }
+            case StringLit(v, l, c): { keep = 0; }
+            case Name(n, l, c): { keep = 0; }
+            case Unary(op, x, l, c): { keep = 0; }
+            case BinOp(op, a, b, l, c): { keep = 0; }
+            case Assign(n, v, l, c): { keep = 0; }
+            case Call(n, a, l, c): { keep = 0; }
+            case Member(o, f, l, c): { keep = 0; }
+        }
+    }
+    return out;
+}
+
+public action parse_postfix(Expr base, TokenList ts): ExprResult {
+    ExprResult out;
+    out.ok = true;
+    out.diags = DiagList.Nil;
+    out.expr = base;
+    out.rest = ts;
+    int keep = 1;
+    while (keep == 1) {
+        Token t = peek_token(out.rest);
+        if (is_tok(t, "Lt") && t.text == "<") {
+            TokenList skipped = skip_generic_args(out.rest);
+            Token after = peek_token(skipped);
+            if (is_tok(after, "LParen")) {
+                out.rest = skipped;
+                t = after;
+            }
+        }
+        if (is_tok(t, "LParen")) {
+            match (out.expr) {
+                case Name(n, l, c): {
+                    ExprResult args = parse_arg_list(advance_token(out.rest));
+                    out.diags = merge_diags(out.diags, args.diags);
+                    if (!args.ok) {
+                        out.ok = false;
+                        out.rest = args.rest;
+                        return out;
+                    }
+                    Token rp = peek_token(args.rest);
+                    if (!is_tok(rp, "RParen")) {
+                        out.ok = false;
+                        out.diags = diag_prepend(out.diags, diag_error("expected ')'", rp.line, rp.column));
+                        out.rest = args.rest;
+                        return out;
+                    }
+                    out.expr = Expr.Call(n, args.expr, l, c);
+                    out.rest = advance_token(args.rest);
+                }
+                case Member(obj, field, l, c): {
+                    ExprResult args = parse_arg_list(advance_token(out.rest));
+                    out.diags = merge_diags(out.diags, args.diags);
+                    if (!args.ok) {
+                        out.ok = false;
+                        out.rest = args.rest;
+                        return out;
+                    }
+                    Token rp = peek_token(args.rest);
+                    if (!is_tok(rp, "RParen")) {
+                        out.ok = false;
+                        out.diags = diag_prepend(out.diags, diag_error("expected ')'", rp.line, rp.column));
+                        out.rest = args.rest;
+                        return out;
+                    }
+                    match (obj) {
+                        case Name(n, ol, oc): {
+                            out.expr = Expr.Call(qualify_call_name(n, field), args.expr, l, c);
+                            out.rest = advance_token(args.rest);
+                        }
+                        case IntLit(v, ol, oc): { keep = 0; }
+                        case BoolLit(v, ol, oc): { keep = 0; }
+                        case StringLit(v, ol, oc): { keep = 0; }
+                        case Unary(op, x, ol, oc): { keep = 0; }
+                        case BinOp(op, a, b, ol, oc): { keep = 0; }
+                        case Assign(n, v, ol, oc): { keep = 0; }
+                        case Call(n, a, ol, oc): { keep = 0; }
+                        case Member(o, f, ol, oc): { keep = 0; }
+                        case ArgNil: { keep = 0; }
+                        case ArgCons(a, b): { keep = 0; }
+                    }
+                }
+                case IntLit(v, l, c): {
+                    keep = 0;
+                }
+                case BoolLit(v, l, c): {
+                    keep = 0;
+                }
+                case StringLit(v, l, c): {
+                    keep = 0;
+                }
+                case Unary(op, x, l, c): {
+                    keep = 0;
+                }
+                case BinOp(op, a, b, l, c): {
+                    keep = 0;
+                }
+                case Assign(n, v, l, c): {
+                    keep = 0;
+                }
+                case Call(n, a, l, c): {
+                    keep = 0;
+                }
+                case Member(o, f, l, c): {
+                    keep = 0;
+                }
+                case ArgNil: {
+                    keep = 0;
+                }
+                case ArgCons(a, b): {
+                    keep = 0;
+                }
+            }
+        } else if (is_tok(t, "Dot")) {
+            TokenList r1 = advance_token(out.rest);
+            Token field = peek_token(r1);
+            if (is_tok(field, "Ident") || is_tok(field, "Keyword")) {
+                TokenList after_field = advance_token(r1);
+                Token next = peek_token(after_field);
+                if (is_tok(next, "LParen")) {
+                    string tag = field.text;
+                    match (out.expr) {
+                        case Name(n, nl, nc): {
+                            ExprResult args = parse_arg_list(advance_token(after_field));
+                            out.diags = merge_diags(out.diags, args.diags);
+                            if (!args.ok) {
+                                out.ok = false;
+                                out.rest = args.rest;
+                                return out;
+                            }
+                            Token rp = peek_token(args.rest);
+                            if (!is_tok(rp, "RParen")) {
+                                out.ok = false;
+                                out.diags = diag_prepend(out.diags, diag_error("expected ')'", rp.line, rp.column));
+                                out.rest = args.rest;
+                                return out;
+                            }
+                            out.expr = Expr.Call(qualify_call_name(n, tag), args.expr, t.line, t.column);
+                            out.rest = advance_token(args.rest);
+                        }
+                        case IntLit(v, nl, nc): {
+                            out.expr = Expr.Member(out.expr, tag, t.line, t.column);
+                            out.rest = after_field;
+                        }
+                        case BoolLit(v, nl, nc): {
+                            out.expr = Expr.Member(out.expr, tag, t.line, t.column);
+                            out.rest = after_field;
+                        }
+                        case StringLit(v, nl, nc): {
+                            out.expr = Expr.Member(out.expr, tag, t.line, t.column);
+                            out.rest = after_field;
+                        }
+                        case Unary(op, x, nl, nc): {
+                            out.expr = Expr.Member(out.expr, tag, t.line, t.column);
+                            out.rest = after_field;
+                        }
+                        case BinOp(op, a, b, nl, nc): {
+                            out.expr = Expr.Member(out.expr, tag, t.line, t.column);
+                            out.rest = after_field;
+                        }
+                        case Assign(n, v, nl, nc): {
+                            out.expr = Expr.Member(out.expr, tag, t.line, t.column);
+                            out.rest = after_field;
+                        }
+                        case Call(n, a, nl, nc): {
+                            out.expr = Expr.Member(out.expr, tag, t.line, t.column);
+                            out.rest = after_field;
+                        }
+                        case Member(o, f, nl, nc): {
+                            out.expr = Expr.Member(out.expr, tag, t.line, t.column);
+                            out.rest = after_field;
+                        }
+                        case ArgNil: {
+                            out.expr = Expr.Member(out.expr, tag, t.line, t.column);
+                            out.rest = after_field;
+                        }
+                        case ArgCons(a, b): {
+                            out.expr = Expr.Member(out.expr, tag, t.line, t.column);
+                            out.rest = after_field;
+                        }
+                    }
+                } else {
+                    out.expr = Expr.Member(out.expr, field.text, t.line, t.column);
+                    out.rest = after_field;
+                }
+            } else {
+                out.ok = false;
+                out.diags = diag_prepend(out.diags, diag_error("expected field name", field.line, field.column));
+                out.rest = r1;
+                return out;
+            }
+        } else {
+            keep = 0;
+        }
+    }
+    return out;
+}
+
+public action parse_primary(TokenList ts): ExprResult {
+    ExprResult out;
+    out.ok = false;
+    out.diags = DiagList.Nil;
+    out.rest = ts;
+    out.expr = Expr.IntLit(0, 1, 1);
+
+    Token t = peek_token(ts);
+    if (is_tok(t, "Number")) {
+        out.expr = Expr.IntLit(int(t.text), t.line, t.column);
+        return parse_postfix(out.expr, advance_token(ts));
+    }
+    if (is_tok(t, "String")) {
+        out.expr = Expr.StringLit(t.text, t.line, t.column);
+        return parse_postfix(out.expr, advance_token(ts));
+    }
+    if (is_kw(t, "true")) {
+        out.expr = Expr.BoolLit(true, t.line, t.column);
+        return parse_postfix(out.expr, advance_token(ts));
+    }
+    if (is_kw(t, "false")) {
+        out.expr = Expr.BoolLit(false, t.line, t.column);
+        return parse_postfix(out.expr, advance_token(ts));
+    }
+    if (is_tok(t, "Ident") || is_kw(t, "int") || is_kw(t, "string") || is_kw(t, "bool") || is_kw(t, "print")) {
+        out.expr = Expr.Name(t.text, t.line, t.column);
+        return parse_postfix(out.expr, advance_token(ts));
+    }
+    if (is_tok(t, "LParen")) {
+        TokenList after = advance_token(ts);
+        ExprResult inner = parse_expr(after);
+        out.diags = inner.diags;
+        if (!inner.ok) {
+            out.rest = inner.rest;
+            return out;
+        }
+        Token rp = peek_token(inner.rest);
+        if (is_tok(rp, "RParen")) {
+            return parse_postfix(inner.expr, advance_token(inner.rest));
+        }
+        Diagnostic d = diag_error("expected ')'", rp.line, rp.column);
+        out.diags = diag_prepend(out.diags, d);
+        out.rest = inner.rest;
+        return out;
+    }
+    Diagnostic d = diag_error("expected expression", t.line, t.column);
+    out.diags = diag_prepend(out.diags, d);
+    out.rest = ts;
+    return out;
+}
+
+public action parse_unary(TokenList ts): ExprResult {
+    Token t = peek_token(ts);
+    if (is_tok(t, "Bang")) {
+        ExprResult inner = parse_unary(advance_token(ts));
+        if (!inner.ok) { return inner; }
+        ExprResult out;
+        out.ok = true;
+        out.diags = inner.diags;
+        out.rest = inner.rest;
+        out.expr = Expr.Unary(UnOpKind.Not, inner.expr, t.line, t.column);
+        return out;
+    }
+    if (is_tok(t, "Minus")) {
+        ExprResult inner = parse_unary(advance_token(ts));
+        if (!inner.ok) { return inner; }
+        ExprResult out;
+        out.ok = true;
+        out.diags = inner.diags;
+        out.rest = inner.rest;
+        out.expr = Expr.Unary(UnOpKind.Neg, inner.expr, t.line, t.column);
+        return out;
+    }
+    return parse_primary(ts);
+}
+
+public action parse_mul(TokenList ts): ExprResult {
+    ExprResult left = parse_unary(ts);
+    if (!left.ok) { return left; }
+    ExprResult right;
+    int keep = 1;
+    Token t;
+    while (keep == 1) {
+        t = peek_token(left.rest);
+        if (is_tok(t, "Star")) {
+            right = parse_unary(advance_token(left.rest));
+            left.diags = merge_diags(left.diags, right.diags);
+            if (!right.ok) {
+                left.ok = false;
+                left.rest = right.rest;
+                keep = 0;
+            } else {
+                left.expr = Expr.BinOp(BinOpKind.Mul, left.expr, right.expr, t.line, t.column);
+                left.rest = right.rest;
+            }
+        } else if (is_tok(t, "Slash")) {
+            right = parse_unary(advance_token(left.rest));
+            left.diags = merge_diags(left.diags, right.diags);
+            if (!right.ok) {
+                left.ok = false;
+                left.rest = right.rest;
+                keep = 0;
+            } else {
+                left.expr = Expr.BinOp(BinOpKind.Div, left.expr, right.expr, t.line, t.column);
+                left.rest = right.rest;
+            }
+        } else {
+            keep = 0;
+        }
+    }
+    return left;
+}
+
+public action parse_add(TokenList ts): ExprResult {
+    ExprResult left = parse_mul(ts);
+    if (!left.ok) { return left; }
+    ExprResult right;
+    int keep = 1;
+    Token t;
+    while (keep == 1) {
+        t = peek_token(left.rest);
+        if (is_tok(t, "Plus")) {
+            right = parse_mul(advance_token(left.rest));
+            left.diags = merge_diags(left.diags, right.diags);
+            if (!right.ok) {
+                left.ok = false;
+                left.rest = right.rest;
+                keep = 0;
+            } else {
+                left.expr = Expr.BinOp(BinOpKind.Add, left.expr, right.expr, t.line, t.column);
+                left.rest = right.rest;
+            }
+        } else if (is_tok(t, "Minus")) {
+            right = parse_mul(advance_token(left.rest));
+            left.diags = merge_diags(left.diags, right.diags);
+            if (!right.ok) {
+                left.ok = false;
+                left.rest = right.rest;
+                keep = 0;
+            } else {
+                left.expr = Expr.BinOp(BinOpKind.Sub, left.expr, right.expr, t.line, t.column);
+                left.rest = right.rest;
+            }
+        } else {
+            keep = 0;
+        }
+    }
+    return left;
+}
+
+public action parse_cmp(TokenList ts): ExprResult {
+    ExprResult left = parse_add(ts);
+    if (!left.ok) { return left; }
+    ExprResult right;
+    Token t = peek_token(left.rest);
+    if (is_tok(t, "Lt") && t.text == ">") {
+        TokenList after_gt = advance_token(left.rest);
+        Token eq = peek_token(after_gt);
+        if (is_tok(eq, "Assign")) {
+            right = parse_add(advance_token(after_gt));
+            left.diags = merge_diags(left.diags, right.diags);
+            if (!right.ok) {
+                left.ok = false;
+                left.rest = right.rest;
+                return left;
+            }
+            Expr lt = Expr.BinOp(BinOpKind.Lt, left.expr, right.expr, t.line, t.column);
+            left.expr = Expr.Unary(UnOpKind.Not, lt, t.line, t.column);
+            left.rest = right.rest;
+            return left;
+        }
+        right = parse_add(after_gt);
+        left.diags = merge_diags(left.diags, right.diags);
+        if (!right.ok) {
+            left.ok = false;
+            left.rest = right.rest;
+            return left;
+        }
+        left.expr = Expr.BinOp(BinOpKind.Lt, right.expr, left.expr, t.line, t.column);
+        left.rest = right.rest;
+        return left;
+    }
+    if (is_tok(t, "EqEq")) {
+        right = parse_add(advance_token(left.rest));
+        left.diags = merge_diags(left.diags, right.diags);
+        if (!right.ok) {
+            left.ok = false;
+            left.rest = right.rest;
+            return left;
+        }
+        left.expr = Expr.BinOp(BinOpKind.Eq, left.expr, right.expr, t.line, t.column);
+        left.rest = right.rest;
+        return left;
+    }
+    if (is_tok(t, "BangEq")) {
+        right = parse_add(advance_token(left.rest));
+        left.diags = merge_diags(left.diags, right.diags);
+        if (!right.ok) {
+            left.ok = false;
+            left.rest = right.rest;
+            return left;
+        }
+        left.expr = Expr.BinOp(BinOpKind.Ne, left.expr, right.expr, t.line, t.column);
+        left.rest = right.rest;
+        return left;
+    }
+    if (is_tok(t, "Lt") && t.text == "<") {
+        TokenList after_lt = advance_token(left.rest);
+        Token eq = peek_token(after_lt);
+        if (is_tok(eq, "Assign")) {
+            right = parse_add(advance_token(after_lt));
+            left.diags = merge_diags(left.diags, right.diags);
+            if (!right.ok) {
+                left.ok = false;
+                left.rest = right.rest;
+                return left;
+            }
+            Expr gt = Expr.BinOp(BinOpKind.Lt, right.expr, left.expr, t.line, t.column);
+            left.expr = Expr.Unary(UnOpKind.Not, gt, t.line, t.column);
+            left.rest = right.rest;
+            return left;
+        }
+        right = parse_add(after_lt);
+        left.diags = merge_diags(left.diags, right.diags);
+        if (!right.ok) {
+            left.ok = false;
+            left.rest = right.rest;
+            return left;
+        }
+        left.expr = Expr.BinOp(BinOpKind.Lt, left.expr, right.expr, t.line, t.column);
+        left.rest = right.rest;
+        return left;
+    }
+    return left;
+}
+
+public action parse_and(TokenList ts): ExprResult {
+    ExprResult left = parse_cmp(ts);
+    if (!left.ok) { return left; }
+    int keep = 1;
+    while (keep == 1) {
+        Token t = peek_token(left.rest);
+        if (is_tok(t, "AndAnd")) {
+            ExprResult right = parse_cmp(advance_token(left.rest));
+            left.diags = merge_diags(left.diags, right.diags);
+            if (!right.ok) {
+                left.ok = false;
+                left.rest = right.rest;
+                return left;
+            }
+            left.expr = Expr.BinOp(BinOpKind.And, left.expr, right.expr, t.line, t.column);
+            left.rest = right.rest;
+        } else {
+            keep = 0;
+        }
+    }
+    return left;
+}
+
+public action parse_or(TokenList ts): ExprResult {
+    ExprResult left = parse_and(ts);
+    if (!left.ok) { return left; }
+    int keep = 1;
+    while (keep == 1) {
+        Token t = peek_token(left.rest);
+        if (is_tok(t, "OrOr")) {
+            ExprResult right = parse_and(advance_token(left.rest));
+            left.diags = merge_diags(left.diags, right.diags);
+            if (!right.ok) {
+                left.ok = false;
+                left.rest = right.rest;
+                return left;
+            }
+            left.expr = Expr.BinOp(BinOpKind.Or, left.expr, right.expr, t.line, t.column);
+            left.rest = right.rest;
+        } else {
+            keep = 0;
+        }
+    }
+    return left;
+}
+
+public action parse_assign_expr(TokenList ts): ExprResult {
+    ExprResult left = parse_or(ts);
+    if (!left.ok) { return left; }
+    Token t = peek_token(left.rest);
+    if (is_tok(t, "Assign")) {
+        match (left.expr) {
+            case Name(n, l, c): {
+                ExprResult right = parse_assign_expr(advance_token(left.rest));
+                left.diags = merge_diags(left.diags, right.diags);
+                if (!right.ok) {
+                    left.ok = false;
+                    left.rest = right.rest;
+                    return left;
+                }
+                left.expr = Expr.Assign(n, right.expr, l, c);
+                left.rest = right.rest;
+                return left;
+            }
+            case IntLit(v, l, c): {
+                return left;
+            }
+            case BoolLit(v, l, c): {
+                return left;
+            }
+            case StringLit(v, l, c): {
+                return left;
+            }
+            case Unary(op, x, l, c): {
+                return left;
+            }
+            case BinOp(op, a, b, l, c): {
+                return left;
+            }
+            case Assign(n, v, l, c): {
+                return left;
+            }
+            case Call(n, a, l, c): {
+                return left;
+            }
+            case Member(o, f, l, c): {
+                return left;
+            }
+            case ArgNil: {
+                return left;
+            }
+            case ArgCons(a, b): {
+                return left;
+            }
+        }
+    }
+    return left;
+}
+
+public action parse_expr(TokenList ts): ExprResult {
+    return parse_assign_expr(ts);
+}
+
+public action expect_semi(TokenList ts, DiagList diags): StmtResult {
+    StmtResult out;
+    out.stmt = Stmt.Empty;
+    out.diags = diags;
+    out.rest = ts;
+    out.ok = false;
+    Token t = peek_token(ts);
+    if (is_tok(t, "Semi")) {
+        out.rest = advance_token(ts);
+        out.ok = true;
+        return out;
+    }
+    out.diags = diag_prepend(diags, diag_error("expected ';'", t.line, t.column));
+    return out;
+}
+
+public action parse_block(TokenList ts): StmtResult {
+    StmtResult out;
+    out.stmt = Stmt.Empty;
+    out.diags = DiagList.Nil;
+    out.rest = ts;
+    out.ok = false;
+
+    Token lb = peek_token(ts);
+    if (is_tok(lb, "LBrace")) {
+        StmtResult body = parse_stmt_list(advance_token(ts));
+        out.diags = body.diags;
+        if (!body.ok) {
+            out.rest = body.rest;
+            return out;
+        }
+        Token rb = peek_token(body.rest);
+        if (is_tok(rb, "RBrace")) {
+            out.stmt = Stmt.Block(body.stmt);
+            out.rest = advance_token(body.rest);
+            out.ok = true;
+            return out;
+        }
+        out.diags = diag_prepend(out.diags, diag_error("expected '}'", rb.line, rb.column));
+        out.rest = body.rest;
+        return out;
+    }
+    return parse_stmt(ts);
+}
+
+public action arm_list_reverse(Stmt xs): Stmt {
+    Stmt out = Stmt.ArmEnd;
+    Stmt cur = xs;
+    int keep = 1;
+    while (keep == 1) {
+        match (cur) {
+            case ArmEnd: { keep = 0; }
+            case Arm(n, b, body, next): {
+                out = Stmt.Arm(n, b, body, out);
+                cur = next;
+            }
+            case Empty: { keep = 0; }
+            case Let(a, e, l, c): { keep = 0; }
+            case VarDecl(ty, a, e, has, l, c): { keep = 0; }
+            case AssignStmt(a, e, l, c): { keep = 0; }
+            case FieldAssign(o, f, e, l, c): { keep = 0; }
+            case ExprStmt(e, l, c): { keep = 0; }
+            case Print(e, l, c): { keep = 0; }
+            case Return(e, has, l, c): { keep = 0; }
+            case If(e, a, b, l, c): { keep = 0; }
+            case While(e, b, l, c): { keep = 0; }
+            case Match(e, arms, l, c): { keep = 0; }
+            case Block(b): { keep = 0; }
+            case Seq(a, b): { keep = 0; }
+            case SeqList(xs2): { keep = 0; }
+        }
+    }
+    return out;
+}
+
+public action parse_match_arms(TokenList ts): StmtResult {
+    StmtResult out;
+    out.stmt = Stmt.ArmEnd;
+    out.diags = DiagList.Nil;
+    out.rest = ts;
+    out.ok = true;
+
+    TokenList cur = ts;
+    Stmt acc = Stmt.ArmEnd;
+    int keep = 1;
+    while (keep == 1) {
+        Token t = peek_token(cur);
+        if (!is_kw(t, "case")) {
+            keep = 0;
+        } else {
+            TokenList r1 = advance_token(cur);
+            Token name = peek_token(r1);
+            if (!(is_tok(name, "Ident") || is_tok(name, "Keyword"))) {
+                out.ok = false;
+                out.diags = diag_prepend(out.diags, diag_error("expected variant name", name.line, name.column));
+                out.rest = r1;
+                return out;
+            }
+            TokenList r2 = advance_token(r1);
+            string bind = "";
+            Token maybe = peek_token(r2);
+            if (is_tok(maybe, "LParen")) {
+                TokenList r3 = advance_token(r2);
+                Token bn = peek_token(r3);
+                if (is_tok(bn, "Ident") || is_tok(bn, "Keyword")) {
+                    bind = bn.text;
+                    TokenList r4 = advance_token(r3);
+                    int bind_keep = 1;
+                    while (bind_keep == 1) {
+                        Token sep = peek_token(r4);
+                        if (is_tok(sep, "Comma")) {
+                            TokenList r5 = advance_token(r4);
+                            Token bn2 = peek_token(r5);
+                            if (!(is_tok(bn2, "Ident") || is_tok(bn2, "Keyword"))) {
+                                out.ok = false;
+                                out.diags = diag_prepend(out.diags, diag_error("expected bind name", bn2.line, bn2.column));
+                                out.rest = r5;
+                                return out;
+                            }
+                            bind = bind + "," + bn2.text;
+                            r4 = advance_token(r5);
+                        } else {
+                            bind_keep = 0;
+                        }
+                    }
+                    Token rp = peek_token(r4);
+                    if (!is_tok(rp, "RParen")) {
+                        out.ok = false;
+                        out.diags = diag_prepend(out.diags, diag_error("expected ')'", rp.line, rp.column));
+                        out.rest = r4;
+                        return out;
+                    }
+                    r2 = advance_token(r4);
+                } else {
+                    out.ok = false;
+                    out.diags = diag_prepend(out.diags, diag_error("expected bind name", bn.line, bn.column));
+                    out.rest = r3;
+                    return out;
+                }
+            }
+            Token colon = peek_token(r2);
+            if (!is_tok(colon, "Colon")) {
+                out.ok = false;
+                out.diags = diag_prepend(out.diags, diag_error("expected ':'", colon.line, colon.column));
+                out.rest = r2;
+                return out;
+            }
+            StmtResult body = parse_block(advance_token(r2));
+            out.diags = merge_diags(out.diags, body.diags);
+            if (!body.ok) {
+                out.ok = false;
+                out.rest = body.rest;
+                return out;
+            }
+            acc = Stmt.Arm(name.text, bind, body.stmt, acc);
+            cur = body.rest;
+        }
+    }
+    out.stmt = arm_list_reverse(acc);
+    out.rest = cur;
+    out.ok = true;
+    return out;
+}
+
+public action parse_param_list(TokenList ts): DeclResult {
+    DeclResult out;
+    out.decl = Decl.ParamNil;
+    out.diags = DiagList.Nil;
+    out.rest = ts;
+    out.ok = true;
+
+    Token t = peek_token(ts);
+    if (is_tok(t, "RParen")) {
+        return out;
+    }
+    if (!is_type_name(t)) {
+        out.ok = false;
+        out.diags = diag_prepend(out.diags, diag_error("expected parameter type", t.line, t.column));
+        return out;
+    }
+    string ty = t.text;
+    TokenList r1 = advance_token(ts);
+    Token maybe_colon = peek_token(r1);
+    string param_name = "";
+    if (is_tok(maybe_colon, "Colon")) {
+        param_name = t.text;
+        Token type_token = peek_token(advance_token(r1));
+        if (!is_type_name(type_token)) {
+            out.ok = false;
+            out.diags = diag_prepend(out.diags, diag_error("expected parameter type", type_token.line, type_token.column));
+            out.rest = advance_token(r1);
+            return out;
+        }
+        ty = type_token.text;
+        r1 = skip_generic_args(advance_token(advance_token(r1)));
+    }
+    r1 = skip_generic_args(r1);
+    Token name = peek_token(r1);
+    if (param_name == "") {
+        if (!is_tok(name, "Ident")) {
+            out.ok = false;
+            out.diags = diag_prepend(out.diags, diag_error("expected parameter name", name.line, name.column));
+            out.rest = r1;
+            return out;
+        }
+        param_name = name.text;
+        r1 = advance_token(r1);
+    }
+    if (param_name == "") {
+        out.ok = false;
+        out.diags = diag_prepend(out.diags, diag_error("expected parameter name", name.line, name.column));
+        out.rest = r1;
+        return out;
+    }
+    TokenList r2 = r1;
+    Token comma = peek_token(r2);
+    if (is_tok(comma, "Comma")) {
+        DeclResult rest = parse_param_list(advance_token(r2));
+        out.diags = rest.diags;
+        if (!rest.ok) {
+            out.ok = false;
+            out.rest = rest.rest;
+            return out;
+        }
+        out.decl = Decl.ParamCons(ty, param_name, rest.decl);
+        out.rest = rest.rest;
+        return out;
+    }
+    out.decl = Decl.ParamCons(ty, param_name, Decl.ParamNil);
+    out.rest = r2;
+    return out;
+}
+
+public action parse_field_list(TokenList ts): DeclResult {
+    DeclResult out;
+    out.decl = Decl.FieldNil;
+    out.diags = DiagList.Nil;
+    out.rest = ts;
+    out.ok = true;
+
+    Token t = peek_token(ts);
+    if (is_tok(t, "RBrace")) {
+        return out;
+    }
+    if (!is_type_name(t)) {
+        out.ok = false;
+        out.diags = diag_prepend(out.diags, diag_error("expected field type", t.line, t.column));
+        return out;
+    }
+    string ty = t.text;
+    TokenList r1 = advance_token(ts);
+    Token name = peek_token(r1);
+    if (!is_tok(name, "Ident")) {
+        out.ok = false;
+        out.diags = diag_prepend(out.diags, diag_error("expected field name", name.line, name.column));
+        out.rest = r1;
+        return out;
+    }
+    TokenList r2 = advance_token(r1);
+    Token semi = peek_token(r2);
+    if (!is_tok(semi, "Semi")) {
+        out.ok = false;
+        out.diags = diag_prepend(out.diags, diag_error("expected ';'", semi.line, semi.column));
+        out.rest = r2;
+        return out;
+    }
+    DeclResult rest = parse_field_list(advance_token(r2));
+    out.diags = rest.diags;
+    if (!rest.ok) {
+        out.ok = false;
+        out.rest = rest.rest;
+        return out;
+    }
+    out.decl = Decl.FieldCons(ty, name.text, rest.decl);
+    out.rest = rest.rest;
+    return out;
+}
+
+public action parse_variant_list(TokenList ts): DeclResult {
+    DeclResult out;
+    out.decl = Decl.VariantNil;
+    out.diags = DiagList.Nil;
+    out.rest = ts;
+    out.ok = true;
+
+    TokenList cur = ts;
+    Decl acc = Decl.VariantNil;
+    int keep = 1;
+    while (keep == 1) {
+        Token t = peek_token(cur);
+        if (is_tok(t, "RBrace")) {
+            keep = 0;
+        } else {
+            if (!(is_tok(t, "Ident") || is_tok(t, "Keyword"))) {
+                out.ok = false;
+                out.diags = diag_prepend(out.diags, diag_error("expected variant name", t.line, t.column));
+                out.rest = cur;
+                return out;
+            }
+            string name = t.text;
+            string payload = "";
+            TokenList r1 = advance_token(cur);
+            Token maybe = peek_token(r1);
+            if (is_tok(maybe, "LParen")) {
+                TokenList payload_cur = advance_token(r1);
+                int payload_keep = 1;
+                while (payload_keep == 1) {
+                    Token ty = peek_token(payload_cur);
+                    if (!is_type_name(ty)) {
+                        out.ok = false;
+                        out.diags = diag_prepend(out.diags, diag_error("expected payload type", ty.line, ty.column));
+                        out.rest = payload_cur;
+                        return out;
+                    }
+                    if (payload == "") {
+                        payload = ty.text;
+                    } else {
+                        payload = payload + "," + ty.text;
+                    }
+                    payload_cur = advance_token(payload_cur);
+                    Token separator = peek_token(payload_cur);
+                    if (is_tok(separator, "Comma")) {
+                        payload_cur = advance_token(payload_cur);
+                    } else {
+                        payload_keep = 0;
+                    }
+                }
+                Token rp = peek_token(payload_cur);
+                if (!is_tok(rp, "RParen")) {
+                    out.ok = false;
+                    out.diags = diag_prepend(out.diags, diag_error("expected ')'", rp.line, rp.column));
+                    out.rest = payload_cur;
+                    return out;
+                }
+                r1 = advance_token(payload_cur);
+            }
+            acc = Decl.VariantCons(name, payload, acc);
+            Token comma = peek_token(r1);
+            if (is_tok(comma, "Comma")) {
+                cur = advance_token(r1);
+            } else {
+                cur = r1;
+                keep = 0;
+            }
+        }
+    }
+    out.decl = variant_reverse(acc);
+    out.rest = cur;
+    return out;
+}
+
+public action variant_reverse(Decl xs): Decl {
+    Decl out = Decl.VariantNil;
+    Decl cur = xs;
+    int keep = 1;
+    while (keep == 1) {
+        match (cur) {
+            case VariantNil: {
+                keep = 0;
+            }
+            case VariantCons(name, payload, rest): {
+                out = Decl.VariantCons(name, payload, out);
+                cur = rest;
+            }
+            case ActionDecl(n, p, r, b, l, c): { keep = 0; }
+            case EnumDecl(n, v, l, c): { keep = 0; }
+            case StructDecl(n, f, l, c): { keep = 0; }
+            case TopStmt(s): { keep = 0; }
+            case ParamNil: { keep = 0; }
+            case ParamCons(t, n, rest): { keep = 0; }
+            case FieldNil: { keep = 0; }
+            case FieldCons(t, n, rest): { keep = 0; }
+            case DeclNil: { keep = 0; }
+            case DeclCons(head, rest): { keep = 0; }
+        }
+    }
+    return out;
+}
+
+public action parse_stmt(TokenList ts): StmtResult {
+    StmtResult out;
+    out.stmt = Stmt.Empty;
+    out.diags = DiagList.Nil;
+    out.rest = ts;
+    out.ok = false;
+
+    Token t = peek_token(ts);
+    if (is_kw(t, "let")) {
+        TokenList r1 = advance_token(ts);
+        Token name = peek_token(r1);
+        if (is_tok(name, "Ident")) {
+            TokenList r2 = advance_token(r1);
+            Token eq = peek_token(r2);
+            if (is_tok(eq, "Assign")) {
+                ExprResult er = parse_expr(advance_token(r2));
+                out.diags = er.diags;
+                if (!er.ok) {
+                    out.rest = er.rest;
+                    return out;
+                }
+                StmtResult semi = expect_semi(er.rest, out.diags);
+                out.diags = semi.diags;
+                if (!semi.ok) {
+                    out.rest = semi.rest;
+                    return out;
+                }
+                out.stmt = Stmt.Let(name.text, er.expr, t.line, t.column);
+                out.rest = semi.rest;
+                out.ok = true;
+                return out;
+            }
+            out.diags = diag_prepend(out.diags, diag_error("expected '='", eq.line, eq.column));
+            out.rest = r2;
+            return out;
+        }
+        out.diags = diag_prepend(out.diags, diag_error("expected name after let", name.line, name.column));
+        out.rest = r1;
+        return out;
+    }
+    if (is_kw(t, "print")) {
+        ExprResult er = parse_expr(advance_token(ts));
+        out.diags = er.diags;
+        if (!er.ok) {
+            out.rest = er.rest;
+            return out;
+        }
+        StmtResult semi = expect_semi(er.rest, out.diags);
+        out.diags = semi.diags;
+        if (!semi.ok) {
+            out.rest = semi.rest;
+            return out;
+        }
+        out.stmt = Stmt.Print(er.expr, t.line, t.column);
+        out.rest = semi.rest;
+        out.ok = true;
+        return out;
+    }
+    if (is_kw(t, "return")) {
+        TokenList r1 = advance_token(ts);
+        Token maybe = peek_token(r1);
+        if (is_tok(maybe, "Semi")) {
+            out.stmt = Stmt.Return(Expr.IntLit(0, t.line, t.column), false, t.line, t.column);
+            out.rest = advance_token(r1);
+            out.ok = true;
+            return out;
+        }
+        ExprResult er = parse_expr(r1);
+        out.diags = er.diags;
+        if (!er.ok) {
+            out.rest = er.rest;
+            return out;
+        }
+        StmtResult semi = expect_semi(er.rest, out.diags);
+        out.diags = semi.diags;
+        if (!semi.ok) {
+            out.rest = semi.rest;
+            return out;
+        }
+        out.stmt = Stmt.Return(er.expr, true, t.line, t.column);
+        out.rest = semi.rest;
+        out.ok = true;
+        return out;
+    }
+    if (is_kw(t, "if")) {
+        TokenList r1 = advance_token(ts);
+        Token lp = peek_token(r1);
+        if (is_tok(lp, "LParen")) {
+            ExprResult cond = parse_expr(advance_token(r1));
+            out.diags = cond.diags;
+            if (!cond.ok) {
+                out.rest = cond.rest;
+                return out;
+            }
+            Token rp = peek_token(cond.rest);
+            if (is_tok(rp, "RParen")) {
+                StmtResult then_s = parse_block(advance_token(cond.rest));
+                out.diags = merge_diags(out.diags, then_s.diags);
+                if (!then_s.ok) {
+                    out.rest = then_s.rest;
+                    return out;
+                }
+                Token else_tok = peek_token(then_s.rest);
+                if (is_kw(else_tok, "else")) {
+                    StmtResult else_s = parse_block(advance_token(then_s.rest));
+                    out.diags = merge_diags(out.diags, else_s.diags);
+                    if (!else_s.ok) {
+                        out.rest = else_s.rest;
+                        return out;
+                    }
+                    out.stmt = Stmt.If(cond.expr, then_s.stmt, else_s.stmt, t.line, t.column);
+                    out.rest = else_s.rest;
+                    out.ok = true;
+                    return out;
+                }
+                out.stmt = Stmt.If(cond.expr, then_s.stmt, Stmt.Empty, t.line, t.column);
+                out.rest = then_s.rest;
+                out.ok = true;
+                return out;
+            }
+            out.diags = diag_prepend(out.diags, diag_error("expected ')'", rp.line, rp.column));
+            out.rest = cond.rest;
+            return out;
+        }
+        out.diags = diag_prepend(out.diags, diag_error("expected '(' after if", lp.line, lp.column));
+        out.rest = r1;
+        return out;
+    }
+    if (is_kw(t, "while")) {
+        TokenList r1 = advance_token(ts);
+        Token lp = peek_token(r1);
+        if (is_tok(lp, "LParen")) {
+            ExprResult cond = parse_expr(advance_token(r1));
+            out.diags = cond.diags;
+            if (!cond.ok) {
+                out.rest = cond.rest;
+                return out;
+            }
+            Token rp = peek_token(cond.rest);
+            if (is_tok(rp, "RParen")) {
+                StmtResult body = parse_block(advance_token(cond.rest));
+                out.diags = merge_diags(out.diags, body.diags);
+                if (!body.ok) {
+                    out.rest = body.rest;
+                    return out;
+                }
+                out.stmt = Stmt.While(cond.expr, body.stmt, t.line, t.column);
+                out.rest = body.rest;
+                out.ok = true;
+                return out;
+            }
+            out.diags = diag_prepend(out.diags, diag_error("expected ')'", rp.line, rp.column));
+            out.rest = cond.rest;
+            return out;
+        }
+        out.diags = diag_prepend(out.diags, diag_error("expected '(' after while", lp.line, lp.column));
+        out.rest = r1;
+        return out;
+    }
+    if (is_kw(t, "match")) {
+        TokenList r1 = advance_token(ts);
+        Token lp = peek_token(r1);
+        if (!is_tok(lp, "LParen")) {
+            out.diags = diag_prepend(out.diags, diag_error("expected '(' after match", lp.line, lp.column));
+            out.rest = r1;
+            return out;
+        }
+        ExprResult scrut = parse_expr(advance_token(r1));
+        out.diags = scrut.diags;
+        if (!scrut.ok) {
+            out.rest = scrut.rest;
+            return out;
+        }
+        Token rp = peek_token(scrut.rest);
+        if (!is_tok(rp, "RParen")) {
+            out.diags = diag_prepend(out.diags, diag_error("expected ')'", rp.line, rp.column));
+            out.rest = scrut.rest;
+            return out;
+        }
+        TokenList r2 = advance_token(scrut.rest);
+        Token lb = peek_token(r2);
+        if (!is_tok(lb, "LBrace")) {
+            out.diags = diag_prepend(out.diags, diag_error("expected '{'", lb.line, lb.column));
+            out.rest = r2;
+            return out;
+        }
+        StmtResult arms = parse_match_arms(advance_token(r2));
+        out.diags = merge_diags(out.diags, arms.diags);
+        if (!arms.ok) {
+            out.rest = arms.rest;
+            return out;
+        }
+        Token rb = peek_token(arms.rest);
+        if (!is_tok(rb, "RBrace")) {
+            out.diags = diag_prepend(out.diags, diag_error("expected '}'", rb.line, rb.column));
+            out.rest = arms.rest;
+            return out;
+        }
+        out.stmt = Stmt.Match(scrut.expr, arms.stmt, t.line, t.column);
+        out.rest = advance_token(arms.rest);
+        out.ok = true;
+        return out;
+    }
+    if (is_type_name(t) && !is_kw(t, "print")) {
+        TokenList r1 = advance_token(ts);
+        r1 = skip_generic_args(r1);
+        Token name = peek_token(r1);
+        if (is_tok(name, "Ident")) {
+            TokenList r2 = advance_token(r1);
+            Token next = peek_token(r2);
+            if (is_tok(next, "Assign")) {
+                ExprResult er = parse_expr(advance_token(r2));
+                out.diags = er.diags;
+                if (!er.ok) {
+                    out.rest = er.rest;
+                    return out;
+                }
+                StmtResult semi = expect_semi(er.rest, out.diags);
+                out.diags = semi.diags;
+                if (!semi.ok) {
+                    out.rest = semi.rest;
+                    return out;
+                }
+                out.stmt = Stmt.VarDecl(t.text, name.text, er.expr, true, t.line, t.column);
+                out.rest = semi.rest;
+                out.ok = true;
+                return out;
+            }
+            if (is_tok(next, "Semi")) {
+                out.stmt = Stmt.VarDecl(t.text, name.text, Expr.IntLit(0, t.line, t.column), false, t.line, t.column);
+                out.rest = advance_token(r2);
+                out.ok = true;
+                return out;
+            }
+        }
+    }
+    if (is_kw(t, "run")) {
+        TokenList r1 = advance_token(ts);
+        Token target = peek_token(r1);
+        if (is_tok(target, "Ident") || is_tok(target, "Keyword")) {
+            StmtResult semi = expect_semi(advance_token(r1), out.diags);
+            out.diags = semi.diags;
+            if (semi.ok) {
+                out.stmt = Stmt.ExprStmt(Expr.Call(target.text, Expr.ArgNil, t.line, t.column), t.line, t.column);
+                out.rest = semi.rest;
+                out.ok = true;
+                return out;
+            }
+            out.rest = semi.rest;
+            return out;
+        }
+        out.diags = diag_prepend(out.diags, diag_error("expected action name after run", target.line, target.column));
+        out.rest = r1;
+        return out;
+    }
+    if (is_tok(t, "Ident")) {
+        ExprResult er = parse_expr(ts);
+        out.diags = er.diags;
+        if (!er.ok) {
+            out.rest = er.rest;
+            return out;
+        }
+        Token next = peek_token(er.rest);
+        if (is_tok(next, "Assign")) {
+            match (er.expr) {
+                case Name(n, l, c): {
+                    ExprResult rhs = parse_expr(advance_token(er.rest));
+                    out.diags = merge_diags(out.diags, rhs.diags);
+                    if (!rhs.ok) {
+                        out.rest = rhs.rest;
+                        return out;
+                    }
+                    StmtResult semi = expect_semi(rhs.rest, out.diags);
+                    out.diags = semi.diags;
+                    if (!semi.ok) {
+                        out.rest = semi.rest;
+                        return out;
+                    }
+                    out.stmt = Stmt.AssignStmt(n, rhs.expr, l, c);
+                    out.rest = semi.rest;
+                    out.ok = true;
+                    return out;
+                }
+                case Member(obj, field, l, c): {
+                    ExprResult rhs = parse_expr(advance_token(er.rest));
+                    out.diags = merge_diags(out.diags, rhs.diags);
+                    if (!rhs.ok) {
+                        out.rest = rhs.rest;
+                        return out;
+                    }
+                    StmtResult semi = expect_semi(rhs.rest, out.diags);
+                    out.diags = semi.diags;
+                    if (!semi.ok) {
+                        out.rest = semi.rest;
+                        return out;
+                    }
+                    out.stmt = Stmt.FieldAssign(obj, field, rhs.expr, l, c);
+                    out.rest = semi.rest;
+                    out.ok = true;
+                    return out;
+                }
+                case IntLit(v, l, c): { }
+                case BoolLit(v, l, c): { }
+                case StringLit(v, l, c): { }
+                case Unary(op, x, l, c): { }
+                case BinOp(op, a, b, l, c): { }
+                case Assign(n, v, l, c): { }
+                case Call(n, a, l, c): { }
+                case ArgNil: { }
+                case ArgCons(a, b): { }
+            }
+        }
+        StmtResult semi = expect_semi(er.rest, out.diags);
+        out.diags = semi.diags;
+        if (!semi.ok) {
+            out.rest = semi.rest;
+            return out;
+        }
+        out.stmt = Stmt.ExprStmt(er.expr, t.line, t.column);
+        out.rest = semi.rest;
+        out.ok = true;
+        return out;
+    }
+    if (is_tok(t, "LBrace")) {
+        return parse_block(ts);
+    }
+    out.diags = diag_prepend(out.diags, diag_error("expected statement", t.line, t.column));
+    out.rest = ts;
+    return out;
+}
+
+public action parse_stmt_list(TokenList ts): StmtResult {
+    StmtResult out;
+    out.stmt = Stmt.Empty;
+    out.diags = DiagList.Nil;
+    out.rest = ts;
+    out.ok = true;
+
+    TokenList cur = ts;
+    StmtList acc = StmtList.StmtNil;
+    int has = 0;
+    int keep = 1;
+    while (keep == 1) {
+        Token t = peek_token(cur);
+        if (is_tok(t, "Eof") || is_tok(t, "RBrace") || is_kw(t, "case")) {
+            keep = 0;
+        } else {
+            StmtResult next = parse_stmt(cur);
+            out.diags = merge_diags(out.diags, next.diags);
+            if (!next.ok) {
+                out.ok = false;
+                out.rest = next.rest;
+                return out;
+            }
+            acc = StmtList.StmtCons(next.stmt, acc);
+            has = 1;
+            cur = next.rest;
+        }
+    }
+    if (has == 0) {
+        out.stmt = Stmt.Empty;
+    } else {
+        out.stmt = Stmt.SeqList(stmt_list_reverse(acc));
+    }
+    out.rest = cur;
+    return out;
+}
+
+public action stmt_list_reverse(StmtList xs): StmtList {
+    StmtList out = StmtList.StmtNil;
+    StmtList cur = xs;
+    int keep = 1;
+    while (keep == 1) {
+        match (cur) {
+            case StmtNil: { keep = 0; }
+            case StmtCons(head, rest): {
+                out = StmtList.StmtCons(head, out);
+                cur = rest;
+            }
+        }
+    }
+    return out;
+}
+
+public action stmt_is_empty(Stmt s): bool {
+    match (s) {
+        case Empty: { return true; }
+        case Let(n, e, l, c): { return false; }
+        case VarDecl(ty, n, e, has, l, c): { return false; }
+        case AssignStmt(n, e, l, c): { return false; }
+        case FieldAssign(o, f, e, l, c): { return false; }
+        case ExprStmt(e, l, c): { return false; }
+        case Print(e, l, c): { return false; }
+        case Return(e, has, l, c): { return false; }
+        case If(e, a, b, l, c): { return false; }
+        case While(e, b, l, c): { return false; }
+        case Match(e, arms, l, c): { return false; }
+        case Arm(n, b, body, next): { return false; }
+        case ArmEnd: { return true; }
+        case Block(b): { return false; }
+        case Seq(a, b): { return false; }
+        case SeqList(xs): { return false; }
+    }
+    return false;
+}
+
+public action parse_decl(TokenList ts): DeclResult {
+    DeclResult out;
+    out.decl = Decl.DeclNil;
+    out.diags = DiagList.Nil;
+    out.rest = ts;
+    out.ok = false;
+
+    TokenList cur = skip_attrs(ts);
+    Token t = peek_token(cur);
+
+    if (is_kw(t, "public")) {
+        cur = advance_token(cur);
+        t = peek_token(cur);
+    }
+
+    if (is_kw(t, "action")) {
+        TokenList r1 = advance_token(cur);
+        Token name = peek_token(r1);
+        if (!is_tok(name, "Ident")) {
+            out.diags = diag_prepend(out.diags, diag_error("expected action name", name.line, name.column));
+            out.rest = r1;
+            return out;
+        }
+        TokenList r2 = advance_token(r1);
+        r2 = skip_generic_args(r2);
+        Token lp = peek_token(r2);
+        if (!is_tok(lp, "LParen")) {
+            out.diags = diag_prepend(out.diags, diag_error("expected '('", lp.line, lp.column));
+            out.rest = r2;
+            return out;
+        }
+        DeclResult params = parse_param_list(advance_token(r2));
+        out.diags = params.diags;
+        if (!params.ok) {
+            out.rest = params.rest;
+            return out;
+        }
+        Token rp = peek_token(params.rest);
+        if (!is_tok(rp, "RParen")) {
+            out.diags = diag_prepend(out.diags, diag_error("expected ')'", rp.line, rp.column));
+            out.rest = params.rest;
+            return out;
+        }
+        TokenList r3 = advance_token(params.rest);
+        string ret = "void";
+        Token colon = peek_token(r3);
+        if (is_tok(colon, "Colon")) {
+            TokenList r4 = advance_token(r3);
+            Token rty = peek_token(r4);
+            if (!is_type_name(rty)) {
+                out.diags = diag_prepend(out.diags, diag_error("expected return type", rty.line, rty.column));
+                out.rest = r4;
+                return out;
+            }
+            ret = rty.text;
+            r3 = skip_generic_args(advance_token(r4));
+        }
+        StmtResult body = parse_block(r3);
+        out.diags = merge_diags(out.diags, body.diags);
+        if (!body.ok) {
+            out.rest = body.rest;
+            return out;
+        }
+        out.decl = Decl.ActionDecl(name.text, params.decl, ret, body.stmt, t.line, t.column);
+        out.rest = body.rest;
+        out.ok = true;
+        return out;
+    }
+
+    if (is_kw(t, "enum")) {
+        TokenList r1 = advance_token(cur);
+        Token name = peek_token(r1);
+        if (!is_tok(name, "Ident")) {
+            out.diags = diag_prepend(out.diags, diag_error("expected enum name", name.line, name.column));
+            out.rest = r1;
+            return out;
+        }
+        TokenList r2 = advance_token(r1);
+        Token lb = peek_token(r2);
+        if (!is_tok(lb, "LBrace")) {
+            out.diags = diag_prepend(out.diags, diag_error("expected '{'", lb.line, lb.column));
+            out.rest = r2;
+            return out;
+        }
+        DeclResult vars = parse_variant_list(advance_token(r2));
+        out.diags = vars.diags;
+        if (!vars.ok) {
+            out.rest = vars.rest;
+            return out;
+        }
+        Token rb = peek_token(vars.rest);
+        if (!is_tok(rb, "RBrace")) {
+            out.diags = diag_prepend(out.diags, diag_error("expected '}'", rb.line, rb.column));
+            out.rest = vars.rest;
+            return out;
+        }
+        out.decl = Decl.EnumDecl(name.text, vars.decl, t.line, t.column);
+        out.rest = advance_token(vars.rest);
+        out.ok = true;
+        return out;
+    }
+
+    if (is_kw(t, "struct")) {
+        TokenList r1 = advance_token(cur);
+        Token name = peek_token(r1);
+        if (!is_tok(name, "Ident")) {
+            out.diags = diag_prepend(out.diags, diag_error("expected struct name", name.line, name.column));
+            out.rest = r1;
+            return out;
+        }
+        TokenList r2 = advance_token(r1);
+        r2 = skip_generic_args(r2);
+        Token lb = peek_token(r2);
+        if (!is_tok(lb, "LBrace")) {
+            out.diags = diag_prepend(out.diags, diag_error("expected '{'", lb.line, lb.column));
+            out.rest = r2;
+            return out;
+        }
+        DeclResult fields = parse_field_list(advance_token(r2));
+        out.diags = fields.diags;
+        if (!fields.ok) {
+            out.rest = fields.rest;
+            return out;
+        }
+        Token rb = peek_token(fields.rest);
+        if (!is_tok(rb, "RBrace")) {
+            out.diags = diag_prepend(out.diags, diag_error("expected '}'", rb.line, rb.column));
+            out.rest = fields.rest;
+            return out;
+        }
+        out.decl = Decl.StructDecl(name.text, fields.decl, t.line, t.column);
+        out.rest = advance_token(fields.rest);
+        out.ok = true;
+        return out;
+    }
+
+    StmtResult st = parse_stmt(cur);
+    out.diags = st.diags;
+    if (!st.ok) {
+        out.rest = st.rest;
+        return out;
+    }
+    out.decl = Decl.TopStmt(st.stmt);
+    out.rest = st.rest;
+    out.ok = true;
+    return out;
+}
+
+public action parse_decl_list(TokenList ts): DeclResult {
+    DeclResult out;
+    out.decl = Decl.DeclNil;
+    out.diags = DiagList.Nil;
+    out.rest = ts;
+    out.ok = true;
+
+    TokenList cur = skip_attrs(ts);
+    Decl acc = Decl.DeclNil;
+    int keep = 1;
+    while (keep == 1) {
+        Token t = peek_token(cur);
+        if (is_tok(t, "Eof")) {
+            keep = 0;
+        } else {
+            DeclResult next = parse_decl(cur);
+            out.diags = merge_diags(out.diags, next.diags);
+            if (!next.ok) {
+                out.ok = false;
+                out.rest = next.rest;
+                return out;
+            }
+            acc = Decl.DeclCons(next.decl, acc);
+            cur = skip_attrs(next.rest);
+        }
+    }
+    out.decl = decl_reverse(acc);
+    out.rest = cur;
+    out.ok = true;
+    return out;
+}
+
+public action decl_reverse(Decl xs): Decl {
+    Decl out = Decl.DeclNil;
+    Decl cur = xs;
+    int keep = 1;
+    while (keep == 1) {
+        match (cur) {
+            case DeclNil: {
+                keep = 0;
+            }
+            case DeclCons(head, rest): {
+                out = Decl.DeclCons(head, out);
+                cur = rest;
+            }
+            case ActionDecl(n, p, r, b, l, c): {
+                keep = 0;
+            }
+            case EnumDecl(n, v, l, c): {
+                keep = 0;
+            }
+            case StructDecl(n, f, l, c): {
+                keep = 0;
+            }
+            case TopStmt(s): {
+                keep = 0;
+            }
+            case ParamNil: {
+                keep = 0;
+            }
+            case ParamCons(t, n, rest): {
+                keep = 0;
+            }
+            case FieldNil: {
+                keep = 0;
+            }
+            case FieldCons(t, n, rest): {
+                keep = 0;
+            }
+            case VariantNil: {
+                keep = 0;
+            }
+            case VariantCons(n, p, rest): {
+                keep = 0;
+            }
+        }
+    }
+    return out;
+}
+
+public action parse(TokenList tokens): ParseResult {
+    ParseResult out;
+    out.program = Stmt.Empty;
+    out.diags = DiagList.Nil;
+    out.ok = false;
+
+    StmtResult body = parse_stmt_list(tokens);
+    out.diags = body.diags;
+    if (!body.ok) {
+        return out;
+    }
+    Token end = peek_token(body.rest);
+    if (is_tok(end, "Eof")) {
+        out.program = body.stmt;
+        out.ok = true;
+        return out;
+    }
+    out.diags = diag_prepend(out.diags, diag_error("expected end of input", end.line, end.column));
+    return out;
+}
+
+public action parse_program(TokenList tokens): ProgramResult {
+    ProgramResult out;
+    Program prog;
+    prog.decls = Decl.DeclNil;
+    prog.ok = false;
+    out.program = prog;
+    out.diags = DiagList.Nil;
+    out.ok = false;
+
+    DeclResult body = parse_decl_list(tokens);
+    out.diags = body.diags;
+    if (!body.ok) {
+        return out;
+    }
+    Token end = peek_token(body.rest);
+    if (is_tok(end, "Eof")) {
+        prog.decls = body.decl;
+        prog.ok = true;
+        out.program = prog;
+        out.ok = true;
+        return out;
+    }
+    out.diags = diag_prepend(out.diags, diag_error("expected end of input", end.line, end.column));
+    return out;
+}

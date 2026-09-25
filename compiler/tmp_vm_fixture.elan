@@ -1,0 +1,26 @@
+@strict
+#include <builtin/fs> as fs
+#include <builtin/path> as path
+#include "token.elan"
+#include "lexer.elan"
+#include "ast.elan"
+#include "diagnostic.elan"
+#include "parser.elan"
+#include "resolver.elan"
+#include "typechecker.elan"
+#include "ir.elan"
+#include "codegen.elan"
+
+public action main() {
+    string src = "print 1 + 2 * (3 + 4);\n";
+    LexResult lexed = lex(src);
+    if (!lexed.ok) { print "lex FAIL"; exit(1); }
+    ParseResult parsed = parse(lexed.tokens);
+    if (!parsed.ok) { print "parse FAIL"; exit(1); }
+    int t0 = now_ms();
+    RunResult ran = codegen_and_run(parsed.program);
+    int t1 = now_ms();
+    if (!ran.ok || !ran.did_print) { print "run FAIL"; exit(1); }
+    print "got=" + string(ran.last_print) + " ms=" + string(t1 - t0);
+}
+run main;

@@ -1,0 +1,829 @@
+@strict
+
+#include <builtin/fs> as fs
+#include <builtin/path> as path
+
+enum Tok {
+    Ident,
+    Keyword,
+    Number,
+    String,
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    EqEq,
+    BangEq,
+    Bang,
+    Lt,
+    AndAnd,
+    OrOr,
+    Assign,
+    LParen,
+    RParen,
+    LBrace,
+    RBrace,
+    Comma,
+    Colon,
+    Dot,
+    At,
+    Hash,
+    Semi,
+    Eof,
+    Error
+}
+
+struct Token {
+    Tok kind;
+    string text;
+    int start;
+    int end;
+    int line;
+    int column;
+}
+
+enum TokenList {
+    Nil,
+    Cons(Token, TokenList)
+}
+
+struct LexResult {
+    TokenList tokens;
+    DiagList diags;
+    bool ok;
+    string error_message;
+    int error_line;
+    int error_column;
+}
+
+enum BinOpKind {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Eq,
+    Ne,
+    Lt,
+    And,
+    Or
+}
+
+enum UnOpKind {
+    Neg,
+    Not
+}
+
+enum Expr {
+    IntLit(int, int, int),
+    BoolLit(bool, int, int),
+    StringLit(string, int, int),
+    Name(string, int, int),
+    Unary(UnOpKind, Expr, int, int),
+    BinOp(BinOpKind, Expr, Expr, int, int),
+    Assign(string, Expr, int, int),
+    Call(string, Expr, int, int),
+    Member(Expr, string, int, int),
+    ArgNil,
+    ArgCons(Expr, Expr)
+}
+
+enum Stmt {
+    Empty,
+    Let(string, Expr, int, int),
+    VarDecl(string, string, Expr, bool, int, int),
+    AssignStmt(string, Expr, int, int),
+    FieldAssign(Expr, string, Expr, int, int),
+    ExprStmt(Expr, int, int),
+    Print(Expr, int, int),
+    Return(Expr, bool, int, int),
+    If(Expr, Stmt, Stmt, int, int),
+    While(Expr, Stmt, int, int),
+    Match(Expr, Stmt, int, int),
+    Arm(string, string, Stmt, Stmt),
+    ArmEnd,
+    Block(Stmt),
+    Seq(Stmt, Stmt),
+    SeqList(StmtList)
+}
+
+enum StmtList {
+    StmtNil,
+    StmtCons(Stmt, StmtList)
+}
+
+enum Decl {
+    ActionDecl(string, Decl, string, Stmt, int, int),
+    EnumDecl(string, Decl, int, int),
+    StructDecl(string, Decl, int, int),
+    TopStmt(Stmt),
+    ParamNil,
+    ParamCons(string, string, Decl),
+    FieldNil,
+    FieldCons(string, string, Decl),
+    VariantNil,
+    VariantCons(string, string, Decl),
+    DeclNil,
+    DeclCons(Decl, Decl)
+}
+
+struct Program {
+    Decl decls;
+    bool ok;
+}
+
+enum Severity {
+    Error,
+    Warning
+}
+
+struct Diagnostic {
+    string message;
+    int line;
+    int column;
+    Severity severity;
+}
+
+enum DiagList {
+    Nil,
+    Cons(string, int, int, DiagList)
+}
+
+struct ParseResult {
+    Stmt program;
+    DiagList diags;
+    bool ok;
+}
+
+struct ProgramResult {
+    Program program;
+    DiagList diags;
+    bool ok;
+}
+
+struct ExprResult {
+    Expr expr;
+    TokenList rest;
+    DiagList diags;
+    bool ok;
+}
+
+struct StmtResult {
+    Stmt stmt;
+    TokenList rest;
+    DiagList diags;
+    bool ok;
+}
+
+struct DeclResult {
+    Decl decl;
+    TokenList rest;
+    DiagList diags;
+    bool ok;
+}
+
+enum Scope {
+    EmptyScope,
+    Bind(string, int, Scope)
+}
+
+struct ResolveResult {
+    Stmt program;
+    DiagList diags;
+    bool ok;
+    int next_id;
+}
+
+enum Ty {
+    TyInt,
+    TyBool,
+    TyString,
+    TyError
+}
+
+enum ScopeTy {
+    EmptyScopeTy,
+    BindTy(string, Ty, ScopeTy)
+}
+
+struct TypeResult {
+    DiagList diags;
+    bool ok;
+    Ty ty;
+}
+
+enum Instr {
+    Const(int),
+    ConstStr(string),
+    Add,
+    Sub,
+    Mul,
+    Div,
+    CmpEq,
+    CmpNe,
+    CmpLt,
+    Load(int),
+    Store(int),
+    Label(int),
+    Jump(int),
+    JumpIfFalse(int),
+    Print,
+    PrintStr,
+    Pop,
+    Call(string, int),
+    Return
+}
+
+enum InstrList {
+    Nil,
+    Cons(Instr, InstrList)
+}
+
+enum FuncList {
+    FNil,
+    FCons(string, int, InstrList, int, FuncList)
+}
+
+struct IrModule {
+    InstrList code;
+    FuncList funcs;
+    int label_count;
+    int local_count;
+}
+
+struct EmitState {
+    InstrList code;
+    Scope scope;
+    int next_local;
+    int next_label;
+}
+
+struct RunResult {
+    bool ok;
+    int last_print;
+    bool did_print;
+    string last_print_str;
+}
+
+enum ValList {
+    VNil,
+    VCons(int, ValList)
+}
+
+enum StrList {
+    SNil,
+    SCons(string, StrList)
+}
+
+struct CompileResult {
+    Stmt program;
+    bool ok;
+}
+
+#include "token.elan"
+#include "diagnostic.elan"
+#include "lexer.elan"
+#include "ast.elan"
+#include "parser.elan"
+#include "resolver.elan"
+#include "typechecker.elan"
+#include "ir.elan"
+#include "codegen.elan"
+
+public action fixture_happy(): string {
+    return "let x = 1 + 2 * 3;\nlet n = 0;\nwhile (n < 3) {\n  n = n + 1;\n}\nif (x < 10) {\n  x = x + n;\n} else {\n  x = 0;\n}\nprint x;\n";
+}
+
+public action fixture_lex_error(): string {
+    return "let x = 1 $ 2;\nprint x;\n";
+}
+
+public action fixture_parse_error(): string {
+    return "let x = (1 + ;\nprint x;\n";
+}
+
+public action fixture_type_error(): string {
+    return "let x = 1;\nprint x + (1 < 2);\n";
+}
+
+public action fixture_ir_prec(): string {
+    return "print 1 + 2 * 3;\nprint (1 + 2) * 3;\n";
+}
+
+public action fixture_ir_while(): string {
+    return "let s = 0;\nlet i = 1;\nwhile (i < 5) {\n  s = s + i;\n  i = i + 1;\n}\nprint s;\n";
+}
+
+public action fixture_ir_else(): string {
+    return "let x = 5;\nif (x < 3) {\n  print 1;\n} else {\n  print 2;\n}\n";
+}
+
+public action fixture_ir_arith(): string {
+    return "let a = 20 - 8 / 2;\nlet b = a - 3;\nprint b;\n";
+}
+
+public action fixture_ir_call(): string {
+    return "public action add(int a, int b): int {\n  return a + b;\n}\nprint add(6, 7);\nprint \"hi\";\n";
+}
+
+public action fixture_selfhost_slice(): string {
+    return "@strict\n\nenum Color {\n    Red,\n    Blue(int)\n}\n\nstruct Point {\n    int x;\n    int y;\n}\n\npublic action add(int a, int b): int {\n    return a + b;\n}\n\npublic action demo() {\n    int i = 0;\n    string msg = \"ok\";\n    Point p;\n    p.x = 1;\n    match (Color.Red) {\n        case Red: { i = 1; }\n        case Blue(n): { i = n; }\n    }\n    print add(2, 3);\n    print msg;\n    return;\n}\n";
+}
+
+public action compile_pipeline(string source, string path): CompileResult {
+    CompileResult out;
+    out.program = Stmt.Empty;
+    out.ok = false;
+
+    LexResult lexed = lex(source);
+    if (!lexed.ok) {
+        Diagnostic d = diag_error(lexed.error_message, lexed.error_line, lexed.error_column);
+        print_diagnostic(d, path);
+        return out;
+    }
+
+    ParseResult parsed = parse(lexed.tokens);
+    if (!parsed.ok) {
+        print_diagnostics(parsed.diags, path);
+        return out;
+    }
+
+    ResolveResult resolved = resolve(parsed.program);
+    if (!resolved.ok) {
+        print_diagnostics(resolved.diags, path);
+        return out;
+    }
+
+    TypeResult typed = typecheck(parsed.program);
+    if (!typed.ok) {
+        print_diagnostics(typed.diags, path);
+        return out;
+    }
+
+    out.program = parsed.program;
+    out.ok = true;
+    return out;
+}
+
+public action compile_and_run(string source, string path) {
+    print "=== " + path + " ===";
+    CompileResult compiled = compile_pipeline(source, path);
+    if (!compiled.ok) {
+        return;
+    }
+
+    RunResult ran = codegen_and_run(compiled.program);
+    if (ran.did_print) {
+        print "result: " + string(ran.last_print);
+    } else {
+        print "result: (no print)";
+    }
+}
+
+public action compile_dump_and_expect(string source, string path, int expect) {
+    print "=== " + path + " ===";
+    CompileResult compiled = compile_pipeline(source, path);
+    if (!compiled.ok) {
+        print "IR FAIL: pipeline error";
+        return;
+    }
+
+    RunResult ran = codegen_dump_and_run(compiled.program);
+    if (!ran.ok) {
+        print "IR FAIL: interpreter guard tripped";
+        return;
+    }
+    if (!ran.did_print) {
+        print "IR FAIL: no print";
+        return;
+    }
+    if (ran.last_print != expect) {
+        print "IR FAIL: got " + string(ran.last_print) + " want " + string(expect);
+        return;
+    }
+    print "result: " + string(ran.last_print) + " (ok)";
+}
+
+public action compile_program_expect(string source, string path, int expect) {
+    print "=== " + path + " ===";
+    LexResult lexed = lex(source);
+    if (!lexed.ok) {
+        Diagnostic d = diag_error(lexed.error_message, lexed.error_line, lexed.error_column);
+        print_diagnostic(d, path);
+        print "IR FAIL: lex error";
+        return;
+    }
+    ProgramResult parsed = parse_program(lexed.tokens);
+    if (!parsed.ok) {
+        print_diagnostics(parsed.diags, path);
+        print "IR FAIL: parse error";
+        return;
+    }
+    RunResult ran = codegen_program_and_run(parsed.program);
+    if (!ran.ok) {
+        print "IR FAIL: interpreter guard tripped";
+        return;
+    }
+    if (!ran.did_print) {
+        print "IR FAIL: no print";
+        return;
+    }
+    if (ran.last_print != expect) {
+        print "IR FAIL: got " + string(ran.last_print) + " want " + string(expect);
+        return;
+    }
+    print "result: " + string(ran.last_print) + " (ok)";
+}
+
+public action parse_selfhost_slice(string source, string path) {
+    print "=== " + path + " ===";
+    LexResult lexed = lex(source);
+    if (!lexed.ok) {
+        Diagnostic d = diag_error(lexed.error_message, lexed.error_line, lexed.error_column);
+        print_diagnostic(d, path);
+        print "selfhost_slice: lex FAIL";
+        return;
+    }
+    ProgramResult parsed = parse_program(lexed.tokens);
+    if (!parsed.ok) {
+        print_diagnostics(parsed.diags, path);
+        print "selfhost_slice: parse FAIL";
+        print "remaining: full compiler/*.elan still needs recursive include expansion and broader host syntax";
+        return;
+    }
+    print "selfhost_slice: parse ok (include/@strict/run/action/enum/struct/string/member calls/match/return/typed locals)";
+}
+
+public action parse_file_expect(string path) {
+    string source = fs.read(path);
+    if (source == "") {
+        print "selfhost_file: read FAIL";
+        return;
+    }
+    LexResult lexed = lex(source);
+    if (!lexed.ok) {
+        print "selfhost_file: lex FAIL";
+        return;
+    }
+    ProgramResult parsed = parse_program(lexed.tokens);
+    if (!parsed.ok) {
+        print "selfhost_file: parse FAIL";
+        print_diagnostics(parsed.diags, path);
+        return;
+    }
+    print "selfhost_file: parse ok";
+}
+
+public action include_path_from_text(string include_text): string {
+    if (string.starts_with(include_text, "<builtin/")) {
+        return "";
+    }
+    int open_q = string.find(include_text, "\"");
+    if (open_q >= 0) {
+        int include_len = string.len(include_text);
+        int qstart = open_q + 1;
+        int qspan = include_len - open_q - 1;
+        string quoted_text = string.substr(include_text, qstart, qspan);
+        int quoted_end = string.find(quoted_text, "\"");
+        if (quoted_end >= 0) {
+            return string.substr(quoted_text, 0, quoted_end);
+        }
+        return "";
+    }
+    int open_a = string.find(include_text, "<");
+    if (open_a < 0) {
+        return "";
+    }
+    int include_len2 = string.len(include_text);
+    int astart = open_a + 1;
+    int aspan = include_len2 - open_a - 1;
+    string angle_text = string.substr(include_text, astart, aspan);
+    int angle_end = string.find(angle_text, ">");
+    if (angle_end < 0) {
+        return "";
+    }
+    return string.substr(angle_text, 0, angle_end);
+}
+
+public action strip_include_preamble(string source): string {
+    int pos = 0;
+    int n = string.len(source);
+    while (pos < n) {
+        int span = n - pos;
+        string rest = string.substr(source, pos, span);
+        int nl = string.find(rest, "\n");
+        int line_end = span;
+        if (nl >= 0) {
+            line_end = nl;
+        }
+        string line = string.substr(source, pos, line_end);
+        string trimmed = string.strip(line);
+        if (string.starts_with(trimmed, "public action") || string.starts_with(trimmed, "action ")) {
+            return string.substr(source, pos, n - pos);
+        }
+        if (nl < 0) {
+            return "";
+        }
+        pos = pos + nl + 1;
+    }
+    return "";
+}
+
+public action expand_one_include(string dir, string include_path): string {
+    if (include_path == "") {
+        return "";
+    }
+    string joined = path.join(dir, include_path);
+    string nested = expand_includes(joined);
+    string stripped = strip_include_preamble(nested);
+    if (stripped == "") {
+        return "";
+    }
+    return stripped + "\n";
+}
+
+public action expand_includes(string file_path): string {
+    string source = fs.read(file_path);
+    if (source == "") {
+        return "";
+    }
+    string dir = path.dirname(file_path);
+    string out = "";
+    int pos = 0;
+    int n = string.len(source);
+    while (pos < n) {
+        int span = n - pos;
+        string rest = string.substr(source, pos, span);
+        int nl = string.find(rest, "\n");
+        int line_end = span;
+        if (nl >= 0) {
+            line_end = nl;
+        }
+        string line = string.substr(source, pos, line_end);
+        string trimmed = string.strip(line);
+        if (string.starts_with(trimmed, "#include")) {
+            int trimmed_len = string.len(trimmed);
+            int raw_span = trimmed_len - 8;
+            string raw_include = string.substr(trimmed, 8, raw_span);
+            string include_text = string.strip(raw_include);
+            string include_path = include_path_from_text(include_text);
+            string piece = expand_one_include(dir, include_path);
+            out = out + piece;
+        } else {
+            out = out + line + "\n";
+        }
+        if (nl < 0) {
+            pos = n;
+        } else {
+            pos = pos + nl + 1;
+        }
+    }
+    return out;
+}
+
+public action bind_params(Decl params, Scope s, int next_id): Scope {
+    Decl cur = params;
+    Scope scope = s;
+    int id = next_id;
+    int keep = 1;
+    while (keep == 1) {
+        match (cur) {
+            case ParamNil: { keep = 0; }
+            case ParamCons(ty, name, rest): {
+                scope = scope_define(scope, name, id);
+                id = id + 1;
+                cur = rest;
+            }
+            case DeclNil: { keep = 0; }
+            case DeclCons(h, r): { keep = 0; }
+            case ActionDecl(n, p, r, b, l, c): { keep = 0; }
+            case EnumDecl(n, v, l, c): { keep = 0; }
+            case StructDecl(n, f, l, c): { keep = 0; }
+            case TopStmt(st): { keep = 0; }
+            case FieldNil: { keep = 0; }
+            case FieldCons(t, n, rest): { keep = 0; }
+            case VariantNil: { keep = 0; }
+            case VariantCons(n, p, rest): { keep = 0; }
+        }
+    }
+    return scope;
+}
+
+public action resolve_action_bodies(Decl decls): ResolveResult {
+    ResolveResult out;
+    out.program = Stmt.Empty;
+    out.diags = DiagList.Nil;
+    out.ok = true;
+    out.next_id = 0;
+    Decl cur = decls;
+    int keep = 1;
+    while (keep == 1) {
+        match (cur) {
+            case DeclNil: { keep = 0; }
+            case DeclCons(head, rest): {
+                ResolveResult one = resolve_action_bodies(head);
+                if (!one.ok) {
+                    out.diags = one.diags;
+                    out.ok = false;
+                    return out;
+                }
+                cur = rest;
+            }
+            case ActionDecl(n, p, r, body, l, c): {
+                Scope s = bind_params(p, Scope.EmptyScope, 0);
+                ResolveResult one = resolve_stmt(body, s, DiagList.Nil, 1000);
+                if (diag_has_error(one.diags)) {
+                    one.ok = false;
+                } else {
+                    one.ok = true;
+                }
+                out.diags = one.diags;
+                out.ok = one.ok;
+                out.next_id = one.next_id;
+                keep = 0;
+            }
+            case EnumDecl(n, v, l, c): { keep = 0; }
+            case StructDecl(n, f, l, c): { keep = 0; }
+            case TopStmt(s): {
+                ResolveResult one = resolve(s);
+                out.diags = one.diags;
+                out.ok = one.ok;
+                out.next_id = one.next_id;
+                keep = 0;
+            }
+            case ParamNil: { keep = 0; }
+            case ParamCons(t, n, rest): { keep = 0; }
+            case FieldNil: { keep = 0; }
+            case FieldCons(t, n, rest): { keep = 0; }
+            case VariantNil: { keep = 0; }
+            case VariantCons(n, p, rest): { keep = 0; }
+        }
+    }
+    return out;
+}
+
+public action bind_params_ty(Decl params, ScopeTy s): ScopeTy {
+    Decl cur = params;
+    ScopeTy scope = s;
+    int keep = 1;
+    while (keep == 1) {
+        match (cur) {
+            case ParamNil: { keep = 0; }
+            case ParamCons(ty, name, rest): {
+                Ty t = Ty.TyInt;
+                if (ty == "bool") { t = Ty.TyBool; }
+                if (ty == "string") { t = Ty.TyString; }
+                scope = scope_ty_define(scope, name, t);
+                cur = rest;
+            }
+            case DeclNil: { keep = 0; }
+            case DeclCons(h, r): { keep = 0; }
+            case ActionDecl(n, p, r, b, l, c): { keep = 0; }
+            case EnumDecl(n, v, l, c): { keep = 0; }
+            case StructDecl(n, f, l, c): { keep = 0; }
+            case TopStmt(st): { keep = 0; }
+            case FieldNil: { keep = 0; }
+            case FieldCons(t, n, rest): { keep = 0; }
+            case VariantNil: { keep = 0; }
+            case VariantCons(n, p, rest): { keep = 0; }
+        }
+    }
+    return scope;
+}
+
+public action typecheck_action_bodies(Decl decls): TypeResult {
+    TypeResult out;
+    out.ty = Ty.TyInt;
+    out.diags = DiagList.Nil;
+    out.ok = true;
+    Decl cur = decls;
+    int keep = 1;
+    while (keep == 1) {
+        match (cur) {
+            case DeclNil: { keep = 0; }
+            case DeclCons(head, rest): {
+                TypeResult one = typecheck_action_bodies(head);
+                if (!one.ok) {
+                    out.diags = one.diags;
+                    out.ok = false;
+                    return out;
+                }
+                cur = rest;
+            }
+            case ActionDecl(n, p, r, body, l, c): {
+                ScopeTy s = bind_params_ty(p, ScopeTy.EmptyScopeTy);
+                TypeResult one = type_stmt(body, s, DiagList.Nil);
+                out.diags = one.diags;
+                out.ok = one.ok;
+                if (diag_has_error(one.diags)) {
+                    out.ok = false;
+                }
+                out.ty = one.ty;
+                keep = 0;
+            }
+            case EnumDecl(n, v, l, c): { keep = 0; }
+            case StructDecl(n, f, l, c): { keep = 0; }
+            case TopStmt(s): {
+                TypeResult one = typecheck(s);
+                out.diags = one.diags;
+                out.ok = one.ok;
+                out.ty = one.ty;
+                keep = 0;
+            }
+            case ParamNil: { keep = 0; }
+            case ParamCons(t, n, rest): { keep = 0; }
+            case FieldNil: { keep = 0; }
+            case FieldCons(t, n, rest): { keep = 0; }
+            case VariantNil: { keep = 0; }
+            case VariantCons(n, p, rest): { keep = 0; }
+        }
+    }
+    return out;
+}
+
+public action selfhost_full_expect(string root): bool {
+    string main_path = path.join(root, "main.elan");
+    string source = fs.read(main_path);
+    if (source == "") {
+        print "selfhost_full: read FAIL at compiler/main.elan";
+        return false;
+    }
+    print "selfhost_full: read ok";
+    string expanded = expand_includes(main_path);
+    if (expanded == "") {
+        print "selfhost_full: include expansion FAIL at compiler/main.elan";
+        return false;
+    }
+    if (string.len(expanded) <= string.len(source)) {
+        print "selfhost_full: include expansion FAIL at compiler/main.elan";
+        return false;
+    }
+    print "selfhost_full: include expansion ok";
+    print "selfhost_full: expanded bytes " + string(string.len(expanded));
+    LexResult lexed = lex(expanded);
+    if (!lexed.ok) {
+        print "selfhost_full: lex FAIL at compiler/main.elan (expanded)";
+        print "selfhost_full: " + lexed.error_message + " at " + string(lexed.error_line) + ":" + string(lexed.error_column);
+        return false;
+    }
+    print "selfhost_full: lex ok at compiler/main.elan (expanded)";
+    ProgramResult parsed = parse_program(lexed.tokens);
+    if (!parsed.ok) {
+        print "selfhost_full: parse FAIL at compiler/main.elan (expanded)";
+        print "selfhost_full: first diags follow";
+        print_diagnostics(parsed.diags, "compiler/main.elan");
+        print "selfhost_full: bootstrap blocked by parser subset";
+        return false;
+    }
+    print "selfhost_full: parse ok at compiler/main.elan (expanded)";
+    Program prog = parsed.program;
+    ResolveResult resolved = resolve_action_bodies(prog.decls);
+    if (!resolved.ok) {
+        print "selfhost_full: resolve FAIL at compiler/main.elan (expanded)";
+        print_diagnostics(resolved.diags, "compiler/main.elan");
+        return false;
+    }
+    print "selfhost_full: resolve ok at compiler/main.elan (expanded)";
+    TypeResult typed = typecheck_action_bodies(prog.decls);
+    if (!typed.ok) {
+        print "selfhost_full: typecheck FAIL at compiler/main.elan (expanded)";
+        print_diagnostics(typed.diags, "compiler/main.elan");
+        return false;
+    }
+    print "selfhost_full: typecheck ok at compiler/main.elan (expanded)";
+    return true;
+}
+
+public action generic_runtime_expect() {
+    string source = "public action identity<T>(value: T): T {\nreturn value;\n}\nprint identity<int>(1);\n";
+    LexResult lexed = lex(source);
+    if (!lexed.ok) {
+        print "generic_runtime: lex FAIL";
+        return;
+    }
+    ProgramResult parsed = parse_program(lexed.tokens);
+    if (!parsed.ok) {
+        print "generic_runtime: parse FAIL";
+        return;
+    }
+    RunResult ran = codegen_program_and_run(parsed.program);
+    if (!ran.ok) {
+        print "generic_runtime: run FAIL";
+        return;
+    }
+    if (!ran.did_print) {
+        print "generic_runtime: run FAIL";
+        return;
+    }
+    if (ran.last_print != 1) {
+        print "generic_runtime: run FAIL";
+        return;
+    }
+    print "generic_runtime: ok";
+}
+
+public action main() {
+    if (!selfhost_full_expect("../compiler")) {
+        exit(1);
+    }
+}
+run main;

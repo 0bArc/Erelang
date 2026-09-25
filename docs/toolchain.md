@@ -31,6 +31,10 @@ erelang --fmt --check script.elan   # exit 1 if would change
 erelang --docgen script.elan
 erelang --docgen script.elan --out api.md
 
+# Package lock / fetch (local registry)
+erelang --lock package.elan --registry ./registry
+erelang --fetch package.elan --registry ./registry
+
 # Emit intermediate representation
 erelang --emit-ir script.elan --out script.eir
 
@@ -90,4 +94,5 @@ This produces `erelang_language.vsix`: install it in VS Code via **Extensions ->
 
 - [getting-started.md](getting-started.md)
 - [imports.md](imports.md)
+- [packages.md](packages.md)
 - [diagnostics.md](diagnostics.md)

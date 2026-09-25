@@ -1,0 +1,9 @@
+# mini-ir v1
+.locals 0
+.labels 0
+.entry
+CONST 10
+CONST 3
+ADD
+PRINT
+RETURN

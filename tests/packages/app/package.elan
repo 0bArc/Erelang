@@ -1,0 +1,11 @@
+@erelang
+
+namespace pkg {
+    global string name = "demo_app";
+    global string version = "0.1.0";
+    global string entry = "main.elan";
+}
+
+namespace pkg.depends {
+    global string greet = "^1.0.0";
+}

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "erelang/value.hpp"
+#include "erelang/runtime_helpers.hpp"
 
 #include <cmath>
 #include <stdexcept>
@@ -202,8 +203,15 @@ Value apply_binary(ValueBinOp op, const Value& left, const Value& right) {
         case ValueBinOp::Coalesce:
             return (left.kind == ValueKind::Null) ? right : left;
         case ValueBinOp::Eq:
-            if (left.kind == ValueKind::String && right.kind == ValueKind::String)
-                return Value::from_bool(left.string_ref() == right.string_ref());
+            if (left.kind == ValueKind::String && right.kind == ValueKind::String) {
+                const std::string& a = left.string_ref();
+                const std::string& b = right.string_ref();
+                if (a == b) return Value::from_bool(true);
+                if (a.rfind("enumvar:", 0) == 0 || b.rfind("enumvar:", 0) == 0) {
+                    return Value::from_bool(enum_variants_equal(a, b));
+                }
+                return Value::from_bool(false);
+            }
             if (both_numeric(left, right)) {
                 if (any_float(left, right))
                     return Value::from_bool(value_as_float(left) == value_as_float(right));

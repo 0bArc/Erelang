@@ -1,0 +1,26 @@
+// expect: TC164
+@strict
+
+trait Container {
+    type Item;
+    get(i: int): Item;
+}
+
+struct Box {
+    int value;
+    action get(i: int): int {
+        return self.value;
+    }
+}
+
+public action first_item<T: Container>(t: T): T::Item {
+    return t.get(0);
+}
+
+public action main() {
+    Box b;
+    b.value = 1;
+    print first_item<Box>(b);
+}
+
+run main;

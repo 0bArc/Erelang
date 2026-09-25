@@ -1,0 +1,23 @@
+enum Color {
+    Red,
+    Blue(int)
+}
+
+struct Point {
+    int x;
+    int y;
+}
+
+Point p;
+p.x = 3;
+string msg = "ok";
+string first = string.substr(msg, 0, 1);
+int n = string.len(msg);
+match (Color.Blue(10)) {
+    case Red: { n = 0; }
+    case Blue(v): { n = n + v + p.x; }
+}
+if (string.starts_with(msg, "o")) {
+    n = n + string.len(first);
+}
+print n;

@@ -1,0 +1,363 @@
+@strict
+
+enum BinOpKind {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Eq,
+    Ne,
+    Lt,
+    And,
+    Or
+}
+
+enum UnOpKind {
+    Neg,
+    Not
+}
+
+enum Expr {
+    IntLit(int, int, int),
+    BoolLit(bool, int, int),
+    StringLit(string, int, int),
+    Name(string, int, int),
+    Unary(UnOpKind, Expr, int, int),
+    BinOp(BinOpKind, Expr, Expr, int, int),
+    Assign(string, Expr, int, int),
+    Call(string, Expr, int, int),
+    Member(Expr, string, int, int),
+    ArgNil,
+    ArgCons(Expr, Expr)
+}
+
+enum Stmt {
+    Empty,
+    Let(string, Expr, int, int),
+    VarDecl(string, string, Expr, bool, int, int),
+    AssignStmt(string, Expr, int, int),
+    FieldAssign(Expr, string, Expr, int, int),
+    ExprStmt(Expr, int, int),
+    Print(Expr, int, int),
+    Return(Expr, bool, int, int),
+    If(Expr, Stmt, Stmt, int, int),
+    While(Expr, Stmt, int, int),
+    Match(Expr, Stmt, int, int),
+    Arm(string, string, Stmt, Stmt),
+    ArmEnd,
+    Block(Stmt),
+    Seq(Stmt, Stmt),
+    SeqList(StmtList)
+}
+
+enum StmtList {
+    StmtNil,
+    StmtCons(Stmt, StmtList)
+}
+
+enum Severity {
+    Error,
+    Warning
+}
+
+struct Diagnostic {
+    string message;
+    int line;
+    int column;
+    Severity severity;
+}
+
+enum DiagList {
+    Nil,
+    Cons(string, int, int, DiagList)
+}
+
+enum Scope {
+    EmptyScope,
+    Bind(string, int, Scope)
+}
+
+struct ResolveResult {
+    Stmt program;
+    DiagList diags;
+    bool ok;
+    int next_id;
+}
+
+public action scope_lookup(Scope s, string name): int {
+    match (s) {
+        case EmptyScope: { return 0 - 1; }
+        case Bind(n, id, parent): {
+            if (n == name) { return id; }
+            return scope_lookup(parent, name);
+        }
+    }
+    return 0 - 1;
+}
+
+public action scope_define(Scope s, string name, int id): Scope {
+    return Scope.Bind(name, id, s);
+}
+
+public action resolve_args(Expr args, Scope s, DiagList diags): DiagList {
+    match (args) {
+        case ArgNil: { return diags; }
+        case ArgCons(h, rest): {
+            DiagList d1 = resolve_expr(h, s, diags);
+            return resolve_args(rest, s, d1);
+        }
+        case IntLit(v, l, c): { return diags; }
+        case BoolLit(v, l, c): { return diags; }
+        case StringLit(v, l, c): { return diags; }
+        case Name(n, l, c): { return diags; }
+        case Unary(op, x, l, c): { return diags; }
+        case BinOp(op, a, b, l, c): { return diags; }
+        case Assign(n, v, l, c): { return diags; }
+        case Call(n, a, l, c): { return diags; }
+        case Member(o, f, l, c): { return diags; }
+    }
+    return diags;
+}
+
+public action resolve_expr(Expr e, Scope s, DiagList diags): DiagList {
+    match (e) {
+        case IntLit(v, l, c): { return diags; }
+        case BoolLit(v, l, c): { return diags; }
+        case StringLit(v, l, c): { return diags; }
+        case Name(n, l, c): {
+            int id = scope_lookup(s, n);
+            if (id < 0) {
+                if (n == "break" || n == "continue") {
+                    return diags;
+                }
+                if (string.len(n) > 0) {
+                    string first = string.substr(n, 0, 1);
+                    if (first >= "A" && first <= "Z") {
+                        return diags;
+                    }
+                }
+                string msg = "unknown name '" + n + "'";
+                return diag_prepend(diags, diag_error(msg, l, c));
+            }
+            return diags;
+        }
+        case Unary(op, inner, l, c): {
+            return resolve_expr(inner, s, diags);
+        }
+        case BinOp(op, left, right, l, c): {
+            DiagList d1 = resolve_expr(left, s, diags);
+            return resolve_expr(right, s, d1);
+        }
+        case Assign(n, val, l, c): {
+            int id = scope_lookup(s, n);
+            if (id < 0) {
+                DiagList d1 = diag_prepend(diags, diag_error("unknown name '" + n + "'", l, c));
+                return resolve_expr(val, s, d1);
+            }
+            return resolve_expr(val, s, diags);
+        }
+        case Call(n, args, l, c): {
+            return resolve_args(args, s, diags);
+        }
+        case Member(obj, field, l, c): {
+            return resolve_expr(obj, s, diags);
+        }
+        case ArgNil: { return diags; }
+        case ArgCons(h, rest): { return resolve_args(e, s, diags); }
+    }
+    return diags;
+}
+
+public action resolve_stmt(Stmt st, Scope s, DiagList diags, int next_id): ResolveResult {
+    ResolveResult out;
+    out.program = st;
+    out.diags = diags;
+    out.ok = true;
+    out.next_id = next_id;
+
+    match (st) {
+        case Empty: { return out; }
+        case Let(name, e, l, c): {
+            out.diags = resolve_expr(e, s, diags);
+            out.next_id = next_id + 1;
+            out.program = st;
+            return out;
+        }
+        case VarDecl(ty, name, e, has, l, c): {
+            if (has) {
+                out.diags = resolve_expr(e, s, diags);
+            }
+            out.next_id = next_id + 1;
+            return out;
+        }
+        case AssignStmt(name, e, l, c): {
+            int id = scope_lookup(s, name);
+            if (id < 0) {
+                out.diags = diag_prepend(diags, diag_error("unknown name '" + name + "'", l, c));
+            }
+            out.diags = resolve_expr(e, s, out.diags);
+            return out;
+        }
+        case FieldAssign(obj, field, e, l, c): {
+            DiagList d1 = resolve_expr(obj, s, diags);
+            out.diags = resolve_expr(e, s, d1);
+            return out;
+        }
+        case ExprStmt(e, l, c): {
+            out.diags = resolve_expr(e, s, diags);
+            return out;
+        }
+        case Print(e, l, c): {
+            out.diags = resolve_expr(e, s, diags);
+            return out;
+        }
+        case Return(e, has, l, c): {
+            if (has) {
+                out.diags = resolve_expr(e, s, diags);
+            }
+            return out;
+        }
+        case If(cond, then_s, else_s, l, c): {
+            DiagList d1 = resolve_expr(cond, s, diags);
+            ResolveResult t = resolve_stmt(then_s, s, d1, next_id);
+            ResolveResult e = resolve_stmt(else_s, s, t.diags, t.next_id);
+            out.diags = e.diags;
+            out.next_id = e.next_id;
+            return out;
+        }
+        case While(cond, body, l, c): {
+            DiagList d1 = resolve_expr(cond, s, diags);
+            ResolveResult b = resolve_stmt(body, s, d1, next_id);
+            out.diags = b.diags;
+            out.next_id = b.next_id;
+            return out;
+        }
+        case Match(scrut, arms, l, c): {
+            DiagList d1 = resolve_expr(scrut, s, diags);
+            return resolve_stmt(arms, s, d1, next_id);
+        }
+        case Arm(n, bind, body, next): {
+            Scope s2 = s;
+            int nid = next_id;
+            if (bind != "") {
+                int bi = 0;
+                int bn = string.len(bind);
+                string cur_name = "";
+                while (bi <= bn) {
+                    string ch = "";
+                    if (bi < bn) {
+                        ch = string.substr(bind, bi, 1);
+                    }
+                    if (bi == bn || ch == ",") {
+                        if (cur_name != "") {
+                            s2 = scope_define(s2, cur_name, nid);
+                            nid = nid + 1;
+                            cur_name = "";
+                        }
+                    } else {
+                        cur_name = cur_name + ch;
+                    }
+                    bi = bi + 1;
+                }
+            }
+            ResolveResult b = resolve_stmt(body, s2, diags, nid);
+            return resolve_stmt(next, s, b.diags, b.next_id);
+        }
+        case ArmEnd: { return out; }
+        case Block(body): {
+            return resolve_stmt(body, s, diags, next_id);
+        }
+        case SeqList(xs): {
+            return resolve_stmt_list(xs, s, diags, next_id);
+        }
+        case Seq(a, b): {
+            ResolveResult ra = resolve_stmt(a, s, diags, next_id);
+            Scope s2 = s;
+            int nid = next_id;
+            match (a) {
+                case Let(name, e, l, c): {
+                    s2 = scope_define(s, name, next_id);
+                    nid = next_id + 1;
+                }
+                case VarDecl(ty, name, e, has, l, c): {
+                    s2 = scope_define(s, name, next_id);
+                    nid = next_id + 1;
+                }
+                case Empty: { nid = ra.next_id; }
+                case AssignStmt(n2, e2, l2, c2): { nid = ra.next_id; }
+                case FieldAssign(o2, f2, e2, l2, c2): { nid = ra.next_id; }
+                case ExprStmt(e2, l2, c2): { nid = ra.next_id; }
+                case Print(e2, l2, c2): { nid = ra.next_id; }
+                case Return(e2, has2, l2, c2): { nid = ra.next_id; }
+                case If(e2, t2, e3, l2, c2): { nid = ra.next_id; }
+                case While(e2, b2, l2, c2): { nid = ra.next_id; }
+                case Match(e2, a2, l2, c2): { nid = ra.next_id; }
+                case Arm(n2, b2, body2, next2): { nid = ra.next_id; }
+                case ArmEnd: { nid = ra.next_id; }
+                case Block(b2): { nid = ra.next_id; }
+                case Seq(a2, b2): { nid = ra.next_id; }
+                case SeqList(xs2): { nid = ra.next_id; }
+            }
+            ResolveResult rb = resolve_stmt(b, s2, ra.diags, nid);
+            out.diags = rb.diags;
+            out.next_id = rb.next_id;
+            return out;
+        }
+    }
+    return out;
+}
+
+public action resolve_stmt_list(xs: StmtList, s: Scope, diags: DiagList, next_id: int): ResolveResult {
+    ResolveResult out;
+    out.program = Stmt.Empty;
+    out.diags = diags;
+    out.ok = true;
+    out.next_id = next_id;
+    StmtList cur = xs;
+    Scope scope = s;
+    int id = next_id;
+    int keep = 1;
+    while (keep == 1) {
+        match (cur) {
+            case StmtNil: { keep = 0; }
+            case StmtCons(head, rest): {
+                ResolveResult r = resolve_stmt(head, scope, out.diags, id);
+                out.diags = r.diags;
+                id = r.next_id;
+                match (head) {
+                    case Let(name, e, l, c): { scope = scope_define(scope, name, id - 1); }
+                    case VarDecl(ty, name, e, has, l, c): { scope = scope_define(scope, name, id - 1); }
+                    case Empty: { }
+                    case AssignStmt(n, e, l, c): { }
+                    case FieldAssign(o, f, e, l, c): { }
+                    case ExprStmt(e, l, c): { }
+                    case Print(e, l, c): { }
+                    case Return(e, has, l, c): { }
+                    case If(e, a, b, l, c): { }
+                    case While(e, b, l, c): { }
+                    case Match(e, a, l, c): { }
+                    case Arm(n, b, body, next): { }
+                    case ArmEnd: { }
+                    case Block(b): { }
+                    case Seq(a, b): { }
+                    case SeqList(ys): { }
+                }
+                cur = rest;
+            }
+        }
+    }
+    out.next_id = id;
+    return out;
+}
+
+public action resolve(Stmt program): ResolveResult {
+    ResolveResult out = resolve_stmt(program, Scope.EmptyScope, DiagList.Nil, 0);
+    if (diag_has_error(out.diags)) {
+        out.ok = false;
+    } else {
+        out.ok = true;
+    }
+    out.program = program;
+    return out;
+}
+

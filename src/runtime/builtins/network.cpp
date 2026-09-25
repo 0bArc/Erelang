@@ -1740,6 +1740,144 @@ std::string __erelang_tcp_handle_method(int id, const std::string& method, const
     return "";
 }
 
+// ── UDP sockets ──────────────────────────────────────────
+struct UdpSocket {
+    SOCKET sock = INVALID_SOCKET;
+    std::string host;
+    int port = 0;
+    std::atomic<bool> open{false};
+};
+static std::mutex g_udpMutex;
+static std::atomic<int> g_udpNextId{1};
+static std::unordered_map<int, std::shared_ptr<UdpSocket>> g_udpSockets;
+
+static std::string udp_bind_impl(const std::string& host, int port) {
+    ensure_wsa();
+    auto sock = std::make_shared<UdpSocket>();
+    sock->host = host.empty() ? "0.0.0.0" : host;
+    sock->port = port;
+    sock->sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (sock->sock == INVALID_SOCKET) return "null";
+
+    BOOL reuse = TRUE;
+    setsockopt(sock->sock, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse, sizeof(reuse));
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(static_cast<u_short>(port < 0 ? 0 : port));
+    if (sock->host == "0.0.0.0" || sock->host == "*") {
+        addr.sin_addr.s_addr = INADDR_ANY;
+    } else {
+        addr.sin_addr.s_addr = inet_addr(sock->host.c_str());
+        if (addr.sin_addr.s_addr == INADDR_NONE) {
+            struct addrinfo hints{}, *result = nullptr;
+            hints.ai_family = AF_INET;
+            hints.ai_socktype = SOCK_DGRAM;
+            if (getaddrinfo(sock->host.c_str(), nullptr, &hints, &result) == 0 && result) {
+                addr.sin_addr = ((sockaddr_in*)result->ai_addr)->sin_addr;
+                freeaddrinfo(result);
+            } else {
+                closesocket(sock->sock);
+                return "null";
+            }
+        }
+    }
+
+    if (bind(sock->sock, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
+        closesocket(sock->sock);
+        return "null";
+    }
+
+    sockaddr_in bound{};
+    int boundLen = sizeof(bound);
+    if (getsockname(sock->sock, (sockaddr*)&bound, &boundLen) == 0) {
+        sock->port = ntohs(bound.sin_port);
+    }
+
+    sock->open.store(true);
+    int id = g_udpNextId.fetch_add(1);
+    {
+        std::lock_guard<std::mutex> lock(g_udpMutex);
+        g_udpSockets[id] = sock;
+    }
+    return std::string("udp:") + std::to_string(id);
+}
+
+std::string __erelang_udp_handle_method(int id, const std::string& method, const std::vector<std::string>& args) {
+    auto argS = [&](size_t i) -> const std::string& {
+        static const std::string empty;
+        return i < args.size() ? args[i] : empty;
+    };
+
+    std::shared_ptr<UdpSocket> sock;
+    {
+        std::lock_guard<std::mutex> lock(g_udpMutex);
+        auto it = g_udpSockets.find(id);
+        if (it == g_udpSockets.end()) return "";
+        sock = it->second;
+    }
+    if (!sock || !sock->open.load()) return "";
+
+    if (method == "send") {
+        // send(host, port, data) or send(data) to last peer — require host/port/data
+        if (args.size() < 3) return "0";
+        const std::string& host = argS(0);
+        int port = 0;
+        try { port = std::stoi(argS(1)); } catch (...) { return "0"; }
+        const std::string& data = argS(2);
+        sockaddr_in dest{};
+        dest.sin_family = AF_INET;
+        dest.sin_port = htons(static_cast<u_short>(port));
+        dest.sin_addr.s_addr = inet_addr(host.c_str());
+        if (dest.sin_addr.s_addr == INADDR_NONE) {
+            struct addrinfo hints{}, *result = nullptr;
+            hints.ai_family = AF_INET;
+            hints.ai_socktype = SOCK_DGRAM;
+            std::string portStr = std::to_string(port);
+            if (getaddrinfo(host.c_str(), portStr.c_str(), &hints, &result) == 0 && result) {
+                dest.sin_addr = ((sockaddr_in*)result->ai_addr)->sin_addr;
+                freeaddrinfo(result);
+            } else {
+                return "0";
+            }
+        }
+        int n = sendto(sock->sock, data.c_str(), static_cast<int>(data.size()), 0,
+                       (sockaddr*)&dest, sizeof(dest));
+        return std::to_string(n < 0 ? 0 : n);
+    }
+    if (method == "receive" || method == "recv") {
+        int maxLen = 65535;
+        if (!argS(0).empty()) {
+            try { maxLen = std::stoi(argS(0)); } catch (...) {}
+            if (maxLen <= 0) maxLen = 65535;
+        }
+        std::vector<char> buf(static_cast<std::size_t>(maxLen));
+        sockaddr_in from{};
+        int fromLen = sizeof(from);
+        int n = recvfrom(sock->sock, buf.data(), maxLen, 0, (sockaddr*)&from, &fromLen);
+        if (n <= 0) return "";
+        // Encode as "host:port\ndata" so caller can split if needed; simple path returns payload only.
+        return std::string(buf.data(), static_cast<std::size_t>(n));
+    }
+    if (method == "port") {
+        return std::to_string(sock->port);
+    }
+    if (method == "close") {
+        sock->open.store(false);
+        if (sock->sock != INVALID_SOCKET) {
+            closesocket(sock->sock);
+            sock->sock = INVALID_SOCKET;
+        }
+        std::lock_guard<std::mutex> lock(g_udpMutex);
+        g_udpSockets.erase(id);
+        return "true";
+    }
+    if (method == "state") {
+        return sock->open.load() ? "open" : "closed";
+    }
+    return "";
+}
+
 // ── HTTP Response handle dispatch ────────────────────────
 std::string __erelang_resp_handle_method(int id, const std::string& method, const std::vector<std::string>& args) {
     auto argS = [&](size_t i) -> const std::string& {
@@ -1822,6 +1960,11 @@ static std::string net_dispatch(const std::string& name, const std::vector<std::
     if (name == "http_delete") return http_delete_impl(argS(0));
     if (name == "http_head") return http_head_impl(argS(0));
     if (name == "tcp_connect") return tcp_connect_impl(argS(0), argS(1).empty() ? 0 : std::stoi(argS(1)));
+    if (name == "udp_bind") {
+        int port = 0;
+        try { port = std::stoi(argS(1)); } catch (...) {}
+        return udp_bind_impl(argS(0), port);
+    }
 
     // ── HTTP response-object helpers (also exposed as plain builtins) ──
     // These wrap a raw HTTP response body into a resp: handle

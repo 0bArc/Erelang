@@ -1,0 +1,25 @@
+@strict
+
+#include <std/fs> as fs
+
+public action main() {
+    string path = "tests_tmp_file_buffer.txt";
+    string h = fs.open(path, "w");
+    h.buffer(4);
+    h.write("ABCDEFGH");
+    h.flush();
+    h.close();
+    string r = fs.open(path, "r");
+    r.buffer(3);
+    string a = r.read(3);
+    string b = r.read(3);
+    string c = r.read(2);
+    r.close();
+    fs.remove(path);
+    print a;
+    print b;
+    print c;
+    print "std-file-buffer-ok";
+}
+
+run main;

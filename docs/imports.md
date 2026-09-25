@@ -27,7 +27,8 @@ import "builtin/fs" as fs      // also works
 |--------|-------|-----|
 | `builtin/fs` | `fs` | [filesystem.md](filesystem.md) |
 | `builtin/path` | `path` | [filesystem.md](filesystem.md): paths only |
-| `builtin/network` | `net` | [network.md](network.md) |
+| `builtin/network` | `net` | [network.md](network.md) (HTTP + `net.udp_bind`) |
+| `builtin/log` / `std/log` | `log` | levels + line write (`log.info`, optional `log.to_file`) |
 | `builtin/math` | `math` | [math.md](math.md) |
 | `builtin/system` | `sys` | [process.md](process.md) |
 | `builtin/data` | `db` | [data.md](data.md) |
@@ -77,4 +78,4 @@ Resolution order for local modules:
 
 `builtin/*` resolves internally: no file load. Imports load recursively before the main program runs.
 
-**Package manager boundary:** local path `#include` / `import` is the module system. There is no remote registry / `erelang.toml` package fetch. Use namespaces (`Foo::bar`) for name scoping inside a program.
+**Package manager:** packages are `.elan` projects with `package.elan` + `erelang.lock`. `#include <pkg/NAME>` resolves through the lockfile and local registry. See [packages.md](packages.md).

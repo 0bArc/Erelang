@@ -38,6 +38,8 @@ The typechecker emits `TC***` codes before the script runs. **Errors** stop exec
 | `TC161` | Non-exhaustive `match` on an enum (missing variants; use `_` or cover all) |
 | `TC162` | Match guard expression is not `bool` |
 | `TC163` | Range `..` / `..<` bounds are not `int` |
+| `TC164` | Trait associated type missing on concrete type (`type T::Item = ...`) |
+| `TC165` | Trait method return mismatches associated type binding |
 
 ## Warning codes
 

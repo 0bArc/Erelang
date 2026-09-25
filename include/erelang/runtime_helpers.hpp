@@ -30,6 +30,7 @@ struct ClosureData;
 extern int g_nextListId;
 extern int g_nextDictId;
 extern int g_nextTupleId;
+extern int g_nextEnumVarId;
 extern int g_nextPtrId;
 extern int g_nextFileId;
 extern int g_nextStrBufId;
@@ -43,6 +44,12 @@ extern int g_nextBufferId;
 extern std::unordered_map<int, std::vector<std::string>> g_lists;
 extern std::unordered_map<int, std::unordered_map<std::string, std::string>> g_dicts;
 extern std::unordered_map<int, std::vector<std::string>> g_tuples;
+
+struct EnumVarState {
+    std::string tag;
+    std::vector<std::string> payloads;
+};
+extern std::unordered_map<int, EnumVarState> g_enumVars;
 extern std::unordered_map<int, std::string> g_ptrs;
 
 struct RawMemBlock {
@@ -80,12 +87,31 @@ struct BufferState {
 };
 extern std::unordered_map<int, BufferState> g_buffers;
 
+struct FileBufState {
+    std::size_t capacity{4096};
+    std::string writePending;
+    std::string readCache;
+    std::size_t readPos{0};
+};
 extern std::unordered_map<int, std::unique_ptr<std::fstream>> g_fileStreams;
+extern std::unordered_map<int, FileBufState> g_fileBufs;
 extern std::unordered_map<int, std::string> g_strBuffers;
 extern std::unordered_map<int, ClosureData*> g_closures;
 extern std::unordered_set<std::string> g_deprecationWarningsShown;
 extern std::unordered_map<int, std::unordered_set<std::string>> g_sets;
 extern std::unordered_map<int, std::deque<std::string>> g_queues;
+
+struct MemDebugStats {
+    std::uint64_t allocs{0};
+    std::uint64_t frees{0};
+    std::uint64_t live{0};
+    std::uint64_t double_frees{0};
+    std::uint64_t use_after_free{0};
+    std::uint64_t leaks_at_reset{0};
+};
+
+extern MemDebugStats g_memStats;
+extern std::unordered_set<int> g_freedPtrIds;
 
 [[nodiscard]] std::size_t mem_elem_size(std::string_view typeName);
 [[nodiscard]] Value mem_zero_value(std::string_view typeName);
@@ -101,6 +127,9 @@ void mem_ptr_set(const Value& ptr, const Value& value);
 [[nodiscard]] Value mem_ptr_add(const Value& ptr, std::int64_t delta);
 [[nodiscard]] bool mem_is_ptr(const Value& v);
 [[nodiscard]] bool mem_is_owner(const Value& v);
+[[nodiscard]] std::uint64_t mem_live_count();
+[[nodiscard]] Value mem_stats_value();
+void mem_reset_debug_stats();
 
 [[nodiscard]] Value mem_make_own(std::string_view elemType, Value payload);
 [[nodiscard]] Value mem_make_shared(std::string_view elemType, Value payload);
@@ -172,6 +201,8 @@ void inject_standard_enum_methods(Program& program);
 
 [[nodiscard]] std::string encode_enum_variant(const std::string& tag, const std::vector<std::string>& payloads);
 [[nodiscard]] bool decode_enum_variant(const std::string& encoded, std::string& tagOut, std::vector<std::string>& payloadsOut);
+[[nodiscard]] bool peek_enum_tag(const std::string& encoded, std::string& tagOut);
+[[nodiscard]] bool enum_variants_equal(const std::string& left, const std::string& right);
 
 struct FutureState {
     std::mutex mu;

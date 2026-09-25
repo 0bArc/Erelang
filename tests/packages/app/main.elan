@@ -1,0 +1,10 @@
+@strict
+
+#include <pkg/greet>
+
+public action main() {
+    print greet_hello(21);
+    print "packages-resolve-ok";
+}
+
+run main;

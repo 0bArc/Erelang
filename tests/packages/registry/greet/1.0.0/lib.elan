@@ -1,0 +1,7 @@
+@erelang
+
+#include <pkg/util>
+
+public action greet_hello(int n): int {
+    return util_twice(n);
+}

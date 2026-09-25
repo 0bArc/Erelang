@@ -1,0 +1,23 @@
+enum Color {
+    Red,
+    Blue(int)
+}
+
+struct Point {
+    int x;
+    int y;
+}
+
+Point p;
+p.x = 3;
+p.y = 4;
+int s = 0;
+match (Color.Blue(10)) {
+    case Red: { s = 1; }
+    case Blue(n): { s = n + p.x; }
+}
+match (Color.Red) {
+    case Red: { s = s + p.y; }
+    case Blue(n): { s = s + n; }
+}
+print s;

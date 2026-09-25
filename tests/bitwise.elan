@@ -1,0 +1,24 @@
+@strict
+
+public action main() {
+    int a = 12;
+    int b = 5;
+
+    if ((a & b) != 4) { fail("bitwise and"); }
+    if ((a | b) != 13) { fail("bitwise or"); }
+    if ((a ^ b) != 9) { fail("bitwise xor"); }
+    if ((~a) != -13) { fail("bitwise not"); }
+    if ((a << 2) != 48) { fail("bitwise left shift"); }
+    if ((a >> 1) != 6) { fail("bitwise right shift"); }
+    if (!(a == 12)) { fail("equality"); }
+    if (!(a === 12)) { fail("strict equality"); }
+    if (!(a != b)) { fail("inequality"); }
+    if (!(a !== b)) { fail("strict inequality"); }
+    if (!(a > b && a >= 12 && b < a && b <= 5)) { fail("relational"); }
+    if ((2 ** 3) != 8) { fail("power"); }
+
+    print "bitwise {a} {b} {(a & b)} {(a | b)} {(a ^ b)} {(~a)} {(a << 2)} {(a >> 1)} {(2 ** 3)}";
+    print "bitwise-ok";
+}
+
+run main;

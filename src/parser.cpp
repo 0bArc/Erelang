@@ -2849,7 +2849,15 @@ TypeAliasDecl Parser::parse_type_alias() {
     const Token& nameTok = consume();
     if (!(nameTok.kind == TokenKind::Word || nameTok.kind == TokenKind::Keyword)) throw std::runtime_error("Type alias name");
     TypeAliasDecl decl;
-    decl.name = qualify_name(ident_text(nameTok));
+    std::string aliasName = ident_text(nameTok);
+    while (match(TokenKind::Scope)) {
+        const Token& seg = consume();
+        if (!(seg.kind == TokenKind::Word || seg.kind == TokenKind::Keyword)) {
+            throw std::runtime_error("Expected type alias segment after '::'");
+        }
+        aliasName += "::" + ident_text(seg);
+    }
+    decl.name = qualify_name(aliasName);
     decl.typeParams = parse_type_param_list();
     expect(TokenKind::Assign, "=");
     decl.targetType = parse_type_annotation();
@@ -2877,6 +2885,16 @@ TraitDecl Parser::parse_trait() {
     while (peek().kind != TokenKind::RBrace && peek().kind != TokenKind::End) {
         match_word("public");
         match_word("private");
+        if (match_word("type")) {
+            const Token& tname = consume();
+            if (!(tname.kind == TokenKind::Word || tname.kind == TokenKind::Keyword)) {
+                throw std::runtime_error("Associated type name");
+            }
+            decl.associatedTypes.push_back(ident_text(tname));
+            match(TokenKind::Semicolon);
+            skip_separators();
+            continue;
+        }
         match_word("action");
         TraitMethodSig method;
         const Token& mname = consume();

@@ -1,0 +1,17 @@
+@strict
+
+#include <builtin/network> as net
+
+public action main() {
+    string server = net.udp_bind("127.0.0.1", 0);
+    int port = int(server.port());
+    string client = net.udp_bind("127.0.0.1", 0);
+    client.send("127.0.0.1", port, "ping-udp");
+    string got = server.receive(64);
+    server.close();
+    client.close();
+    print got;
+    print "std-udp-ok";
+}
+
+run main;

@@ -1,0 +1,34 @@
+@strict
+#include "token.elan"
+
+enum Color {
+    Red,
+    Blue(int)
+}
+
+struct Point {
+    int x;
+    int y;
+}
+
+public action add(int a, int b): int {
+    return a + b;
+}
+
+public action demo() {
+    int i = 0;
+    string msg = "ok";
+    int msg_len = string.len(msg);
+    string first = string.substr(msg, 0, 1);
+    Point p;
+    p.x = 1;
+    match (Color.Red) {
+        case Red: { i = 1; }
+        case Blue(n): { i = n; }
+    }
+    print add(2, 3);
+    print msg;
+    return;
+}
+
+run main;

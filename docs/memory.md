@@ -76,3 +76,5 @@ print data.cap();
 - Handles use prefixes `ptr:`, `heap:`, `shared:`, `weak:`, `buffer:`.
 - Scope exit drops locals that own (`heap` / `shared` / `buffer` / `weak` / owned `file:`).
 - No GC. No `std.memory` module. No `own<T>` (renamed to `heap<T>`).
+- All language heap objects go through this API: `alloc`/`free`/`realloc`, `heap`/`shared`/`weak`/`buffer`. Lists/dicts use the same handle registry and clear on run reset.
+- Debug counters (no GC): `mem_stats()` → `allocs=… frees=… live=… double_frees=… use_after_free=…`; `mem_alive()` → live count. Double-free and use-after-free throw; counters still bump.

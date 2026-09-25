@@ -1,0 +1,28 @@
+@strict
+
+trait Container {
+    type Item;
+    get(i: int): Item;
+}
+
+struct Box {
+    int value;
+    action get(i: int): int {
+        return self.value;
+    }
+}
+
+type Box::Item = int;
+
+public action first_item<T: Container>(t: T): T::Item {
+    return t.get(0);
+}
+
+public action main() {
+    Box b;
+    b.value = 42;
+    print first_item<Box>(b);
+    print "associated-types-ok";
+}
+
+run main;

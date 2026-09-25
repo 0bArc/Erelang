@@ -46,4 +46,7 @@ std::string __erelang_resp_handle_method(int id, const std::string& method, cons
 // Raw TCP socket handle (tcp: prefix)
 std::string __erelang_tcp_handle_method(int id, const std::string& method, const std::vector<std::string>& args);
 
+// UDP socket handle (udp: prefix)
+std::string __erelang_udp_handle_method(int id, const std::string& method, const std::vector<std::string>& args);
+
 } // namespace erelang

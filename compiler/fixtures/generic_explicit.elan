@@ -1,0 +1,13 @@
+public action identity<T>(value: T): T {
+    return value;
+}
+
+struct Option<T> {
+}
+
+public action demo() {
+    Option<int> value;
+    print identity<int>(1);
+}
+
+run demo;

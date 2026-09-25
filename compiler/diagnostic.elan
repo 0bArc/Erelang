@@ -1,0 +1,84 @@
+@strict
+
+enum Severity {
+    Error,
+    Warning
+}
+
+struct Diagnostic {
+    string message;
+    int line;
+    int column;
+    Severity severity;
+}
+
+enum DiagList {
+    Nil,
+    Cons(string, int, int, DiagList)
+}
+
+public action make_diag(string message, int line, int column, Severity severity): Diagnostic {
+    Diagnostic d;
+    d.message = message;
+    d.line = line;
+    d.column = column;
+    d.severity = severity;
+    return d;
+}
+
+public action diag_error(string message, int line, int column): Diagnostic {
+    return make_diag(message, line, column, Severity.Error);
+}
+
+public action format_diagnostic(Diagnostic d, string path): string {
+    string out = "error: " + d.message + "\n";
+    out = out + "  --> " + path + ":" + string(d.line) + ":" + string(d.column);
+    return out;
+}
+
+public action print_diagnostic(Diagnostic d, string path) {
+    print format_diagnostic(d, path);
+}
+
+public action print_diagnostics(DiagList diags, string path) {
+    DiagList cur = diags;
+    int keep = 1;
+    while (keep == 1) {
+        match (cur) {
+            case Nil: { keep = 0; }
+            case Cons(msg, line, col, rest): {
+                Diagnostic d = make_diag(msg, line, col, Severity.Error);
+                print_diagnostic(d, path);
+                cur = rest;
+            }
+        }
+    }
+}
+
+public action diag_list_rev(DiagList xs, DiagList acc): DiagList {
+    DiagList cur = xs;
+    DiagList out = acc;
+    int keep = 1;
+    while (keep == 1) {
+        match (cur) {
+            case Nil: { keep = 0; }
+            case Cons(msg, line, col, rest): {
+                out = DiagList.Cons(msg, line, col, out);
+                cur = rest;
+            }
+        }
+    }
+    return out;
+}
+
+public action diag_prepend(DiagList xs, Diagnostic d): DiagList {
+    return DiagList.Cons(d.message, d.line, d.column, xs);
+}
+
+public action diag_has_error(DiagList diags): bool {
+    match (diags) {
+        case Nil: { return false; }
+        case Cons(msg, line, col, rest): { return true; }
+    }
+    return false;
+}

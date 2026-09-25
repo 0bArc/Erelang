@@ -1,0 +1,5 @@
+@erelang
+
+public action util_twice(int x): int {
+    return x + x;
+}

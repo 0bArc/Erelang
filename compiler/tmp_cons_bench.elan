@@ -1,0 +1,20 @@
+@strict
+enum Tok { Ident, Eof }
+struct Token { Tok kind; string text; int start; int end; int line; int column; }
+enum TokenList { Nil, Cons(Token, TokenList) }
+public action make_token(Tok kind, string text): Token {
+    Token t; t.kind = kind; t.text = text; t.start = 0; t.end = 0; t.line = 1; t.column = 1; return t;
+}
+public action main() {
+    int n = 30000;
+    TokenList acc = TokenList.Nil;
+    int i = 0;
+    Token t;
+    while (i < n) {
+        t = make_token(Tok.Ident, "x");
+        acc = TokenList.Cons(t, acc);
+        i = i + 1;
+    }
+    print "built " + string(n);
+}
+run main;

@@ -1,0 +1,77 @@
+@strict
+enum Tok { Ident, Keyword, Number, String, Plus, Minus, Star, Slash, EqEq, BangEq, Bang, Lt, AndAnd, OrOr, Assign, LParen, RParen, LBrace, RBrace, Comma, Colon, Dot, At, Hash, Semi, Eof, Error }
+struct Token { Tok kind; string text; int start; int end; int line; int column; }
+enum TokenList { Nil, Cons(Token, TokenList) }
+public action make_token(Tok kind, string text): Token {
+    Token t; t.kind = kind; t.text = text; t.start = 0; t.end = 0; t.line = 1; t.column = 1; return t;
+}
+public action tok_name(Tok k): string {
+    match (k) {
+        case Ident: { return "Ident"; }
+        case Keyword: { return "Keyword"; }
+        case Number: { return "Number"; }
+        case String: { return "String"; }
+        case Plus: { return "Plus"; }
+        case Minus: { return "Minus"; }
+        case Star: { return "Star"; }
+        case Slash: { return "Slash"; }
+        case EqEq: { return "EqEq"; }
+        case BangEq: { return "BangEq"; }
+        case Bang: { return "Bang"; }
+        case Lt: { return "Lt"; }
+        case AndAnd: { return "AndAnd"; }
+        case OrOr: { return "OrOr"; }
+        case Assign: { return "Assign"; }
+        case LParen: { return "LParen"; }
+        case RParen: { return "RParen"; }
+        case LBrace: { return "LBrace"; }
+        case RBrace: { return "RBrace"; }
+        case Comma: { return "Comma"; }
+        case Colon: { return "Colon"; }
+        case Dot: { return "Dot"; }
+        case At: { return "At"; }
+        case Hash: { return "Hash"; }
+        case Semi: { return "Semi"; }
+        case Eof: { return "Eof"; }
+        case Error: { return "Error"; }
+    }
+    return "?";
+}
+public action is_tok(Token t, string name): bool { return tok_name(t.kind) == name; }
+public action peek(TokenList ts): Token {
+    match (ts) {
+        case Cons(t, rest): { return t; }
+        case Nil: { return make_token(Tok.Eof, ""); }
+    }
+    return make_token(Tok.Eof, "");
+}
+public action adv(TokenList ts): TokenList {
+    match (ts) {
+        case Cons(t, rest): { return rest; }
+        case Nil: { return TokenList.Nil; }
+    }
+    return TokenList.Nil;
+}
+public action main() {
+    int n = 20000;
+    TokenList acc = TokenList.Nil;
+    int i = 0;
+    while (i < n) {
+        acc = TokenList.Cons(make_token(Tok.Ident, "x"), acc);
+        i = i + 1;
+    }
+    print "built";
+    TokenList cur = acc;
+    int checks = 0;
+    while (checks < n) {
+        Token t = peek(cur);
+        if (is_tok(t, "Eof")) { break; }
+        if (is_tok(t, "Ident")) { }
+        if (is_tok(t, "Keyword")) { }
+        if (is_tok(t, "Semi")) { }
+        cur = adv(cur);
+        checks = checks + 1;
+    }
+    print "checks " + string(checks);
+}
+run main;

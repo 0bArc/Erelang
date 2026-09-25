@@ -17,6 +17,7 @@
 #include "erelang/optimizer.hpp"
 #include "erelang/symboltable.hpp"
 #include "erelang/modules.hpp"
+#include "erelang/packages.hpp"
 #include "erelang/runtime.hpp"
 
 #ifdef _WIN32
@@ -259,6 +260,15 @@ OB_API int ob_run_embedded(const char* main_file,
         };
         auto resolve_import = [&](const std::string& basePath, const std::string& importName) -> std::optional<std::string> {
             fs::path base = fs::absolute(basePath);
+            std::string normalized = importName;
+            for (char& c : normalized) if (c == '\\') c = '/';
+            if (normalized.rfind("pkg/", 0) == 0 || normalized.rfind("package/", 0) == 0) {
+                const char* envReg = std::getenv("ERELANG_REGISTRY");
+                fs::path regHint = envReg && *envReg ? fs::path(envReg) : fs::path{};
+                if (auto pkg = erelang::resolve_package_import(normalized, base, regHint)) {
+                    return pkg->string();
+                }
+            }
             fs::path ip = importName;
             std::vector<fs::path> candidates;
             if (!ip.has_extension()) {

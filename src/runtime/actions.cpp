@@ -396,9 +396,14 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
             }
             env_set(env, st.name, value);
             if (value.rfind("struct:", 0) == 0 && !lastReturnFields_.empty()) {
-                for (const auto& kv : lastReturnFields_)
+                const int id = g_nextDictId++;
+                auto& dict = g_dicts[id];
+                for (const auto& kv : lastReturnFields_) {
+                    dict[kv.first] = to_display_string(kv.second);
                     env_set(env, st.name + "." + kv.first, kv.second);
+                }
                 lastReturnFields_.clear();
+                env_set(env, st.name, make_handle_value(HandleKind::Dict, static_cast<uint32_t>(id)));
             }
             if (std::holds_alternative<FunctionCallExpr>(st.value->node)) {
                 const auto& fc = std::get<FunctionCallExpr>(st.value->node);
@@ -690,6 +695,14 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
         const auto& ms = std::get<MatchStmt>(s);
         const std::string sel = to_display_string(eval_value(*ms.selector, env));
 
+        std::string selTag;
+        std::vector<std::string> selPayloads;
+        const bool selIsEnum = decode_enum_variant(sel, selTag, selPayloads);
+        if (!selIsEnum) {
+            selTag = sel;
+            selPayloads.clear();
+        }
+
         auto bind_value = [&](Env& caseEnv, const std::string& name, const std::string& val) {
             caseEnv.vars[name] = value_from_legacy_string(val);
             if (val.rfind("dict:", 0) == 0) {
@@ -701,6 +714,38 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                     }
                 }
             }
+        };
+
+        std::function<bool(const PatternPtr&)> pattern_binds;
+        pattern_binds = [&](const PatternPtr& pat) -> bool {
+            if (!pat) return false;
+            return std::visit([&](const auto& node) -> bool {
+                using N = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<N, PatBinding>) {
+                    return true;
+                } else if constexpr (std::is_same_v<N, PatCtor>) {
+                    for (const auto& arg : node.args) {
+                        if (pattern_binds(arg)) return true;
+                    }
+                    return false;
+                } else if constexpr (std::is_same_v<N, PatOr>) {
+                    for (const auto& alt : node.alts) {
+                        if (pattern_binds(alt)) return true;
+                    }
+                    return false;
+                } else {
+                    return false;
+                }
+            }, pat->node);
+        };
+
+        auto top_level_ctor_rejects = [&](const PatternPtr& pat) -> bool {
+            if (!pat || !std::holds_alternative<PatCtor>(pat->node)) return false;
+            const auto& ctor = std::get<PatCtor>(pat->node);
+            if (selIsEnum) {
+                return selTag != ctor.name || ctor.args.size() != selPayloads.size();
+            }
+            return !(sel == ctor.name && ctor.args.empty());
         };
 
         std::function<bool(const PatternPtr&, const std::string&, Env&)> try_match;
@@ -716,15 +761,22 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 } else if constexpr (std::is_same_v<N, PatCtor>) {
                     std::string tag;
                     std::vector<std::string> payloads;
-                    if (decode_enum_variant(value, tag, payloads)) {
-                        if (tag != node.name) return false;
-                        if (node.args.size() != payloads.size()) return false;
-                        for (size_t i = 0; i < node.args.size(); ++i) {
-                            if (!try_match(node.args[i], payloads[i], caseEnv)) return false;
-                        }
-                        return true;
+                    if (&value == &sel && selIsEnum) {
+                        tag = selTag;
+                        payloads = selPayloads;
+                    } else if (&value == &sel && !selIsEnum) {
+                        return value == node.name && node.args.empty();
+                    } else if (decode_enum_variant(value, tag, payloads)) {
+                        // nested payload
+                    } else {
+                        return value == node.name && node.args.empty();
                     }
-                    return value == node.name && node.args.empty();
+                    if (tag != node.name) return false;
+                    if (node.args.size() != payloads.size()) return false;
+                    for (size_t i = 0; i < node.args.size(); ++i) {
+                        if (!try_match(node.args[i], payloads[i], caseEnv)) return false;
+                    }
+                    return true;
                 } else if constexpr (std::is_same_v<N, PatOr>) {
                     for (const auto& alt : node.alts) {
                         Env altEnv = caseEnv;
@@ -741,6 +793,16 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
         };
 
         for (const auto& c : ms.cases) {
+            if (top_level_ctor_rejects(c.pattern)) continue;
+
+            const bool needsBind = c.guard || pattern_binds(c.pattern);
+            if (!needsBind) {
+                if (c.pattern && !try_match(c.pattern, sel, const_cast<Env&>(env))) continue;
+                if (c.body) exec_block(*c.body, program, ctx, const_cast<Env&>(env));
+                if (ctx.breakSignal) ctx.breakSignal = false;
+                return;
+            }
+
             Env caseEnv = env;
             if (!try_match(c.pattern, sel, caseEnv)) continue;
             if (c.guard) {
@@ -1449,87 +1511,22 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
             }
             // File handle dispatch (handle prefix "file:")
             {
-            if (handle.rfind("file:", 0) == 0 && methodName == "read") {
-                int id = to_int(handle.substr(5));
-                auto fit = g_fileStreams.find(id);
-                if (fit != g_fileStreams.end() && fit->second && fit->second->is_open()) {
-                    if (mc.args.empty()) {
-                        std::ostringstream ss;
-                        ss << fit->second->rdbuf();
-                        env.vars["_"] = ss.str();
-                    } else {
-                        int count = to_int(eval_string(*mc.args[0], env));
-                        std::string buf(static_cast<size_t>(count), '\0');
-                        fit->second->read(&buf[0], count);
-                        buf.resize(static_cast<size_t>(fit->second->gcount()));
-                        env.vars["_"] = buf;
-                    }
-                } else {
-                    env.vars["_"] = std::string();
+            if (handle.rfind("file:", 0) == 0) {
+                std::string builtinName;
+                if (methodName == "read") builtinName = "file_read";
+                else if (methodName == "write") builtinName = "file_write";
+                else if (methodName == "seek") builtinName = "file_seek";
+                else if (methodName == "tell") builtinName = "file_tell";
+                else if (methodName == "flush") builtinName = "file_flush";
+                else if (methodName == "close") builtinName = "file_close";
+                else if (methodName == "buffer") builtinName = "file_buffer";
+                if (!builtinName.empty()) {
+                    std::vector<ExprPtr> callArgs;
+                    callArgs.push_back(std::make_shared<Expr>(Expr{ExprString{handle}}));
+                    for (const auto& a : mc.args) callArgs.push_back(a);
+                    env.vars["_"] = eval_builtin_call(builtinName, callArgs, env, true);
+                    return;
                 }
-                return;
-            }
-            if (handle.rfind("file:", 0) == 0 && methodName == "write") {
-                int id = to_int(handle.substr(5));
-                if (!mc.args.empty()) {
-                    auto fit = g_fileStreams.find(id);
-                    if (fit != g_fileStreams.end() && fit->second && fit->second->is_open()) {
-                        std::string data = eval_string(*mc.args[0], env);
-                        fit->second->write(data.data(), static_cast<std::streamsize>(data.size()));
-                        env.vars["_"] = std::to_string(static_cast<int>(data.size()));
-                    }
-                }
-                return;
-            }
-            if (handle.rfind("file:", 0) == 0 && methodName == "seek") {
-                int id = to_int(handle.substr(5));
-                if (!mc.args.empty()) {
-                    auto fit = g_fileStreams.find(id);
-                    if (fit != g_fileStreams.end() && fit->second && fit->second->is_open()) {
-                        int64_t off = to_int(eval_string(*mc.args[0], env));
-                        std::ios::seekdir dir = std::ios::beg;
-                        if (mc.args.size() >= 2) {
-                            std::string whence = eval_string(*mc.args[1], env);
-                            if (whence == "cur" || whence == "current") dir = std::ios::cur;
-                            else if (whence == "end") dir = std::ios::end;
-                        }
-                        fit->second->seekg(static_cast<std::streamoff>(off), dir);
-                        fit->second->seekp(static_cast<std::streamoff>(off), dir);
-                        env.vars["_"] = "true";
-                    }
-                }
-                return;
-            }
-            if (handle.rfind("file:", 0) == 0 && methodName == "tell") {
-                int id = to_int(handle.substr(5));
-                auto fit = g_fileStreams.find(id);
-                if (fit != g_fileStreams.end() && fit->second && fit->second->is_open()) {
-                    env.vars["_"] = std::to_string(static_cast<int64_t>(fit->second->tellg()));
-                } else {
-                    env.vars["_"] = "0";
-                }
-                return;
-            }
-            if (handle.rfind("file:", 0) == 0 && methodName == "flush") {
-                int id = to_int(handle.substr(5));
-                auto fit = g_fileStreams.find(id);
-                if (fit != g_fileStreams.end() && fit->second && fit->second->is_open()) {
-                    fit->second->flush();
-                    env.vars["_"] = "true";
-                } else {
-                    env.vars["_"] = "false";
-                }
-                return;
-            }
-            if (handle.rfind("file:", 0) == 0 && methodName == "close") {
-                int id = to_int(handle.substr(5));
-                auto fit = g_fileStreams.find(id);
-                if (fit != g_fileStreams.end() && fit->second && fit->second->is_open()) {
-                    fit->second->close();
-                }
-                g_fileStreams.erase(id);
-                env.vars["_"] = "true";
-                return;
             }
             }
             // WebSocket handle dispatch (handle prefix "ws:")
@@ -1625,6 +1622,19 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                     args.push_back(eval_string(*mc.args[i], env));
                 }
                 std::string result = __erelang_tcp_handle_method(id, methodName, args);
+                env.vars["_"] = result;
+                return;
+            }
+            }
+            // UDP handle dispatch (handle prefix "udp:")
+            {
+            if (handle.rfind("udp:", 0) == 0) {
+                int id = to_int(handle.substr(4));
+                std::vector<std::string> args;
+                for (size_t i = 0; i < mc.args.size(); ++i) {
+                    args.push_back(eval_string(*mc.args[i], env));
+                }
+                std::string result = __erelang_udp_handle_method(id, methodName, args);
                 env.vars["_"] = result;
                 return;
             }

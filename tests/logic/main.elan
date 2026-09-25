@@ -1,0 +1,21 @@
+@strict
+
+public action main() {
+    if (false && true) { fail("and false true"); }
+    if (false && false) { fail("and false false"); }
+    if (!((true && true))) { fail("and true true"); }
+    if (true && false) { fail("and true false"); }
+
+    if (!((false || false) == false)) { fail("or false false"); }
+    if (!((false || true) == true)) { fail("or false true"); }
+    if (!((true || false) == true)) { fail("or true false"); }
+    if (!((true || true) == true)) { fail("or true true"); }
+
+    if (!(!false)) { fail("not false"); }
+    if (!((!true) == false)) { fail("not true"); }
+
+    print "logic false&&true={false && true} true||false={true || false} !false={!false}";
+    print "logic-ok";
+}
+
+run main;

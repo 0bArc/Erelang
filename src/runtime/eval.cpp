@@ -440,11 +440,27 @@ Value Runtime::eval_value(const Expr& e, const Env& env) const {
                     if (kv.first.rfind(prefix, 0) == 0)
                         dict[kv.first.substr(prefix.size())] = to_display_string(kv.second);
                 }
-                return make_handle_value(HandleKind::Dict, static_cast<uint32_t>(id));
+                Value baked = make_handle_value(HandleKind::Dict, static_cast<uint32_t>(id));
+                const_cast<Env&>(env).vars[name] = baked;
+                if (env.useSlots) {
+                    auto slot = env.slotIndex.find(name);
+                    if (slot != env.slotIndex.end() && slot->second >= 0) {
+                        const size_t index = static_cast<size_t>(slot->second);
+                        if (index >= env.slots.size()) const_cast<Env&>(env).slots.resize(index + 1);
+                        const_cast<Env&>(env).slots[index] = baked;
+                    }
+                }
+                return baked;
             }
             return value;
         }
         if (env.objects.find(name) != env.objects.end()) return Value::from_string(name);
+
+        if (currentProgram_) {
+            if (const Action* act = find_action(*currentProgram_, name)) {
+                return Value::from_string(std::string("actionref:") + std::string(act->name));
+            }
+        }
 
         std::string lowered = name;
         for (char& ch : lowered)
@@ -735,6 +751,16 @@ Value Runtime::eval_value(const Expr& e, const Env& env) const {
             mem_free_ptr(eval_value(*call.args[0], env));
             return Value::null_value();
         }
+        if (call.name == "mem_stats" || call.name == "mem.stats") {
+            return mem_stats_value();
+        }
+        if (call.name == "mem_alive" || call.name == "mem.alive") {
+            return Value::from_int(static_cast<int64_t>(mem_live_count()));
+        }
+        if (call.name == "mem_reset_stats" || call.name == "mem.reset_stats") {
+            mem_reset_debug_stats();
+            return Value::null_value();
+        }
         if (call.name == "realloc") {
             if (call.args.size() < 2) throw std::runtime_error("realloc(ptr, count)");
             return mem_realloc(eval_value(*call.args[0], env),
@@ -762,6 +788,45 @@ Value Runtime::eval_value(const Expr& e, const Env& env) const {
             mem_zero(eval_value(*call.args[0], env),
                      static_cast<std::size_t>(std::max<int64_t>(0, value_as_int(eval_value(*call.args[1], env)))));
             return Value::null_value();
+        }
+        if (currentProgram_) {
+            // Enum variant construction before method dispatch so nested
+            // Expr.Call(Expr.ArgCons(nest(...), ...), ...) does not re-eval args.
+            {
+                const auto dot = call.name.rfind('.');
+                if (dot != std::string::npos && dot > 0) {
+                    const std::string typePart = call.name.substr(0, dot);
+                    const std::string variantName = call.name.substr(dot + 1);
+                    TypeRef applied;
+                    try { applied = parse_type_ref_string(typePart); } catch (...) { applied = make_type_ref(typePart); }
+                    for (const auto& en : currentProgram_->enums) {
+                        if (en.name != applied.name && typePart != en.name) continue;
+                        for (const auto& variant : en.variants) {
+                            if (variant.name != variantName) continue;
+                            if (variant.payloads.empty() && call.args.empty()) {
+                                return Value::from_string(variantName);
+                            }
+                            std::vector<std::string> payloads;
+                            payloads.reserve(call.args.size());
+                            for (const auto& arg : call.args) {
+                                Value av = eval_value(*arg, env);
+                                std::string text = to_display_string(av);
+                                if (text.rfind("struct:", 0) == 0 && !lastReturnFields_.empty()) {
+                                    const int id = g_nextDictId++;
+                                    auto& dict = g_dicts[id];
+                                    for (const auto& kv : lastReturnFields_) {
+                                        dict[kv.first] = to_display_string(kv.second);
+                                    }
+                                    lastReturnFields_.clear();
+                                    text = to_display_string(make_handle_value(HandleKind::Dict, static_cast<uint32_t>(id)));
+                                }
+                                payloads.push_back(std::move(text));
+                            }
+                            return Value::from_string(encode_enum_variant(variantName, payloads));
+                        }
+                    }
+                }
+            }
         }
         // Chained / dotted enum methods: .method / obj.method
         {
@@ -826,31 +891,6 @@ Value Runtime::eval_value(const Expr& e, const Env& env) const {
             }
         }
         if (currentProgram_) {
-            // Enum variant construction: Option<int>.Some(42)
-            {
-                const auto dot = call.name.rfind('.');
-                if (dot != std::string::npos && dot > 0) {
-                    const std::string typePart = call.name.substr(0, dot);
-                    const std::string variantName = call.name.substr(dot + 1);
-                    TypeRef applied;
-                    try { applied = parse_type_ref_string(typePart); } catch (...) { applied = make_type_ref(typePart); }
-                    for (const auto& en : currentProgram_->enums) {
-                        if (en.name != applied.name && typePart != en.name) continue;
-                        for (const auto& variant : en.variants) {
-                            if (variant.name != variantName) continue;
-                            if (variant.payloads.empty() && call.args.empty()) {
-                                return Value::from_string(variantName);
-                            }
-                            std::vector<std::string> payloads;
-                            payloads.reserve(call.args.size());
-                            for (const auto& arg : call.args) {
-                                payloads.push_back(to_display_string(eval_value(*arg, env)));
-                            }
-                            return Value::from_string(encode_enum_variant(variantName, payloads));
-                        }
-                    }
-                }
-            }
             const auto dot = call.name.rfind('.');
             if (dot != std::string::npos && dot > 0 && dot + 1 < call.name.size()) {
                 const std::string objectName = call.name.substr(0, dot);
@@ -954,6 +994,12 @@ Value Runtime::eval_value(const Expr& e, const Env& env) const {
                         }
                     } else {
                         callEnv.vars[parameter] = eval_value(*call.args[i], env);
+                        const std::string argText = to_display_string(callEnv.vars[parameter]);
+                        if (argText.rfind("struct:", 0) == 0) {
+                            for (const auto& kv : lastReturnFields_) {
+                                callEnv.vars[parameter + "." + kv.first] = kv.second;
+                            }
+                        }
                     }
                 }
                 prepare_action_slots(callEnv, *action);
@@ -970,6 +1016,24 @@ Value Runtime::eval_value(const Expr& e, const Env& env) const {
 
         Value function = env_get(env, call.name);
         const std::string handle = to_display_string(function);
+        if (handle.rfind("actionref:", 0) == 0 && currentProgram_) {
+            const std::string actName = handle.substr(10);
+            if (const Action* action = find_action(*currentProgram_, actName)) {
+                Env callEnv;
+                for (const auto& kv : globalVars_) callEnv.vars[kv.first] = kv.second;
+                for (size_t i = 0; i < action->params.size() && i < call.args.size(); ++i)
+                    callEnv.vars[action->params[i].name] = eval_value(*call.args[i], env);
+                prepare_action_slots(callEnv, *action);
+                const bool prevAsync = tls_in_async_action;
+                tls_in_async_action = false;
+                ExecContext child;
+                exec_block(action->body, *currentProgram_, child, callEnv);
+                for (auto& thread : child.threads) if (thread.joinable()) thread.join();
+                tls_in_async_action = prevAsync;
+                lastReturnFields_ = std::move(child.returnFields);
+                return child.returned ? child.returnValue : Value::null_value();
+            }
+        }
         if (handle.rfind("func:", 0) == 0) {
             int id = 0;
             try {
@@ -1274,6 +1338,10 @@ std::optional<Value> Runtime::dispatch_value_method(const Value& recv, std::stri
         if (methodName == "flush") {
             if (!args.empty()) throw std::runtime_error("file.flush expects 0 arguments");
             return value_from_legacy_string(eval_builtin_call("file_flush", callArgs, empty, true));
+        }
+        if (methodName == "buffer") {
+            if (args.size() > 1) throw std::runtime_error("file.buffer expects 0 or 1 argument");
+            return value_from_legacy_string(eval_builtin_call("file_buffer", callArgs, empty, true));
         }
         if (methodName == "close") {
             if (!args.empty()) throw std::runtime_error("file.close expects 0 arguments");

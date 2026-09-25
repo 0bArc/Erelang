@@ -1,0 +1,20 @@
+@strict
+public action main() {
+    string s = "";
+    int i = 0;
+    while (i < 2000) {
+        s = s + "abcdefghij";
+        i = i + 1;
+    }
+    print "len " + string(string.len(s));
+    int n = string.len(s);
+    i = 0;
+    int sum = 0;
+    while (i < n) {
+        string c = string.substr(s, i, 1);
+        if (c == "a") { sum = sum + 1; }
+        i = i + 1;
+    }
+    print "sum " + string(sum);
+}
+run main;

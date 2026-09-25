@@ -1,0 +1,157 @@
+=== fixtures/happy.mini ===
+--- IR locals=2 labels=4 ---
+0: CONST 1
+1: CONST 2
+2: CONST 3
+3: MUL
+4: ADD
+5: STORE 0
+6: CONST 0
+7: STORE 1
+8: LABEL 0
+9: LOAD 1
+10: CONST 3
+11: CMPLT
+12: JUMP_IF_FALSE 1
+13: LOAD 1
+14: CONST 1
+15: ADD
+16: STORE 1
+17: LOAD 1
+18: POP
+19: JUMP 0
+20: LABEL 1
+21: LOAD 0
+22: CONST 10
+23: CMPLT
+24: JUMP_IF_FALSE 2
+25: LOAD 0
+26: LOAD 1
+27: ADD
+28: STORE 0
+29: LOAD 0
+30: POP
+31: JUMP 3
+32: LABEL 2
+33: CONST 0
+34: STORE 0
+35: LOAD 0
+36: POP
+37: LABEL 3
+38: LOAD 0
+39: PRINT
+40: RETURN
+--- end IR ---
+10
+result: 10 (ok)
+=== fixtures/lex_error.mini ===
+error: unexpected character '$'
+  --> fixtures/lex_error.mini:1:11
+=== fixtures/parse_error.mini ===
+error: expected expression
+  --> fixtures/parse_error.mini:1:14
+=== fixtures/type_error.mini ===
+error: type mismatch: arithmetic needs int
+  --> fixtures/type_error.mini:2:9
+=== fixtures/ir_prec.mini ===
+--- IR locals=0 labels=0 ---
+0: CONST 1
+1: CONST 2
+2: CONST 3
+3: MUL
+4: ADD
+5: PRINT
+6: CONST 1
+7: CONST 2
+8: ADD
+9: CONST 3
+10: MUL
+11: PRINT
+12: RETURN
+--- end IR ---
+7
+9
+result: 9 (ok)
+=== fixtures/ir_while.mini ===
+--- IR locals=2 labels=2 ---
+0: CONST 0
+1: STORE 0
+2: CONST 1
+3: STORE 1
+4: LABEL 0
+5: LOAD 1
+6: CONST 5
+7: CMPLT
+8: JUMP_IF_FALSE 1
+9: LOAD 0
+10: LOAD 1
+11: ADD
+12: STORE 0
+13: LOAD 0
+14: POP
+15: LOAD 1
+16: CONST 1
+17: ADD
+18: STORE 1
+19: LOAD 1
+20: POP
+21: JUMP 0
+22: LABEL 1
+23: LOAD 0
+24: PRINT
+25: RETURN
+--- end IR ---
+10
+result: 10 (ok)
+=== fixtures/ir_else.mini ===
+--- IR locals=1 labels=2 ---
+0: CONST 5
+1: STORE 0
+2: LOAD 0
+3: CONST 3
+4: CMPLT
+5: JUMP_IF_FALSE 0
+6: CONST 1
+7: PRINT
+8: JUMP 1
+9: LABEL 0
+10: CONST 2
+11: PRINT
+12: LABEL 1
+13: RETURN
+--- end IR ---
+2
+result: 2 (ok)
+=== fixtures/ir_arith.mini ===
+--- IR locals=2 labels=0 ---
+0: CONST 20
+1: CONST 8
+2: CONST 2
+3: DIV
+4: SUB
+5: STORE 0
+6: LOAD 0
+7: CONST 3
+8: SUB
+9: STORE 1
+10: LOAD 1
+11: PRINT
+12: RETURN
+--- end IR ---
+13
+result: 13 (ok)
+=== fixtures/ir_call.mini ===
+--- IR locals=0 labels=0 ---
+0: CONST 6
+1: CONST 7
+2: CALL add/2
+3: PRINT
+4: CONST_STR "hi"
+5: PRINT_STR
+6: RETURN
+--- end IR ---
+13
+hi
+result: 13 (ok)
+=== fixtures/selfhost_slice.elan ===
+selfhost_slice: parse ok (action/enum/struct/string/call/member/match/return/typed locals)

@@ -21,8 +21,20 @@ $skip = 0
 $failures = New-Object System.Collections.Generic.List[string]
 
 $files = Get-ChildItem -Path (Join-Path $root "tests") -Recurse -Filter *.elan |
-    Where-Object { $_.Name -ne "cycle_b.elan" } |
+    Where-Object {
+        $_.Name -ne "cycle_b.elan" -and
+        $_.Name -ne "package.elan" -and
+        $_.FullName -notmatch '[\\/]packages[\\/]registry[\\/]' -and
+        $_.FullName -notmatch '[\\/]\.erelang[\\/]'
+    } |
     Sort-Object FullName
+
+$registry = Join-Path $root "tests\packages\registry"
+$appDir = Join-Path $root "tests\packages\app"
+if (Test-Path (Join-Path $appDir "package.elan")) {
+    & $Exe --lock (Join-Path $appDir "package.elan") --registry $registry 2>&1 | Out-Null
+    & $Exe --fetch (Join-Path $appDir "package.elan") --registry $registry 2>&1 | Out-Null
+}
 
 foreach ($f in $files) {
     $rel = $f.FullName.Substring($root.Length).TrimStart('\', '/')

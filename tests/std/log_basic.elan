@@ -1,0 +1,22 @@
+@strict
+
+#include <std/log> as log
+#include <std/fs> as fs
+
+public action main() {
+    string path = "tests_tmp_log.txt";
+    if (fs.exists(path)) {
+        fs.remove(path);
+    }
+    log.set_level("info");
+    log.to_file(path);
+    log.debug("hidden");
+    log.info("hello-log");
+    log.warn("careful");
+    string body = fs.read(path);
+    fs.remove(path);
+    print body;
+    print "std-log-ok";
+}
+
+run main;

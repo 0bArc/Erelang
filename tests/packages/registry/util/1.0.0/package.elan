@@ -1,0 +1,7 @@
+@erelang
+
+namespace pkg {
+    global string name = "util";
+    global string version = "1.0.0";
+    global string entry = "lib.elan";
+}

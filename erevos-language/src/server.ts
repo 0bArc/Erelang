@@ -12,6 +12,12 @@ import {
   Hover,
   MarkupKind,
   CompletionParams,
+  RenameParams,
+  WorkspaceEdit,
+  Location,
+  ReferenceParams,
+  TextEdit,
+  Range,
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { spawn } from 'child_process';
@@ -20,6 +26,14 @@ import * as os from 'os';
 import * as path from 'path';
 import { resolveErelangExe } from './erelangPath';
 import { LANGUAGE_KEYWORDS, BUILT_INS, ACTION_RE, TYPED_FUNC_RE, LET_RE, STRUCT_RE, ENUM_RE, ENTITY_RE } from './constants';
+import {
+  splitLines,
+  resolveSymbol,
+  formatHoverMarkdown,
+  findReferencesInText,
+  renameEdits,
+  collectDeclarations,
+} from './analysis';
 
 const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
@@ -49,6 +63,8 @@ connection.onInitialize((params: InitializeParams) => {
       textDocumentSync: TextDocumentSyncKind.Incremental,
       completionProvider: { triggerCharacters: ['.', '#', '<', '"', '/'] },
       hoverProvider: true,
+      renameProvider: true,
+      referencesProvider: true,
     },
   };
 });
@@ -58,16 +74,6 @@ connection.onInitialized(() => {
     if (cfg?.executablePath) configuredExe = cfg.executablePath;
   }).catch(() => undefined);
 });
-
-function uriToFsPath(uri: string): string {
-  let p = uri.replace(/^file:\/\//, '');
-  if (process.platform === 'win32') {
-    p = decodeURIComponent(p.replace(/^\/([A-Za-z]:)/, '$1'));
-  } else {
-    p = decodeURIComponent(p);
-  }
-  return p;
-}
 
 function parseCheckOutput(stderr: string): Diagnostic[] {
   const out: Diagnostic[] = [];
@@ -169,17 +175,6 @@ function collectNames(text: string): { actions: string[]; locals: string[]; type
   return { actions, locals, types };
 }
 
-function actionSignature(text: string, name: string): string | undefined {
-  const re = new RegExp(
-    String.raw`^\s*(?:public|private|export)?\s*(?:async\s+)?(?:action\s+)?(?:\w+\s+)?${name}\s*\(([^)]*)\)\s*(?::\s*([^{\n]+))?`,
-    'm',
-  );
-  const m = re.exec(text);
-  if (!m) return undefined;
-  const ret = (m[2] || 'void').trim();
-  return `${name}(${m[1].trim()}): ${ret}`;
-}
-
 connection.onCompletion((params: CompletionParams): CompletionItem[] => {
   const doc = documents.get(params.textDocument.uri);
   if (!doc) return [];
@@ -212,30 +207,79 @@ connection.onCompletion((params: CompletionParams): CompletionItem[] => {
 connection.onHover((params: TextDocumentPositionParams): Hover | null => {
   const doc = documents.get(params.textDocument.uri);
   if (!doc) return null;
-  const pos = params.position;
-  const lineText = doc.getText({
-    start: { line: pos.line, character: 0 },
-    end: { line: pos.line + 1, character: 0 },
-  });
-  const line = lineText.replace(/\r?\n$/, '');
-  let start = pos.character;
-  let end = pos.character;
-  while (start > 0 && /[A-Za-z0-9_]/.test(line[start - 1])) start--;
-  while (end < line.length && /[A-Za-z0-9_]/.test(line[end])) end++;
-  if (start === end) return null;
-  const word = line.slice(start, end);
+  const info = resolveSymbol(splitLines(doc.getText()), params.position);
+  if (!info) return null;
+  return {
+    contents: { kind: MarkupKind.Markdown, value: formatHoverMarkdown(info) },
+    range: info.range,
+  };
+});
+
+connection.onReferences((params: ReferenceParams): Location[] => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return [];
   const text = doc.getText();
-  const sig = actionSignature(text, word);
-  if (sig) {
-    return { contents: { kind: MarkupKind.Markdown, value: '```erelang\n' + sig + '\n```' } };
+  const sym = resolveSymbol(splitLines(text), params.position);
+  if (!sym) return [];
+
+  const locations: Location[] = [];
+  const addFrom = (uri: string, src: string) => {
+    for (const r of findReferencesInText(src, sym.name)) {
+      locations.push({
+        uri,
+        range: {
+          start: { line: r.line, character: r.start },
+          end: { line: r.line, character: r.start + r.length },
+        },
+      });
+    }
+  };
+
+  addFrom(doc.uri, text);
+
+  if (sym.kind === 'action' || sym.kind === 'struct' || sym.kind === 'enum'
+    || sym.kind === 'entity' || sym.kind === 'typeAlias' || sym.kind === 'namespace') {
+    for (const other of documents.all()) {
+      if (other.uri === doc.uri) continue;
+      const decls = collectDeclarations(splitLines(other.getText()));
+      if (!decls.some(d => d.name === sym.name && d.kind === sym.kind)) continue;
+      addFrom(other.uri, other.getText());
+    }
   }
-  if ((BUILT_INS as readonly string[]).includes(word)) {
-    return { contents: { kind: MarkupKind.Markdown, value: `**builtin** \`${word}\`` } };
+
+  return locations;
+});
+
+connection.onRenameRequest((params: RenameParams): WorkspaceEdit | null => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return null;
+  const text = doc.getText();
+  const result = renameEdits(text, params.position, params.newName);
+  if (!result) return null;
+
+  const changes: { [uri: string]: TextEdit[] } = {};
+  const toEdits = (src: string): TextEdit[] => {
+    return findReferencesInText(src, result.name).map(r => ({
+      range: {
+        start: { line: r.line, character: r.start },
+        end: { line: r.line, character: r.start + r.length },
+      } as Range,
+      newText: params.newName,
+    }));
+  };
+
+  changes[doc.uri] = toEdits(text);
+
+  if (result.kind === 'action') {
+    for (const other of documents.all()) {
+      if (other.uri === doc.uri) continue;
+      const decls = collectDeclarations(splitLines(other.getText()));
+      if (!decls.some(d => d.name === result.name && d.kind === 'action')) continue;
+      changes[other.uri] = toEdits(other.getText());
+    }
   }
-  if (LANGUAGE_KEYWORDS.includes(word)) {
-    return { contents: { kind: MarkupKind.Markdown, value: `**keyword** \`${word}\`` } };
-  }
-  return null;
+
+  return { changes };
 });
 
 documents.listen(connection);

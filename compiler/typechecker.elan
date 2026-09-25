@@ -1,0 +1,609 @@
+@strict
+
+enum BinOpKind {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Eq,
+    Ne,
+    Lt,
+    And,
+    Or
+}
+
+enum UnOpKind {
+    Neg,
+    Not
+}
+
+enum Expr {
+    IntLit(int, int, int),
+    BoolLit(bool, int, int),
+    StringLit(string, int, int),
+    Name(string, int, int),
+    Unary(UnOpKind, Expr, int, int),
+    BinOp(BinOpKind, Expr, Expr, int, int),
+    Assign(string, Expr, int, int),
+    Call(string, Expr, int, int),
+    Member(Expr, string, int, int),
+    ArgNil,
+    ArgCons(Expr, Expr)
+}
+
+enum Stmt {
+    Empty,
+    Let(string, Expr, int, int),
+    VarDecl(string, string, Expr, bool, int, int),
+    AssignStmt(string, Expr, int, int),
+    FieldAssign(Expr, string, Expr, int, int),
+    ExprStmt(Expr, int, int),
+    Print(Expr, int, int),
+    Return(Expr, bool, int, int),
+    If(Expr, Stmt, Stmt, int, int),
+    While(Expr, Stmt, int, int),
+    Match(Expr, Stmt, int, int),
+    Arm(string, string, Stmt, Stmt),
+    ArmEnd,
+    Block(Stmt),
+    Seq(Stmt, Stmt),
+    SeqList(StmtList)
+}
+
+enum StmtList {
+    StmtNil,
+    StmtCons(Stmt, StmtList)
+}
+
+enum Severity {
+    Error,
+    Warning
+}
+
+struct Diagnostic {
+    string message;
+    int line;
+    int column;
+    Severity severity;
+}
+
+enum DiagList {
+    Nil,
+    Cons(string, int, int, DiagList)
+}
+
+enum Ty {
+    TyInt,
+    TyBool,
+    TyString,
+    TyError
+}
+
+enum ScopeTy {
+    EmptyScopeTy,
+    BindTy(string, Ty, ScopeTy)
+}
+
+struct TypeResult {
+    DiagList diags;
+    bool ok;
+    Ty ty;
+}
+
+public action ty_is_int(Ty t): bool {
+    match (t) {
+        case TyInt: { return true; }
+        case TyBool: { return false; }
+        case TyString: { return false; }
+        case TyError: { return false; }
+    }
+    return false;
+}
+
+public action ty_is_bool(Ty t): bool {
+    match (t) {
+        case TyBool: { return true; }
+        case TyInt: { return false; }
+        case TyString: { return false; }
+        case TyError: { return false; }
+    }
+    return false;
+}
+
+public action ty_is_string(Ty t): bool {
+    match (t) {
+        case TyString: { return true; }
+        case TyInt: { return false; }
+        case TyBool: { return false; }
+        case TyError: { return false; }
+    }
+    return false;
+}
+
+public action scope_ty_lookup(ScopeTy s, string name): Ty {
+    match (s) {
+        case EmptyScopeTy: { return Ty.TyError; }
+        case BindTy(n, t, parent): {
+            if (n == name) { return t; }
+            return scope_ty_lookup(parent, name);
+        }
+    }
+    return Ty.TyError;
+}
+
+public action scope_ty_define(ScopeTy s, string name, Ty t): ScopeTy {
+    return ScopeTy.BindTy(name, t, s);
+}
+
+public action type_args(Expr args, ScopeTy s, DiagList diags): TypeResult {
+    TypeResult out;
+    out.diags = diags;
+    out.ok = true;
+    out.ty = Ty.TyInt;
+    match (args) {
+        case ArgNil: { return out; }
+        case ArgCons(h, rest): {
+            TypeResult hr = type_expr(h, s, diags);
+            return type_args(rest, s, hr.diags);
+        }
+        case IntLit(v, l, c): { return out; }
+        case BoolLit(v, l, c): { return out; }
+        case StringLit(v, l, c): { return out; }
+        case Name(n, l, c): { return out; }
+        case Unary(op, x, l, c): { return out; }
+        case BinOp(op, a, b, l, c): { return out; }
+        case Assign(n, v, l, c): { return out; }
+        case Call(n, a, l, c): { return out; }
+        case Member(o, f, l, c): { return out; }
+    }
+    return out;
+}
+
+public action type_expr(Expr e, ScopeTy s, DiagList diags): TypeResult {
+    TypeResult out;
+    out.diags = diags;
+    out.ok = true;
+    out.ty = Ty.TyError;
+
+    match (e) {
+        case IntLit(v, l, c): {
+            out.ty = Ty.TyInt;
+            return out;
+        }
+        case BoolLit(v, l, c): {
+            out.ty = Ty.TyBool;
+            return out;
+        }
+        case StringLit(v, l, c): {
+            out.ty = Ty.TyString;
+            return out;
+        }
+        case Name(n, l, c): {
+            Ty t = scope_ty_lookup(s, n);
+            out.ty = t;
+            if (ty_is_int(t) || ty_is_bool(t) || ty_is_string(t)) {
+                return out;
+            }
+            if (n == "break" || n == "continue") {
+                out.ty = Ty.TyInt;
+                return out;
+            }
+            if (string.len(n) > 0) {
+                string first = string.substr(n, 0, 1);
+                if (first >= "A" && first <= "Z") {
+                    out.ty = Ty.TyInt;
+                    return out;
+                }
+            }
+            string msg = "unknown name '" + n + "'";
+            Diagnostic d = diag_error(msg, l, c);
+            out.diags = diag_prepend(diags, d);
+            out.ok = false;
+            out.ty = Ty.TyError;
+            return out;
+        }
+        case Unary(op, inner, l, c): {
+            return type_expr(inner, s, diags);
+        }
+        case BinOp(op, left, right, l, c): {
+            TypeResult left_r = type_expr(left, s, diags);
+            TypeResult right_r = type_expr(right, s, left_r.diags);
+            out.diags = right_r.diags;
+            match (op) {
+                case Add: {
+                    if (ty_is_string(left_r.ty) || ty_is_string(right_r.ty)) {
+                        out.ty = Ty.TyString;
+                        return out;
+                    }
+                    if (ty_is_bool(left_r.ty) || ty_is_bool(right_r.ty)) {
+                        Diagnostic d = diag_error("type mismatch: arithmetic needs int", l, c);
+                        out.diags = diag_prepend(out.diags, d);
+                        out.ok = false;
+                        out.ty = Ty.TyError;
+                        return out;
+                    }
+                    out.ty = Ty.TyInt;
+                    return out;
+                }
+                case Sub: {
+                    if (!(ty_is_int(left_r.ty) && ty_is_int(right_r.ty))) {
+                        Diagnostic d = diag_error("type mismatch: arithmetic needs int", l, c);
+                        out.diags = diag_prepend(out.diags, d);
+                        out.ok = false;
+                        out.ty = Ty.TyError;
+                        return out;
+                    }
+                    out.ty = Ty.TyInt;
+                    return out;
+                }
+                case Mul: {
+                    if (!(ty_is_int(left_r.ty) && ty_is_int(right_r.ty))) {
+                        Diagnostic d = diag_error("type mismatch: arithmetic needs int", l, c);
+                        out.diags = diag_prepend(out.diags, d);
+                        out.ok = false;
+                        out.ty = Ty.TyError;
+                        return out;
+                    }
+                    out.ty = Ty.TyInt;
+                    return out;
+                }
+                case Div: {
+                    if (!(ty_is_int(left_r.ty) && ty_is_int(right_r.ty))) {
+                        Diagnostic d = diag_error("type mismatch: arithmetic needs int", l, c);
+                        out.diags = diag_prepend(out.diags, d);
+                        out.ok = false;
+                        out.ty = Ty.TyError;
+                        return out;
+                    }
+                    out.ty = Ty.TyInt;
+                    return out;
+                }
+                case Eq: {
+                    out.ty = Ty.TyBool;
+                    return out;
+                }
+                case Ne: {
+                    out.ty = Ty.TyBool;
+                    return out;
+                }
+                case Lt: {
+                    out.ty = Ty.TyBool;
+                    return out;
+                }
+                case And: {
+                    if (!((ty_is_bool(left_r.ty) || ty_is_int(left_r.ty)) && (ty_is_bool(right_r.ty) || ty_is_int(right_r.ty)))) {
+                        Diagnostic d = diag_error("type mismatch: && needs bool", l, c);
+                        out.diags = diag_prepend(out.diags, d);
+                        out.ok = false;
+                        out.ty = Ty.TyError;
+                        return out;
+                    }
+                    out.ty = Ty.TyBool;
+                    return out;
+                }
+                case Or: {
+                    if (!((ty_is_bool(left_r.ty) || ty_is_int(left_r.ty)) && (ty_is_bool(right_r.ty) || ty_is_int(right_r.ty)))) {
+                        Diagnostic d = diag_error("type mismatch: || needs bool", l, c);
+                        out.diags = diag_prepend(out.diags, d);
+                        out.ok = false;
+                        out.ty = Ty.TyError;
+                        return out;
+                    }
+                    out.ty = Ty.TyBool;
+                    return out;
+                }
+            }
+            out.ok = false;
+            out.ty = Ty.TyError;
+            return out;
+        }
+        case Assign(n, val, l, c): {
+            return type_expr(val, s, diags);
+        }
+        case Call(n, args, l, c): {
+            TypeResult ar = type_args(args, s, diags);
+            out.diags = ar.diags;
+            out.ok = ar.ok;
+            if (n == "string.substr") {
+                out.ty = Ty.TyString;
+            } else if (n == "string.starts_with" || n == "fs.exists" || n == "diag_has_error" || n == "ty_is_int" || n == "ty_is_bool" || n == "ty_is_string") {
+                out.ty = Ty.TyBool;
+            } else if (string.len(n) > 3 && string.substr(n, 0, 3) == "is_") {
+                out.ty = Ty.TyBool;
+            } else if (string.len(n) > 4 && string.substr(n, 0, 4) == "has_") {
+                out.ty = Ty.TyBool;
+            } else if (string.len(n) > 8 && string.substr(n, 0, 8) == "char_is_") {
+                out.ty = Ty.TyBool;
+            } else if (string.len(n) > 6 && string.substr(n, 0, 6) == "ty_is_") {
+                out.ty = Ty.TyBool;
+            } else if (string.find(n, "_is_") >= 0) {
+                out.ty = Ty.TyBool;
+            } else {
+                out.ty = Ty.TyInt;
+            }
+            return out;
+        }
+        case Member(obj, field, l, c): {
+            TypeResult or = type_expr(obj, s, diags);
+            out.diags = or.diags;
+            out.ok = or.ok;
+            if (field == "ok" || field == "has") {
+                out.ty = Ty.TyBool;
+            } else if (field == "text" || field == "message" || field == "error_message" || field == "path" || field == "name" || field == "bind" || field == "ty" || field == "ret" || field == "payload") {
+                out.ty = Ty.TyString;
+            } else {
+                out.ty = Ty.TyInt;
+            }
+            return out;
+        }
+        case ArgNil: {
+            out.ty = Ty.TyInt;
+            return out;
+        }
+        case ArgCons(h, rest): {
+            return type_args(e, s, diags);
+        }
+    }
+    return out;
+}
+
+public action type_stmt(Stmt st, ScopeTy s, DiagList diags): TypeResult {
+    TypeResult out;
+    out.diags = diags;
+    out.ok = true;
+    out.ty = Ty.TyError;
+
+    match (st) {
+        case Empty: {
+            return out;
+        }
+        case Let(name, e, l, c): {
+            TypeResult er = type_expr(e, s, diags);
+            out.diags = er.diags;
+            out.ok = er.ok;
+            return out;
+        }
+        case VarDecl(ty, name, e, has, l, c): {
+            if (has) {
+                TypeResult er = type_expr(e, s, diags);
+                out.diags = er.diags;
+                out.ok = er.ok;
+            }
+            return out;
+        }
+        case AssignStmt(name, e, l, c): {
+            Ty vt = scope_ty_lookup(s, name);
+            TypeResult er = type_expr(e, s, diags);
+            out.diags = er.diags;
+            if (!(ty_is_int(vt) || ty_is_bool(vt) || ty_is_string(vt))) {
+                out.diags = diag_prepend(out.diags, diag_error("unknown name '" + name + "'", l, c));
+                out.ok = false;
+                return out;
+            }
+            if (ty_is_int(vt) && ty_is_bool(er.ty)) {
+                out.diags = diag_prepend(out.diags, diag_error("type mismatch: cannot assign bool to int", l, c));
+                out.ok = false;
+                return out;
+            }
+            if (ty_is_bool(vt) && ty_is_int(er.ty)) {
+                out.diags = diag_prepend(out.diags, diag_error("type mismatch: cannot assign int to bool", l, c));
+                out.ok = false;
+                return out;
+            }
+            out.ok = er.ok;
+            return out;
+        }
+        case FieldAssign(obj, field, e, l, c): {
+            TypeResult o = type_expr(obj, s, diags);
+            TypeResult er = type_expr(e, s, o.diags);
+            out.diags = er.diags;
+            out.ok = o.ok && er.ok;
+            return out;
+        }
+        case ExprStmt(e, l, c): {
+            TypeResult er = type_expr(e, s, diags);
+            out.diags = er.diags;
+            out.ok = er.ok;
+            return out;
+        }
+        case Print(e, l, c): {
+            TypeResult er = type_expr(e, s, diags);
+            out.diags = er.diags;
+            out.ok = er.ok;
+            if (!(ty_is_int(er.ty) || ty_is_string(er.ty))) {
+                out.ok = false;
+                match (er.diags) {
+                    case Nil: {
+                        Diagnostic d = diag_error("type mismatch: print expects int", l, c);
+                        out.diags = diag_prepend(DiagList.Nil, d);
+                    }
+                    case Cons(msg0, line0, col0, rest0): { }
+                }
+            }
+            return out;
+        }
+        case Return(e, has, l, c): {
+            if (has) {
+                TypeResult er = type_expr(e, s, diags);
+                out.diags = er.diags;
+                out.ok = er.ok;
+            }
+            return out;
+        }
+        case If(cond, then_s, else_s, l, c): {
+            TypeResult cr = type_expr(cond, s, diags);
+            out.diags = cr.diags;
+            if (!(ty_is_bool(cr.ty) || ty_is_int(cr.ty))) {
+                out.diags = diag_prepend(out.diags, diag_error("type mismatch: if condition must be bool", l, c));
+                out.ok = false;
+            }
+            TypeResult tr = type_stmt(then_s, s, out.diags);
+            TypeResult er = type_stmt(else_s, s, tr.diags);
+            out.diags = er.diags;
+            if (!out.ok || !tr.ok || !er.ok || !cr.ok) {
+                out.ok = false;
+            } else {
+                out.ok = true;
+            }
+            return out;
+        }
+        case While(cond, body, l, c): {
+            TypeResult cr = type_expr(cond, s, diags);
+            out.diags = cr.diags;
+            if (!(ty_is_bool(cr.ty) || ty_is_int(cr.ty))) {
+                out.diags = diag_prepend(out.diags, diag_error("type mismatch: while condition must be bool", l, c));
+                out.ok = false;
+            }
+            TypeResult br = type_stmt(body, s, out.diags);
+            out.diags = br.diags;
+            if (!out.ok || !br.ok || !cr.ok) {
+                out.ok = false;
+            } else {
+                out.ok = true;
+            }
+            return out;
+        }
+        case Match(scrut, arms, l, c): {
+            TypeResult cr = type_expr(scrut, s, diags);
+            TypeResult ar = type_stmt(arms, s, cr.diags);
+            if (!cr.ok) {
+                ar.ok = false;
+            }
+            return ar;
+        }
+        case Arm(n, bind, body, next): {
+            ScopeTy s2 = s;
+            if (bind != "") {
+                int bi = 0;
+                int bn = string.len(bind);
+                string cur_name = "";
+                while (bi <= bn) {
+                    string ch = "";
+                    if (bi < bn) {
+                        ch = string.substr(bind, bi, 1);
+                    }
+                    if (bi == bn || ch == ",") {
+                        if (cur_name != "") {
+                            s2 = scope_ty_define(s2, cur_name, Ty.TyInt);
+                            cur_name = "";
+                        }
+                    } else {
+                        cur_name = cur_name + ch;
+                    }
+                    bi = bi + 1;
+                }
+            }
+            TypeResult br = type_stmt(body, s2, diags);
+            TypeResult nr = type_stmt(next, s, br.diags);
+            if (!br.ok) {
+                nr.ok = false;
+            }
+            return nr;
+        }
+        case ArmEnd: {
+            return out;
+        }
+        case Block(body): {
+            return type_stmt(body, s, diags);
+        }
+        case SeqList(xs): {
+            TypeResult list_result = type_stmt_list(xs, s, diags);
+            return list_result;
+        }
+        case Seq(a, b): {
+            TypeResult ra = type_stmt(a, s, diags);
+            ScopeTy s2 = apply_let(a, s);
+            TypeResult rb = type_stmt(b, s2, ra.diags);
+            out.diags = rb.diags;
+            if (!ra.ok || !rb.ok) {
+                out.ok = false;
+            } else {
+                out.ok = true;
+            }
+            return out;
+        }
+    }
+    return out;
+}
+
+public action apply_let(Stmt st, ScopeTy s): ScopeTy {
+    match (st) {
+        case Let(name, e, l, c): {
+            TypeResult er = type_expr(e, s, DiagList.Nil);
+            return scope_ty_define(s, name, er.ty);
+        }
+        case VarDecl(ty, name, e, has, l, c): {
+            if (ty == "bool") {
+                return scope_ty_define(s, name, Ty.TyBool);
+            }
+            if (ty == "string") {
+                return scope_ty_define(s, name, Ty.TyString);
+            }
+            if (has) {
+                TypeResult er = type_expr(e, s, DiagList.Nil);
+                return scope_ty_define(s, name, er.ty);
+            }
+            return scope_ty_define(s, name, Ty.TyInt);
+        }
+        case Empty: { return s; }
+        case AssignStmt(n, e, l, c): { return s; }
+        case FieldAssign(o, f, e, l, c): { return s; }
+        case ExprStmt(e, l, c): { return s; }
+        case Print(e, l, c): { return s; }
+        case Return(e, has, l, c): { return s; }
+        case If(e, a, b, l, c): { return s; }
+        case While(e, b, l, c): { return s; }
+        case Match(e, a, l, c): { return s; }
+        case Arm(n, b, body, next): { return s; }
+        case ArmEnd: { return s; }
+        case Block(b): { return s; }
+        case Seq(a, b): { return apply_let(b, apply_let(a, s)); }
+        case SeqList(xs): { return apply_let_list(xs, s); }
+    }
+    return s;
+}
+
+public action type_stmt_list(xs: StmtList, s: ScopeTy, diags: DiagList): TypeResult {
+    TypeResult out;
+    out.diags = diags;
+    out.ok = true;
+    out.ty = Ty.TyError;
+    StmtList cur = xs;
+    ScopeTy scope = s;
+    int keep = 1;
+    while (keep == 1) {
+        match (cur) {
+            case StmtNil: { keep = 0; }
+            case StmtCons(head, rest): {
+                TypeResult r = type_stmt(head, scope, out.diags);
+                out.diags = r.diags;
+                if (!r.ok) { out.ok = false; }
+                scope = apply_let(head, scope);
+                cur = rest;
+            }
+        }
+    }
+    return out;
+}
+
+public action apply_let_list(xs: StmtList, s: ScopeTy): ScopeTy {
+    ScopeTy out = s;
+    StmtList cur = xs;
+    int keep = 1;
+    while (keep == 1) {
+        match (cur) {
+            case StmtNil: { keep = 0; }
+            case StmtCons(head, rest): {
+                out = apply_let(head, out);
+                cur = rest;
+            }
+        }
+    }
+    return out;
+}
+
+public action typecheck(Stmt program): TypeResult {
+    TypeResult out = type_stmt(program, ScopeTy.EmptyScopeTy, DiagList.Nil);
+    return out;
+}
+

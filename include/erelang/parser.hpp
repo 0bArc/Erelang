@@ -319,6 +319,7 @@ struct TraitDecl {
     std::string name;
     std::vector<TypeParam> typeParams;
     std::vector<TraitMethodSig> methods;
+    std::vector<std::string> associatedTypes;
 };
 
 struct Program {

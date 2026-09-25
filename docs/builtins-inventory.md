@@ -25,12 +25,15 @@ Legend:
 | `chan_*` | INTERNAL RUNTIME PRIMITIVE |
 | `fut.cancel` / `fut.done` / `fut.cancelled` / `fut.result` / `await` | LANGUAGE PRIMITIVE (methods + syntax) |
 | `future_cancel` / `future_done` | LEGACY/REMOVE |
-| `fs.open` / `fs.read` / `fs.write` / handle `.read/.write/.flush/.close` | PUBLIC STD API (`std/fs`) |
-| `file_open` / `file_read` / … / `fopen` / … | INTERNAL RUNTIME PRIMITIVE / LEGACY/REMOVE (bare) |
+| `fs.open` / `fs.read` / `fs.write` / handle `.read/.write/.flush/.buffer/.close` | PUBLIC STD API (`std/fs`) |
+| `file_open` / `file_read` / … / `fopen` / … / `file_buffer` | INTERNAL RUNTIME PRIMITIVE / LEGACY/REMOVE (bare) |
 | `read_text` / `write_text` / path helpers | INTERNAL (bound as `fs.*` / `path.*`) |
 | `crypto.sha256` / `crypto.aes_encrypt` / `crypto.aes_decrypt` | PUBLIC STD API (`std/crypto` / `builtin/crypto`) |
 | `hash_sha256` / `aes_encrypt` / … | INTERNAL RUNTIME PRIMITIVE |
-| `net.*` / `ws.*` / `tcp.*` | PUBLIC STD API (network modules) |
+| `net.*` / `ws.*` / `tcp.*` / `net.udp_bind` | PUBLIC STD API (network modules) |
+| `udp_bind` bare | INTERNAL RUNTIME PRIMITIVE |
+| `log.*` | PUBLIC STD API (`std/log`) |
+| `log_*` bare | INTERNAL RUNTIME PRIMITIVE |
 | `http_*` bare | INTERNAL / import-gated legacy forms |
 | `process.*` / `system.*` | PUBLIC STD API |
 | `toint` / `tostr` / `tofloat` / `tobool` | LEGACY/REMOVE |

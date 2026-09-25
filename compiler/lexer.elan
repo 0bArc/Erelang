@@ -1,0 +1,417 @@
+@strict
+
+enum Tok {
+    Ident,
+    Keyword,
+    Number,
+    String,
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    EqEq,
+    BangEq,
+    Bang,
+    Lt,
+    AndAnd,
+    OrOr,
+    Assign,
+    LParen,
+    RParen,
+    LBrace,
+    RBrace,
+    Comma,
+    Colon,
+    Dot,
+    At,
+    Hash,
+    Semi,
+    Eof,
+    Error
+}
+
+struct Token {
+    Tok kind;
+    string text;
+    int start;
+    int end;
+    int line;
+    int column;
+}
+
+enum TokenList {
+    Nil,
+    Cons(Token, TokenList)
+}
+
+enum Severity {
+    Error,
+    Warning
+}
+
+struct Diagnostic {
+    string message;
+    int line;
+    int column;
+    Severity severity;
+}
+
+enum DiagList {
+    Nil,
+    Cons(string, int, int, DiagList)
+}
+
+struct LexResult {
+    TokenList tokens;
+    DiagList diags;
+    bool ok;
+    string error_message;
+    int error_line;
+    int error_column;
+}
+
+public action keyword_tok(string s): Tok {
+    if (is_keyword_text(s)) {
+        return Tok.Keyword;
+    }
+    return Tok.Ident;
+}
+
+public action lex_push(TokenList acc, Token t): TokenList {
+    return TokenList.Cons(t, acc);
+}
+
+public action lex_escape_char(string c): string {
+    if (c == "n") { return "\n"; }
+    if (c == "t") { return "\t"; }
+    if (c == "r") { return "\r"; }
+    if (c == "\\") { return "\\"; }
+    if (c == "\"") { return "\""; }
+    return c;
+}
+
+public action lex(string source): LexResult {
+    LexResult out;
+    out.tokens = TokenList.Nil;
+    out.diags = DiagList.Nil;
+    out.ok = true;
+    out.error_message = "";
+    out.error_line = 1;
+    out.error_column = 1;
+
+    int i = 0;
+    int n = string.len(source);
+    int line = 1;
+    int col = 1;
+    TokenList acc = TokenList.Nil;
+    Token t;
+    string c;
+    string d;
+    string text;
+    string esc;
+    int start;
+    int start_col;
+    int start_line;
+    Tok k;
+    int keep;
+
+    while (i < n) {
+        c = string.substr(source, i, 1);
+        if (c == "#" && col == 1 && i + 8 <= n && string.substr(source, i, 8) == "#include") {
+            while (i < n && string.substr(source, i, 1) != "\n") {
+                i = i + 1;
+                col = col + 1;
+            }
+        } else if (char_is_space(c)) {
+            if (c == "\n") {
+                line = line + 1;
+                col = 1;
+            } else {
+                col = col + 1;
+            }
+            i = i + 1;
+        } else if (c == "/" && i + 1 < n && string.substr(source, i + 1, 1) == "/") {
+            i = i + 2;
+            col = col + 2;
+            while (i < n) {
+                d = string.substr(source, i, 1);
+                if (d == "\n") {
+                    break;
+                }
+                i = i + 1;
+                col = col + 1;
+            }
+        } else if (c == "/" && i + 1 < n && string.substr(source, i + 1, 1) == "*") {
+            start_line = line;
+            start_col = col;
+            i = i + 2;
+            col = col + 2;
+            keep = 1;
+            while (keep == 1 && i < n) {
+                d = string.substr(source, i, 1);
+                if (d == "*" && i + 1 < n && string.substr(source, i + 1, 1) == "/") {
+                    i = i + 2;
+                    col = col + 2;
+                    keep = 0;
+                } else {
+                    if (d == "\n") {
+                        line = line + 1;
+                        col = 1;
+                    } else {
+                        col = col + 1;
+                    }
+                    i = i + 1;
+                }
+            }
+            if (keep == 1) {
+                out.ok = false;
+                if (out.error_message == "") {
+                    out.error_message = "unterminated block comment";
+                    out.error_line = start_line;
+                    out.error_column = start_col;
+                }
+                t = make_token(Tok.Error, "/*", start, i, start_line, start_col);
+                acc = lex_push(acc, t);
+            }
+        } else if (char_is_alpha(c) || c == "_") {
+            start = i;
+            start_col = col;
+            i = i + 1;
+            col = col + 1;
+            while (i < n) {
+                d = string.substr(source, i, 1);
+                if (char_is_alpha(d) || char_is_digit(d) || d == "_") {
+                    i = i + 1;
+                    col = col + 1;
+                } else {
+                    break;
+                }
+            }
+            text = string.substr(source, start, i - start);
+            k = keyword_tok(text);
+            t = make_token(k, text, start, i, line, start_col);
+            acc = lex_push(acc, t);
+        } else if (char_is_digit(c)) {
+            start = i;
+            start_col = col;
+            i = i + 1;
+            col = col + 1;
+            while (i < n) {
+                d = string.substr(source, i, 1);
+                if (char_is_digit(d)) {
+                    i = i + 1;
+                    col = col + 1;
+                } else {
+                    break;
+                }
+            }
+            text = string.substr(source, start, i - start);
+            t = make_token(Tok.Number, text, start, i, line, start_col);
+            acc = lex_push(acc, t);
+        } else if (c == "\"") {
+            start = i;
+            start_col = col;
+            start_line = line;
+            i = i + 1;
+            col = col + 1;
+            text = "";
+            keep = 1;
+            while (keep == 1 && i < n) {
+                d = string.substr(source, i, 1);
+                if (d == "\"") {
+                    i = i + 1;
+                    col = col + 1;
+                    keep = 0;
+                } else if (d == "\\") {
+                    if (i + 1 < n) {
+                        esc = string.substr(source, i + 1, 1);
+                        text = text + lex_escape_char(esc);
+                        i = i + 2;
+                        col = col + 2;
+                    } else {
+                        i = i + 1;
+                        col = col + 1;
+                    }
+                } else if (d == "\n") {
+                    text = text + d;
+                    i = i + 1;
+                    line = line + 1;
+                    col = 1;
+                } else {
+                    text = text + d;
+                    i = i + 1;
+                    col = col + 1;
+                }
+            }
+            if (keep == 1) {
+                out.ok = false;
+                if (out.error_message == "") {
+                    out.error_message = "unterminated string";
+                    out.error_line = start_line;
+                    out.error_column = start_col;
+                }
+                t = make_token(Tok.Error, text, start, i, start_line, start_col);
+                acc = lex_push(acc, t);
+            } else {
+                t = make_token(Tok.String, text, start, i, start_line, start_col);
+                acc = lex_push(acc, t);
+            }
+        } else if (c == "=") {
+            if (i + 1 < n && string.substr(source, i + 1, 1) == "=") {
+                t = make_token(Tok.EqEq, "==", i, i + 2, line, col);
+                acc = lex_push(acc, t);
+                i = i + 2;
+                col = col + 2;
+            } else {
+                t = make_token(Tok.Assign, "=", i, i + 1, line, col);
+                acc = lex_push(acc, t);
+                i = i + 1;
+                col = col + 1;
+            }
+        } else if (c == "!") {
+            if (i + 1 < n && string.substr(source, i + 1, 1) == "=") {
+                t = make_token(Tok.BangEq, "!=", i, i + 2, line, col);
+                acc = lex_push(acc, t);
+                i = i + 2;
+                col = col + 2;
+            } else {
+                t = make_token(Tok.Bang, "!", i, i + 1, line, col);
+                acc = lex_push(acc, t);
+                i = i + 1;
+                col = col + 1;
+            }
+        } else if (c == "&") {
+            if (i + 1 < n && string.substr(source, i + 1, 1) == "&") {
+                t = make_token(Tok.AndAnd, "&&", i, i + 2, line, col);
+                acc = lex_push(acc, t);
+                i = i + 2;
+                col = col + 2;
+            } else {
+                out.ok = false;
+                if (out.error_message == "") {
+                    out.error_message = "unexpected character '&'";
+                    out.error_line = line;
+                    out.error_column = col;
+                }
+                t = make_token(Tok.Error, "&", i, i + 1, line, col);
+                acc = lex_push(acc, t);
+                i = i + 1;
+                col = col + 1;
+            }
+        } else if (c == "|") {
+            if (i + 1 < n && string.substr(source, i + 1, 1) == "|") {
+                t = make_token(Tok.OrOr, "||", i, i + 2, line, col);
+                acc = lex_push(acc, t);
+                i = i + 2;
+                col = col + 2;
+            } else {
+                out.ok = false;
+                if (out.error_message == "") {
+                    out.error_message = "unexpected character '|'";
+                    out.error_line = line;
+                    out.error_column = col;
+                }
+                t = make_token(Tok.Error, "|", i, i + 1, line, col);
+                acc = lex_push(acc, t);
+                i = i + 1;
+                col = col + 1;
+            }
+        } else if (c == "<") {
+            t = make_token(Tok.Lt, "<", i, i + 1, line, col);
+            acc = lex_push(acc, t);
+            i = i + 1;
+            col = col + 1;
+        } else if (c == ">") {
+            t = make_token(Tok.Lt, ">", i, i + 1, line, col);
+            acc = lex_push(acc, t);
+            i = i + 1;
+            col = col + 1;
+        } else if (c == "+") {
+            t = make_token(Tok.Plus, "+", i, i + 1, line, col);
+            acc = lex_push(acc, t);
+            i = i + 1;
+            col = col + 1;
+        } else if (c == "-") {
+            t = make_token(Tok.Minus, "-", i, i + 1, line, col);
+            acc = lex_push(acc, t);
+            i = i + 1;
+            col = col + 1;
+        } else if (c == "*") {
+            t = make_token(Tok.Star, "*", i, i + 1, line, col);
+            acc = lex_push(acc, t);
+            i = i + 1;
+            col = col + 1;
+        } else if (c == "/") {
+            t = make_token(Tok.Slash, "/", i, i + 1, line, col);
+            acc = lex_push(acc, t);
+            i = i + 1;
+            col = col + 1;
+        } else if (c == "(") {
+            t = make_token(Tok.LParen, "(", i, i + 1, line, col);
+            acc = lex_push(acc, t);
+            i = i + 1;
+            col = col + 1;
+        } else if (c == ")") {
+            t = make_token(Tok.RParen, ")", i, i + 1, line, col);
+            acc = lex_push(acc, t);
+            i = i + 1;
+            col = col + 1;
+        } else if (c == "{") {
+            t = make_token(Tok.LBrace, "{", i, i + 1, line, col);
+            acc = lex_push(acc, t);
+            i = i + 1;
+            col = col + 1;
+        } else if (c == "}") {
+            t = make_token(Tok.RBrace, "}", i, i + 1, line, col);
+            acc = lex_push(acc, t);
+            i = i + 1;
+            col = col + 1;
+        } else if (c == ";") {
+            t = make_token(Tok.Semi, ";", i, i + 1, line, col);
+            acc = lex_push(acc, t);
+            i = i + 1;
+            col = col + 1;
+        } else if (c == ",") {
+            t = make_token(Tok.Comma, ",", i, i + 1, line, col);
+            acc = lex_push(acc, t);
+            i = i + 1;
+            col = col + 1;
+        } else if (c == ":") {
+            t = make_token(Tok.Colon, ":", i, i + 1, line, col);
+            acc = lex_push(acc, t);
+            i = i + 1;
+            col = col + 1;
+        } else if (c == ".") {
+            t = make_token(Tok.Dot, ".", i, i + 1, line, col);
+            acc = lex_push(acc, t);
+            i = i + 1;
+            col = col + 1;
+        } else if (c == "@") {
+            t = make_token(Tok.At, "@", i, i + 1, line, col);
+            acc = lex_push(acc, t);
+            i = i + 1;
+            col = col + 1;
+        } else if (c == "#") {
+            t = make_token(Tok.Hash, "#", i, i + 1, line, col);
+            acc = lex_push(acc, t);
+            i = i + 1;
+            col = col + 1;
+        } else {
+            out.ok = false;
+            if (out.error_message == "") {
+                out.error_message = "unexpected character '" + c + "'";
+                out.error_line = line;
+                out.error_column = col;
+            }
+            t = make_token(Tok.Error, c, i, i + 1, line, col);
+            acc = lex_push(acc, t);
+            i = i + 1;
+            col = col + 1;
+        }
+    }
+
+    t = make_token(Tok.Eof, "", i, i, line, col);
+    acc = lex_push(acc, t);
+    out.tokens = token_list_reverse(acc);
+    return out;
+}

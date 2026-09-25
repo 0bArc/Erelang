@@ -24,9 +24,13 @@ int g_nextDictId = 1;
 std::unordered_map<int, std::unordered_map<std::string, std::string>> g_dicts;
 int g_nextTupleId = 1;
 std::unordered_map<int, std::vector<std::string>> g_tuples;
+int g_nextEnumVarId = 1;
+std::unordered_map<int, EnumVarState> g_enumVars;
 int g_nextPtrId = 1;
 std::unordered_map<int, std::string> g_ptrs;
 std::unordered_map<int, RawMemBlock> g_rawMem;
+MemDebugStats g_memStats{};
+std::unordered_set<int> g_freedPtrIds;
 int g_nextOwnId = 1;
 std::unordered_map<int, OwnState> g_owns;
 int g_nextSharedId = 1;
@@ -37,6 +41,7 @@ int g_nextBufferId = 1;
 std::unordered_map<int, BufferState> g_buffers;
 int g_nextFileId = 1;
 std::unordered_map<int, std::unique_ptr<std::fstream>> g_fileStreams;
+std::unordered_map<int, FileBufState> g_fileBufs;
 int g_nextStrBufId = 1;
 std::unordered_map<int, std::string> g_strBuffers;
 std::unordered_set<std::string> g_deprecationWarningsShown;
@@ -187,21 +192,26 @@ void async_pool_shutdown() {
 }
 
 void reset_global_container_state() {
+    g_memStats.leaks_at_reset += mem_live_count();
     g_lists.clear();
     g_dicts.clear();
     g_tuples.clear();
+    g_enumVars.clear();
     g_ptrs.clear();
     g_rawMem.clear();
     g_owns.clear();
     g_shareds.clear();
     g_weaks.clear();
     g_buffers.clear();
+    g_freedPtrIds.clear();
     g_fileStreams.clear();
+    g_fileBufs.clear();
     g_strBuffers.clear();
     g_sets.clear();
     g_queues.clear();
     g_channels.clear();
     g_mutexes.clear();
+    g_memStats.live = 0;
     {
         std::vector<std::shared_ptr<FutureState>> pending;
         for (auto& kv : g_futures) {
@@ -223,6 +233,7 @@ void reset_global_container_state() {
     g_nextListId = 1;
     g_nextDictId = 1;
     g_nextTupleId = 1;
+    g_nextEnumVarId = 1;
     g_nextPtrId = 1;
     g_nextOwnId = 1;
     g_nextSharedId = 1;
@@ -696,14 +707,39 @@ void inject_standard_enum_methods(Program& program) {
 }
 
 std::string encode_enum_variant(const std::string& tag, const std::vector<std::string>& payloads) {
-    std::string encoded = std::string("enumvar:") + tag;
-    for (const auto& payload : payloads) {
-        encoded.push_back('\x1f');
-        encoded += std::to_string(payload.size());
-        encoded.push_back(':');
-        encoded += payload;
+    if (payloads.empty()) {
+        return std::string("enumvar:") + tag;
     }
-    return encoded;
+    const int id = g_nextEnumVarId++;
+    g_enumVars[id] = EnumVarState{tag, payloads};
+    return std::string("enumvar:#") + std::to_string(id);
+}
+
+bool peek_enum_tag(const std::string& encoded, std::string& tagOut) {
+    constexpr const char* kEnumVar = "enumvar:";
+    if (encoded.rfind(kEnumVar, 0) != 0) {
+        tagOut = encoded;
+        return false;
+    }
+    const std::string body = encoded.substr(std::char_traits<char>::length(kEnumVar));
+    if (!body.empty() && body[0] == '#') {
+        try {
+            const int id = static_cast<int>(std::stoll(body.substr(1)));
+            auto it = g_enumVars.find(id);
+            if (it == g_enumVars.end()) {
+                tagOut = body;
+                return false;
+            }
+            tagOut = it->second.tag;
+            return true;
+        } catch (...) {
+            tagOut = body;
+            return false;
+        }
+    }
+    const size_t sep = body.find('\x1f');
+    tagOut = (sep == std::string::npos) ? body : body.substr(0, sep);
+    return true;
 }
 
 bool decode_enum_variant(const std::string& encoded, std::string& tagOut, std::vector<std::string>& payloadsOut) {
@@ -714,6 +750,22 @@ bool decode_enum_variant(const std::string& encoded, std::string& tagOut, std::v
         return false;
     }
     const std::string body = encoded.substr(std::char_traits<char>::length(kEnumVar));
+    if (!body.empty() && body[0] == '#') {
+        try {
+            const int id = static_cast<int>(std::stoll(body.substr(1)));
+            auto it = g_enumVars.find(id);
+            if (it == g_enumVars.end()) {
+                tagOut = body;
+                return false;
+            }
+            tagOut = it->second.tag;
+            payloadsOut = it->second.payloads;
+            return true;
+        } catch (...) {
+            tagOut = body;
+            return false;
+        }
+    }
     const size_t sep = body.find('\x1f');
     if (sep == std::string::npos) {
         tagOut = body;
@@ -762,6 +814,32 @@ bool decode_enum_variant(const std::string& encoded, std::string& tagOut, std::v
         }
         payloadsOut.push_back(rest.substr(pos, next - pos));
         pos = next + 1;
+    }
+    return true;
+}
+
+bool enum_variants_equal(const std::string& left, const std::string& right) {
+    if (left == right) return true;
+    std::string ltag;
+    std::string rtag;
+    std::vector<std::string> lpayloads;
+    std::vector<std::string> rpayloads;
+    const bool lEnum = decode_enum_variant(left, ltag, lpayloads);
+    const bool rEnum = decode_enum_variant(right, rtag, rpayloads);
+    if (!lEnum && !rEnum) return false;
+    if (!lEnum) {
+        ltag = left;
+        lpayloads.clear();
+    }
+    if (!rEnum) {
+        rtag = right;
+        rpayloads.clear();
+    }
+    if (ltag != rtag || lpayloads.size() != rpayloads.size()) return false;
+    for (size_t i = 0; i < lpayloads.size(); ++i) {
+        if (!enum_variants_equal(lpayloads[i], rpayloads[i]) && lpayloads[i] != rpayloads[i]) {
+            return false;
+        }
     }
     return true;
 }

@@ -79,6 +79,7 @@ add_library(erelang STATIC
     src/runtime/debug.cpp
     src/runtime/imports.cpp
     src/runtime/builtins.cpp
+    src/runtime/mini_ir_vm.cpp
   src/erodsl/spec.cpp
   src/runtime/builtins/math.cpp
   src/runtime/builtins/network.cpp
@@ -95,6 +96,7 @@ add_library(erelang STATIC
   src/typechecker.cpp
   src/optimizer.cpp
   src/modules.cpp
+  src/packages.cpp
   src/plugins.cpp
   ${_ERELANG_EXPERIMENTAL_SOURCES}
   src/ir.cpp
@@ -257,6 +259,7 @@ elseif (BUILD_SHARED_RUNTIME)
     src/typechecker.cpp
     src/optimizer.cpp
     src/modules.cpp
+    src/packages.cpp
     src/plugins.cpp
     ${_ERELANG_EXPERIMENTAL_SOURCES}
     src/ir.cpp
@@ -271,6 +274,7 @@ elseif (BUILD_SHARED_RUNTIME)
     src/runtime/debug.cpp
     src/runtime/imports.cpp
     src/runtime/builtins.cpp
+    src/runtime/mini_ir_vm.cpp
     src/runtime/cabi_exports.cpp
   )
   set_target_properties(erelang_shared PROPERTIES OUTPUT_NAME "erelang")
@@ -356,6 +360,10 @@ if (NOT MSVC)
   target_link_options(erelang_runner PRIVATE -s)
   target_compile_options(erelang_runner PRIVATE -fno-lto)
   target_link_options(erelang_runner PRIVATE -fno-lto)
+  # Mini-compiler recursive lower of expanded compiler/*.elan needs a large stack.
+  target_link_options(erelang_runner PRIVATE -Wl,--stack,67108864)
+else()
+  target_link_options(erelang_runner PRIVATE /STACK:67108864)
 endif()
 
 if (BUILD_SHARED_RUNTIME)

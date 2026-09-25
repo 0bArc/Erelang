@@ -1,0 +1,8 @@
+public action probe() {
+    int pos = 0;
+    int n = 1;
+    while (pos < n) {
+        pos = pos + 1;
+    }
+    return;
+}

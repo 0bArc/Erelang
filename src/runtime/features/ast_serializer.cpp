@@ -869,6 +869,8 @@ std::vector<uint8_t> serialize_program(const Program& prog) {
             for (auto& p : m.params) writeParam(w, p);
             w.str(m.returnType);
         }
+        w.u32(static_cast<uint32_t>(tr.associatedTypes.size()));
+        for (auto& at : tr.associatedTypes) w.str(at);
     }
 
     w.u32(static_cast<uint32_t>(prog.externs.size()));
@@ -936,6 +938,9 @@ std::optional<Program> deserialize_program(const uint8_t* data, size_t size) {
                 m.returnType = r.str();
                 tr.methods.push_back(std::move(m));
             }
+            auto nat = r.u32();
+            tr.associatedTypes.reserve(nat);
+            for (uint32_t j = 0; j < nat; ++j) tr.associatedTypes.push_back(r.str());
             prog.traits.push_back(std::move(tr));
         }
 

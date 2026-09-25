@@ -1,0 +1,2522 @@
+@strict
+
+#include <builtin/fs> as fs
+#include <builtin/path> as path
+
+enum BinOpKind {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Eq,
+    Ne,
+    Lt,
+    And,
+    Or
+}
+
+enum UnOpKind {
+    Neg,
+    Not
+}
+
+enum Expr {
+    IntLit(int, int, int),
+    BoolLit(bool, int, int),
+    StringLit(string, int, int),
+    Name(string, int, int),
+    Unary(UnOpKind, Expr, int, int),
+    BinOp(BinOpKind, Expr, Expr, int, int),
+    Assign(string, Expr, int, int),
+    Call(string, Expr, int, int),
+    Member(Expr, string, int, int),
+    ArgNil,
+    ArgCons(Expr, Expr)
+}
+
+enum Stmt {
+    Empty,
+    Let(string, Expr, int, int),
+    VarDecl(string, string, Expr, bool, int, int),
+    AssignStmt(string, Expr, int, int),
+    FieldAssign(Expr, string, Expr, int, int),
+    ExprStmt(Expr, int, int),
+    Print(Expr, int, int),
+    Return(Expr, bool, int, int),
+    If(Expr, Stmt, Stmt, int, int),
+    While(Expr, Stmt, int, int),
+    Match(Expr, Stmt, int, int),
+    Arm(string, string, Stmt, Stmt),
+    ArmEnd,
+    Block(Stmt),
+    Seq(Stmt, Stmt),
+    SeqList(StmtList)
+}
+
+enum StmtList {
+    StmtNil,
+    StmtCons(Stmt, StmtList)
+}
+
+enum Decl {
+    ActionDecl(string, Decl, string, Stmt, int, int),
+    EnumDecl(string, Decl, int, int),
+    StructDecl(string, Decl, int, int),
+    TopStmt(Stmt),
+    ParamNil,
+    ParamCons(string, string, Decl),
+    FieldNil,
+    FieldCons(string, string, Decl),
+    VariantNil,
+    VariantCons(string, string, Decl),
+    DeclNil,
+    DeclCons(Decl, Decl)
+}
+
+struct Program {
+    Decl decls;
+    bool ok;
+}
+
+enum Scope {
+    EmptyScope,
+    Bind(string, int, Scope)
+}
+
+enum Instr {
+    Const(int),
+    ConstStr(string),
+    Add,
+    Sub,
+    Mul,
+    Div,
+    CmpEq,
+    CmpNe,
+    CmpLt,
+    Load(int),
+    Store(int),
+    Label(int),
+    Jump(int),
+    JumpIfFalse(int),
+    Print,
+    PrintStr,
+    Pop,
+    Call(string, int),
+    MkEnum(string, int),
+    MkStruct(string),
+    GetField(string),
+    SetField(string),
+    JumpIfNotVariant(string, int),
+    GetPayload(int),
+    Return
+}
+
+enum InstrList {
+    Nil,
+    Cons(Instr, InstrList)
+}
+
+enum FuncList {
+    FNil,
+    FCons(string, int, InstrList, int, FuncList)
+}
+
+enum StructEnv {
+    SENil,
+    SECons(string, string, StructEnv)
+}
+
+struct IrModule {
+    InstrList code;
+    FuncList funcs;
+    int label_count;
+    int local_count;
+}
+
+struct EmitState {
+    InstrList code;
+    Scope scope;
+    int next_local;
+    int next_label;
+    StructEnv structs;
+}
+
+struct RunResult {
+    bool ok;
+    int last_print;
+    bool did_print;
+    string last_print_str;
+}
+
+enum ValList {
+    VNil,
+    VCons(int, ValList)
+}
+
+enum StrList {
+    SNil,
+    SCons(string, StrList)
+}
+
+enum HeapObj {
+    HEmpty,
+    HEnum(string, ValList),
+    HStruct(string, ValList),
+    HString(string)
+}
+
+enum HeapList {
+    HLNil,
+    HLCons(HeapObj, HeapList)
+}
+
+struct HeapState {
+    HeapList cells;
+    int len;
+}
+
+enum FuncIndex {
+    FIEmpty,
+    FINode(string, int, InstrList, int, FuncIndex, FuncIndex)
+}
+
+enum LabelArr {
+    LANil,
+    LACons(InstrList, LabelArr)
+}
+
+struct FuncRef {
+    bool ok;
+    int arity;
+    InstrList code;
+    int locals;
+}
+
+struct FuncRun {
+    int value;
+    HeapState heap;
+    bool did_print;
+    int last_print;
+    string last_print_str;
+}
+
+struct StackHeap {
+    ValList stack;
+    HeapState heap;
+    bool did_print;
+    int last_print;
+    string last_print_str;
+}
+
+public action emit_scope_lookup(Scope s, string name): int {
+    match (s) {
+        case EmptyScope: { return 0 - 1; }
+        case Bind(n, id, parent): {
+            if (n == name) { return id; }
+            return emit_scope_lookup(parent, name);
+        }
+    }
+    return 0 - 1;
+}
+
+public action dotted_tail(string n): string {
+    int last = 0 - 1;
+    int i = 0;
+    int len = string.len(n);
+    while (i < len) {
+        if (string.substr(n, i, 1) == ".") {
+            last = i;
+        }
+        i = i + 1;
+    }
+    if (last < 0) {
+        return n;
+    }
+    return string.substr(n, last + 1, len - last - 1);
+}
+
+public action csv_count(string s): int {
+    if (s == "") {
+        return 0;
+    }
+    int n = 1;
+    int i = 0;
+    int len = string.len(s);
+    while (i < len) {
+        if (string.substr(s, i, 1) == ",") {
+            n = n + 1;
+        }
+        i = i + 1;
+    }
+    return n;
+}
+
+public action csv_at(string s, int idx): string {
+    int cur = 0;
+    int start = 0;
+    int i = 0;
+    int len = string.len(s);
+    while (i <= len) {
+        if (i == len || string.substr(s, i, 1) == ",") {
+            if (cur == idx) {
+                return string.substr(s, start, i - start);
+            }
+            cur = cur + 1;
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    return "";
+}
+
+public action csv_index(string s, string name): int {
+    int n = csv_count(s);
+    int i = 0;
+    while (i < n) {
+        if (csv_at(s, i) == name) {
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+public action struct_fields(StructEnv env, string name): string {
+    match (env) {
+        case SENil: { return ""; }
+        case SECons(n, f, rest): {
+            if (n == name) {
+                return f;
+            }
+            return struct_fields(rest, name);
+        }
+    }
+    return "";
+}
+
+public action fields_csv(Decl fields): string {
+    match (fields) {
+        case FieldNil: { return ""; }
+        case FieldCons(ty, name, rest): {
+            string tail = fields_csv(rest);
+            if (tail == "") {
+                return name;
+            }
+            return name + "," + tail;
+        }
+        case ParamNil: { return ""; }
+        case ParamCons(ty, name, rest): { return ""; }
+        case VariantNil: { return ""; }
+        case VariantCons(n, p, rest): { return ""; }
+        case ActionDecl(n, p, r, b, l, c): { return ""; }
+        case EnumDecl(n, v, l, c): { return ""; }
+        case StructDecl(n, f, l, c): { return ""; }
+        case TopStmt(s): { return ""; }
+        case DeclNil: { return ""; }
+        case DeclCons(a, b): { return ""; }
+    }
+    return "";
+}
+
+public action collect_structs(Decl decls, StructEnv acc): StructEnv {
+    match (decls) {
+        case DeclNil: { return acc; }
+        case DeclCons(h, rest): {
+            StructEnv next = collect_structs(rest, acc);
+            match (h) {
+                case StructDecl(n, f, l, c): {
+                    return StructEnv.SECons(n, fields_csv(f), next);
+                }
+                case ActionDecl(n, p, r, b, l, c): { return next; }
+                case EnumDecl(n, v, l, c): { return next; }
+                case TopStmt(s): { return next; }
+                case ParamNil: { return next; }
+                case ParamCons(ty, name, r): { return next; }
+                case FieldNil: { return next; }
+                case FieldCons(ty, n, r): { return next; }
+                case VariantNil: { return next; }
+                case VariantCons(n, p, r): { return next; }
+                case DeclNil: { return next; }
+                case DeclCons(a, b): { return next; }
+            }
+            return next;
+        }
+        case ActionDecl(n, p, r, b, l, c): { return acc; }
+        case EnumDecl(n, v, l, c): { return acc; }
+        case StructDecl(n, f, l, c): {
+            return StructEnv.SECons(n, fields_csv(f), acc);
+        }
+        case TopStmt(s): { return acc; }
+        case ParamNil: { return acc; }
+        case ParamCons(ty, name, r): { return acc; }
+        case FieldNil: { return acc; }
+        case FieldCons(ty, n, r): { return acc; }
+        case VariantNil: { return acc; }
+        case VariantCons(n, p, r): { return acc; }
+    }
+    return acc;
+}
+
+public action val_reverse(ValList xs): ValList {
+    ValList acc = ValList.VNil;
+    ValList cur = xs;
+    int keep = 1;
+    while (keep == 1) {
+        match (cur) {
+            case VNil: { keep = 0; }
+            case VCons(v, rest): {
+                acc = ValList.VCons(v, acc);
+                cur = rest;
+            }
+        }
+    }
+    return acc;
+}
+
+public action val_at(ValList xs, int idx): int {
+    int i = 0;
+    ValList cur = xs;
+    int keep = 1;
+    while (keep == 1) {
+        match (cur) {
+            case VNil: { keep = 0; }
+            case VCons(v, rest): {
+                if (i == idx) {
+                    return v;
+                }
+                i = i + 1;
+                cur = rest;
+            }
+        }
+    }
+    return 0;
+}
+
+public action val_set(ValList xs, int idx, int value): ValList {
+    match (xs) {
+        case VNil: {
+            if (idx == 0) {
+                return ValList.VCons(value, ValList.VNil);
+            }
+            return ValList.VCons(0, val_set(ValList.VNil, idx - 1, value));
+        }
+        case VCons(v, rest): {
+            if (idx == 0) {
+                return ValList.VCons(value, rest);
+            }
+            return ValList.VCons(v, val_set(rest, idx - 1, value));
+        }
+    }
+    return xs;
+}
+
+public action zeros_list(int n): ValList {
+    ValList out = ValList.VNil;
+    int i = 0;
+    while (i < n) {
+        out = ValList.VCons(0, out);
+        i = i + 1;
+    }
+    return out;
+}
+
+public action heap_empty(): HeapState {
+    HeapState h;
+    h.cells = HeapList.HLNil;
+    h.len = 0;
+    return h;
+}
+
+public action heap_get(HeapState h, int idx): HeapObj {
+    if (idx < 0 || idx >= h.len) {
+        return HeapObj.HEmpty;
+    }
+    int skip = h.len - 1 - idx;
+    HeapList cur = h.cells;
+    int keep = 1;
+    while (keep == 1) {
+        match (cur) {
+            case HLNil: { return HeapObj.HEmpty; }
+            case HLCons(o, rest): {
+                if (skip == 0) {
+                    return o;
+                }
+                skip = skip - 1;
+                cur = rest;
+            }
+        }
+    }
+    return HeapObj.HEmpty;
+}
+
+public action heap_set_at(HeapList cells, int pos, HeapObj o): HeapList {
+    match (cells) {
+        case HLNil: { return HeapList.HLNil; }
+        case HLCons(x, rest): {
+            if (pos == 0) {
+                return HeapList.HLCons(o, rest);
+            }
+            return HeapList.HLCons(x, heap_set_at(rest, pos - 1, o));
+        }
+    }
+    return cells;
+}
+
+public action heap_set(HeapState h, int idx, HeapObj o): HeapState {
+    HeapState out;
+    out.len = h.len;
+    if (idx < 0 || idx >= h.len) {
+        out.cells = h.cells;
+        return out;
+    }
+    int pos = h.len - 1 - idx;
+    out.cells = heap_set_at(h.cells, pos, o);
+    return out;
+}
+
+public action to_handle(int idx): int {
+    return 0 - (idx + 1);
+}
+
+public action from_handle(int h): int {
+    return 0 - h - 1;
+}
+
+public action heap_alloc(HeapState h, HeapObj o): FuncRun {
+    FuncRun out;
+    int idx = h.len;
+    HeapState nh;
+    nh.cells = HeapList.HLCons(o, h.cells);
+    nh.len = h.len + 1;
+    out.heap = nh;
+    out.value = to_handle(idx);
+    out.did_print = false;
+    out.last_print = 0;
+    out.last_print_str = "";
+    return out;
+}
+
+public action heap_as_string(HeapState heap, int handle): string {
+    if (handle >= 0) {
+        return "";
+    }
+    HeapObj obj = heap_get(heap, from_handle(handle));
+    match (obj) {
+        case HString(s): { return s; }
+        case HEmpty: { return ""; }
+        case HEnum(t, p): { return ""; }
+        case HStruct(f, v): { return ""; }
+    }
+    return "";
+}
+
+public action heap_is_string(HeapState heap, int handle): bool {
+    if (handle >= 0) {
+        return false;
+    }
+    HeapObj obj = heap_get(heap, from_handle(handle));
+    match (obj) {
+        case HString(s): { return true; }
+        case HEmpty: { return false; }
+        case HEnum(t, p): { return false; }
+        case HStruct(f, v): { return false; }
+    }
+    return false;
+}
+
+public action exec_const_str(ValList stack, HeapState heap, string s): StackHeap {
+    StackHeap out;
+    FuncRun alloc = heap_alloc(heap, HeapObj.HString(s));
+    out.stack = stack_push(stack, alloc.value);
+    out.heap = alloc.heap;
+    return out;
+}
+
+public action exec_string_concat(ValList stack, HeapState heap, int a, int b): StackHeap {
+    StackHeap out;
+    string sa = heap_as_string(heap, a);
+    string sb = heap_as_string(heap, b);
+    FuncRun alloc = heap_alloc(heap, HeapObj.HString(sa + sb));
+    out.stack = stack_push(stack, alloc.value);
+    out.heap = alloc.heap;
+    return out;
+}
+
+public action count_args(Expr args): int {
+    match (args) {
+        case ArgNil: { return 0; }
+        case ArgCons(h, rest): { return 1 + count_args(rest); }
+        case IntLit(v, l, c): { return 0; }
+        case BoolLit(v, l, c): { return 0; }
+        case StringLit(v, l, c): { return 0; }
+        case Name(n, l, c): { return 0; }
+        case Unary(op, x, l, c): { return 0; }
+        case BinOp(op, a, b, l, c): { return 0; }
+        case Assign(n, v, l, c): { return 0; }
+        case Call(n, a, l, c): { return 0; }
+        case Member(o, f, l, c): { return 0; }
+    }
+    return 0;
+}
+
+public action emit_args(Expr args, EmitState st): EmitState {
+    match (args) {
+        case ArgNil: { return st; }
+        case ArgCons(h, rest): {
+            EmitState s1 = emit_expr(h, st);
+            return emit_args(rest, s1);
+        }
+        case IntLit(v, l, c): { return st; }
+        case BoolLit(v, l, c): { return st; }
+        case StringLit(v, l, c): { return st; }
+        case Name(n, l, c): { return st; }
+        case Unary(op, x, l, c): { return st; }
+        case BinOp(op, a, b, l, c): { return st; }
+        case Assign(n, v, l, c): { return st; }
+        case Call(n, a, l, c): { return st; }
+        case Member(o, f, l, c): { return st; }
+    }
+    return st;
+}
+
+public action emit_expr(Expr e, EmitState st): EmitState {
+    match (e) {
+        case IntLit(v, l, c): {
+            st.code = ir_prepend(st.code, Instr.Const(v));
+            return st;
+        }
+        case BoolLit(v, l, c): {
+            if (v) {
+                st.code = ir_prepend(st.code, Instr.Const(1));
+            } else {
+                st.code = ir_prepend(st.code, Instr.Const(0));
+            }
+            return st;
+        }
+        case StringLit(v, l, c): {
+            st.code = ir_prepend(st.code, Instr.ConstStr(v));
+            return st;
+        }
+        case Name(n, l, c): {
+            int id = emit_scope_lookup(st.scope, n);
+            st.code = ir_prepend(st.code, Instr.Load(id));
+            return st;
+        }
+        case Unary(op, inner, l, c): {
+            match (op) {
+                case Neg: {
+                    st.code = ir_prepend(st.code, Instr.Const(0));
+                    EmitState s1 = emit_expr(inner, st);
+                    s1.code = ir_prepend(s1.code, Instr.Sub);
+                    return s1;
+                }
+                case Not: {
+                    EmitState s1 = emit_expr(inner, st);
+                    s1.code = ir_prepend(s1.code, Instr.Const(0));
+                    s1.code = ir_prepend(s1.code, Instr.CmpEq);
+                    return s1;
+                }
+            }
+            return st;
+        }
+        case BinOp(op, left, right, l, c): {
+            EmitState s1 = emit_expr(left, st);
+            EmitState s2 = emit_expr(right, s1);
+            match (op) {
+                case Add: { s2.code = ir_prepend(s2.code, Instr.Add); }
+                case Sub: { s2.code = ir_prepend(s2.code, Instr.Sub); }
+                case Mul: { s2.code = ir_prepend(s2.code, Instr.Mul); }
+                case Div: { s2.code = ir_prepend(s2.code, Instr.Div); }
+                case Eq: { s2.code = ir_prepend(s2.code, Instr.CmpEq); }
+                case Ne: { s2.code = ir_prepend(s2.code, Instr.CmpNe); }
+                case Lt: { s2.code = ir_prepend(s2.code, Instr.CmpLt); }
+                case And: { s2.code = ir_prepend(s2.code, Instr.Mul); }
+                case Or: { s2.code = ir_prepend(s2.code, Instr.Add); }
+            }
+            return s2;
+        }
+        case Assign(n, val, l, c): {
+            EmitState s1 = emit_expr(val, st);
+            int id = emit_scope_lookup(s1.scope, n);
+            s1.code = ir_prepend(s1.code, Instr.Store(id));
+            s1.code = ir_prepend(s1.code, Instr.Load(id));
+            return s1;
+        }
+        case Call(n, args, l, c): {
+            EmitState s1 = emit_args(args, st);
+            int argc = count_args(args);
+            s1.code = ir_prepend(s1.code, Instr.Call(n, argc));
+            return s1;
+        }
+        case Member(obj, field, l, c): {
+            match (obj) {
+                case Name(n, nl, nc): {
+                    int id = emit_scope_lookup(st.scope, n);
+                    if (id < 0) {
+                        st.code = ir_prepend(st.code, Instr.MkEnum(field, 0));
+                        return st;
+                    }
+                    st.code = ir_prepend(st.code, Instr.Load(id));
+                    st.code = ir_prepend(st.code, Instr.GetField(field));
+                    return st;
+                }
+                case IntLit(v, nl, nc): {
+                    EmitState s1 = emit_expr(obj, st);
+                    s1.code = ir_prepend(s1.code, Instr.GetField(field));
+                    return s1;
+                }
+                case BoolLit(v, nl, nc): {
+                    EmitState s1 = emit_expr(obj, st);
+                    s1.code = ir_prepend(s1.code, Instr.GetField(field));
+                    return s1;
+                }
+                case StringLit(v, nl, nc): {
+                    EmitState s1 = emit_expr(obj, st);
+                    s1.code = ir_prepend(s1.code, Instr.GetField(field));
+                    return s1;
+                }
+                case Unary(op, x, nl, nc): {
+                    EmitState s1 = emit_expr(obj, st);
+                    s1.code = ir_prepend(s1.code, Instr.GetField(field));
+                    return s1;
+                }
+                case BinOp(op, a, b, nl, nc): {
+                    EmitState s1 = emit_expr(obj, st);
+                    s1.code = ir_prepend(s1.code, Instr.GetField(field));
+                    return s1;
+                }
+                case Assign(n, v, nl, nc): {
+                    EmitState s1 = emit_expr(obj, st);
+                    s1.code = ir_prepend(s1.code, Instr.GetField(field));
+                    return s1;
+                }
+                case Call(n, a, nl, nc): {
+                    EmitState s1 = emit_expr(obj, st);
+                    s1.code = ir_prepend(s1.code, Instr.GetField(field));
+                    return s1;
+                }
+                case Member(o, f, nl, nc): {
+                    EmitState s1 = emit_expr(obj, st);
+                    s1.code = ir_prepend(s1.code, Instr.GetField(field));
+                    return s1;
+                }
+                case ArgNil: {
+                    EmitState s1 = emit_expr(obj, st);
+                    s1.code = ir_prepend(s1.code, Instr.GetField(field));
+                    return s1;
+                }
+                case ArgCons(a, b): {
+                    EmitState s1 = emit_expr(obj, st);
+                    s1.code = ir_prepend(s1.code, Instr.GetField(field));
+                    return s1;
+                }
+            }
+            return st;
+        }
+        case ArgNil: { return st; }
+        case ArgCons(h, rest): { return st; }
+    }
+    return st;
+}
+
+public action emit_arm_binds(string bind, EmitState st): EmitState {
+    int n = csv_count(bind);
+    int i = 0;
+    while (i < n) {
+        string name = csv_at(bind, i);
+        st.code = ir_prepend(st.code, Instr.GetPayload(i));
+        int id = st.next_local;
+        st.scope = Scope.Bind(name, id, st.scope);
+        st.next_local = id + 1;
+        st.code = ir_prepend(st.code, Instr.Store(id));
+        i = i + 1;
+    }
+    return st;
+}
+
+public action emit_match_arms(Stmt arms, int end_lab, EmitState st): EmitState {
+    match (arms) {
+        case ArmEnd: {
+            st.code = ir_prepend(st.code, Instr.Pop);
+            return st;
+        }
+        case Arm(name, bind, body, next): {
+            int next_lab = st.next_label;
+            st.next_label = next_lab + 1;
+            st.code = ir_prepend(st.code, Instr.JumpIfNotVariant(name, next_lab));
+            EmitState s1 = emit_arm_binds(bind, st);
+            s1.code = ir_prepend(s1.code, Instr.Pop);
+            EmitState s2 = emit_stmt(body, s1);
+            s2.code = ir_prepend(s2.code, Instr.Jump(end_lab));
+            s2.code = ir_prepend(s2.code, Instr.Label(next_lab));
+            return emit_match_arms(next, end_lab, s2);
+        }
+        case Empty: { return st; }
+        case Let(a, e, l, c): { return st; }
+        case VarDecl(ty, a, e, has, l, c): { return st; }
+        case AssignStmt(a, e, l, c): { return st; }
+        case FieldAssign(o, f, e, l, c): { return st; }
+        case ExprStmt(e, l, c): { return st; }
+        case Print(e, l, c): { return st; }
+        case Return(e, has, l, c): { return st; }
+        case If(e, a, b, l, c): { return st; }
+        case While(e, b, l, c): { return st; }
+        case Match(e, a, l, c): { return st; }
+        case Block(b): { return st; }
+        case Seq(a, b): { return st; }
+        case SeqList(xs): { return st; }
+    }
+    return st;
+}
+
+public action emit_stmt(Stmt st_node, EmitState st): EmitState {
+    match (st_node) {
+        case Empty: { return st; }
+        case Let(name, e, l, c): {
+            EmitState s1 = emit_expr(e, st);
+            int id = s1.next_local;
+            s1.scope = Scope.Bind(name, id, s1.scope);
+            s1.next_local = id + 1;
+            s1.code = ir_prepend(s1.code, Instr.Store(id));
+            return s1;
+        }
+        case VarDecl(ty, name, e, has, l, c): {
+            EmitState s1 = st;
+            string fields = struct_fields(st.structs, ty);
+            if (fields != "") {
+                if (has) {
+                    s1 = emit_expr(e, st);
+                } else {
+                    s1.code = ir_prepend(s1.code, Instr.MkStruct(fields));
+                }
+            } else {
+                if (has) {
+                    s1 = emit_expr(e, st);
+                } else {
+                    s1.code = ir_prepend(s1.code, Instr.Const(0));
+                }
+            }
+            int id = s1.next_local;
+            s1.scope = Scope.Bind(name, id, s1.scope);
+            s1.next_local = id + 1;
+            s1.code = ir_prepend(s1.code, Instr.Store(id));
+            return s1;
+        }
+        case AssignStmt(name, e, l, c): {
+            EmitState s1 = emit_expr(e, st);
+            int id = emit_scope_lookup(s1.scope, name);
+            s1.code = ir_prepend(s1.code, Instr.Store(id));
+            return s1;
+        }
+        case FieldAssign(obj, field, e, l, c): {
+            EmitState s1 = emit_expr(obj, st);
+            EmitState s2 = emit_expr(e, s1);
+            s2.code = ir_prepend(s2.code, Instr.SetField(field));
+            return s2;
+        }
+        case ExprStmt(e, l, c): {
+            EmitState s1 = emit_expr(e, st);
+            s1.code = ir_prepend(s1.code, Instr.Pop);
+            return s1;
+        }
+        case Print(e, l, c): {
+            EmitState s1 = emit_expr(e, st);
+            match (e) {
+                case StringLit(v, pl, pc): {
+                    s1.code = ir_prepend(s1.code, Instr.PrintStr);
+                }
+                case IntLit(v, pl, pc): {
+                    s1.code = ir_prepend(s1.code, Instr.Print);
+                }
+                case BoolLit(v, pl, pc): {
+                    s1.code = ir_prepend(s1.code, Instr.Print);
+                }
+                case Name(n, pl, pc): {
+                    s1.code = ir_prepend(s1.code, Instr.Print);
+                }
+                case Unary(op, x, pl, pc): {
+                    s1.code = ir_prepend(s1.code, Instr.Print);
+                }
+                case BinOp(op, a, b, pl, pc): {
+                    s1.code = ir_prepend(s1.code, Instr.Print);
+                }
+                case Assign(n, v, pl, pc): {
+                    s1.code = ir_prepend(s1.code, Instr.Print);
+                }
+                case Call(n, a, pl, pc): {
+                    s1.code = ir_prepend(s1.code, Instr.Print);
+                }
+                case Member(o, f, pl, pc): {
+                    s1.code = ir_prepend(s1.code, Instr.Print);
+                }
+                case ArgNil: {
+                    s1.code = ir_prepend(s1.code, Instr.Print);
+                }
+                case ArgCons(a, b): {
+                    s1.code = ir_prepend(s1.code, Instr.Print);
+                }
+            }
+            return s1;
+        }
+        case Return(e, has, l, c): {
+            EmitState s1 = st;
+            if (has) {
+                s1 = emit_expr(e, st);
+            }
+            s1.code = ir_prepend(s1.code, Instr.Return);
+            return s1;
+        }
+        case If(cond, then_s, else_s, l, c): {
+            EmitState s1 = emit_expr(cond, st);
+            int else_lab = s1.next_label;
+            int end_lab = else_lab + 1;
+            s1.next_label = end_lab + 1;
+            s1.code = ir_prepend(s1.code, Instr.JumpIfFalse(else_lab));
+            EmitState s2 = emit_stmt(then_s, s1);
+            s2.code = ir_prepend(s2.code, Instr.Jump(end_lab));
+            s2.code = ir_prepend(s2.code, Instr.Label(else_lab));
+            EmitState s3 = emit_stmt(else_s, s2);
+            s3.code = ir_prepend(s3.code, Instr.Label(end_lab));
+            return s3;
+        }
+        case While(cond, body, l, c): {
+            int start_lab = st.next_label;
+            int end_lab = start_lab + 1;
+            st.next_label = end_lab + 1;
+            st.code = ir_prepend(st.code, Instr.Label(start_lab));
+            EmitState s1 = emit_expr(cond, st);
+            s1.code = ir_prepend(s1.code, Instr.JumpIfFalse(end_lab));
+            EmitState s2 = emit_stmt(body, s1);
+            s2.code = ir_prepend(s2.code, Instr.Jump(start_lab));
+            s2.code = ir_prepend(s2.code, Instr.Label(end_lab));
+            return s2;
+        }
+        case Match(scrut, arms, l, c): {
+            EmitState s1 = emit_expr(scrut, st);
+            int end_lab = s1.next_label;
+            s1.next_label = end_lab + 1;
+            EmitState s2 = emit_match_arms(arms, end_lab, s1);
+            s2.code = ir_prepend(s2.code, Instr.Label(end_lab));
+            return s2;
+        }
+        case Arm(n, b, body, next): { return st; }
+        case ArmEnd: { return st; }
+        case Block(body): {
+            return emit_stmt(body, st);
+        }
+        case SeqList(xs): {
+            return emit_stmt_list(xs, st);
+        }
+        case Seq(a, b): {
+            EmitState s1 = emit_stmt(a, st);
+            return emit_stmt(b, s1);
+        }
+    }
+    return st;
+}
+
+public action emit_stmt_list(xs: StmtList, st: EmitState): EmitState {
+    EmitState out = st;
+    StmtList cur = xs;
+    int keep = 1;
+    while (keep == 1) {
+        match (cur) {
+            case StmtNil: { keep = 0; }
+            case StmtCons(head, rest): {
+                out = emit_stmt(head, out);
+                cur = rest;
+            }
+        }
+    }
+    return out;
+}
+
+public action param_bind(Decl params, EmitState st): EmitState {
+    match (params) {
+        case ParamNil: { return st; }
+        case ParamCons(ty, name, rest): {
+            int id = st.next_local;
+            st.scope = Scope.Bind(name, id, st.scope);
+            st.next_local = id + 1;
+            return param_bind(rest, st);
+        }
+        case ActionDecl(n, p, r, b, l, c): { return st; }
+        case EnumDecl(n, v, l, c): { return st; }
+        case StructDecl(n, f, l, c): { return st; }
+        case TopStmt(s): { return st; }
+        case FieldNil: { return st; }
+        case FieldCons(ty, n, r): { return st; }
+        case VariantNil: { return st; }
+        case VariantCons(n, p, r): { return st; }
+        case DeclNil: { return st; }
+        case DeclCons(a, b): { return st; }
+    }
+    return st;
+}
+
+public action param_count(Decl params): int {
+    match (params) {
+        case ParamNil: { return 0; }
+        case ParamCons(ty, name, rest): { return 1 + param_count(rest); }
+        case ActionDecl(n, p, r, b, l, c): { return 0; }
+        case EnumDecl(n, v, l, c): { return 0; }
+        case StructDecl(n, f, l, c): { return 0; }
+        case TopStmt(s): { return 0; }
+        case FieldNil: { return 0; }
+        case FieldCons(ty, n, r): { return 0; }
+        case VariantNil: { return 0; }
+        case VariantCons(n, p, r): { return 0; }
+        case DeclNil: { return 0; }
+        case DeclCons(a, b): { return 0; }
+    }
+    return 0;
+}
+
+public action store_params(int arity, EmitState st): EmitState {
+    int i = arity;
+    while (i > 0) {
+        i = i - 1;
+        st.code = ir_prepend(st.code, Instr.Store(i));
+    }
+    return st;
+}
+
+public action lower(Stmt program): IrModule {
+    EmitState st;
+    st.code = InstrList.Nil;
+    st.scope = Scope.EmptyScope;
+    st.next_local = 0;
+    st.next_label = 0;
+    st.structs = StructEnv.SENil;
+    EmitState done = emit_stmt(program, st);
+    done.code = ir_prepend(done.code, Instr.Return);
+    IrModule m;
+    m.code = ir_reverse(done.code);
+    m.funcs = FuncList.FNil;
+    m.label_count = done.next_label;
+    m.local_count = done.next_local;
+    return m;
+}
+
+public action lower_action(string name, Decl params, Stmt body, FuncList acc, StructEnv structs): FuncList {
+    EmitState st;
+    st.code = InstrList.Nil;
+    st.scope = Scope.EmptyScope;
+    st.next_local = 0;
+    st.next_label = 0;
+    st.structs = structs;
+    int arity = param_count(params);
+    st = param_bind(params, st);
+    EmitState done = emit_stmt(body, st);
+    bool has_ret = false;
+    match (done.code) {
+        case Nil: { has_ret = false; }
+        case Cons(ins, rest): {
+            match (ins) {
+                case Return: { has_ret = true; }
+                case Const(v): { has_ret = false; }
+                case ConstStr(s): { has_ret = false; }
+                case Add: { has_ret = false; }
+                case Sub: { has_ret = false; }
+                case Mul: { has_ret = false; }
+                case Div: { has_ret = false; }
+                case CmpEq: { has_ret = false; }
+                case CmpNe: { has_ret = false; }
+                case CmpLt: { has_ret = false; }
+                case Load(x): { has_ret = false; }
+                case Store(x): { has_ret = false; }
+                case Label(x): { has_ret = false; }
+                case Jump(x): { has_ret = false; }
+                case JumpIfFalse(x): { has_ret = false; }
+                case Print: { has_ret = false; }
+                case PrintStr: { has_ret = false; }
+                case Pop: { has_ret = false; }
+                case Call(n, a): { has_ret = false; }
+                case MkEnum(n, a): { has_ret = false; }
+                case MkStruct(f): { has_ret = false; }
+                case GetField(f): { has_ret = false; }
+                case SetField(f): { has_ret = false; }
+                case JumpIfNotVariant(n, x): { has_ret = false; }
+                case GetPayload(x): { has_ret = false; }
+            }
+        }
+    }
+    if (!has_ret) {
+        done.code = ir_prepend(done.code, Instr.Return);
+    }
+    return FuncList.FCons(name, arity, ir_reverse(done.code), done.next_local, acc);
+}
+
+public action lower_decls(Decl decls, EmitState st, FuncList funcs): EmitState {
+    match (decls) {
+        case DeclNil: { return st; }
+        case DeclCons(h, rest): {
+            match (h) {
+                case TopStmt(s): {
+                    EmitState s1 = emit_stmt(s, st);
+                    return lower_decls(rest, s1, funcs);
+                }
+                case ActionDecl(n, p, r, b, l, c): {
+                    return lower_decls(rest, st, funcs);
+                }
+                case EnumDecl(n, v, l, c): {
+                    return lower_decls(rest, st, funcs);
+                }
+                case StructDecl(n, f, l, c): {
+                    return lower_decls(rest, st, funcs);
+                }
+                case ParamNil: { return lower_decls(rest, st, funcs); }
+                case ParamCons(ty, name, r): { return lower_decls(rest, st, funcs); }
+                case FieldNil: { return lower_decls(rest, st, funcs); }
+                case FieldCons(ty, n, r): { return lower_decls(rest, st, funcs); }
+                case VariantNil: { return lower_decls(rest, st, funcs); }
+                case VariantCons(n, p, r): { return lower_decls(rest, st, funcs); }
+                case DeclNil: { return lower_decls(rest, st, funcs); }
+                case DeclCons(a, b): { return lower_decls(rest, st, funcs); }
+            }
+            return st;
+        }
+        case ActionDecl(n, p, r, b, l, c): { return st; }
+        case EnumDecl(n, v, l, c): { return st; }
+        case StructDecl(n, f, l, c): { return st; }
+        case TopStmt(s): { return st; }
+        case ParamNil: { return st; }
+        case ParamCons(ty, name, r): { return st; }
+        case FieldNil: { return st; }
+        case FieldCons(ty, n, r): { return st; }
+        case VariantNil: { return st; }
+        case VariantCons(n, p, r): { return st; }
+    }
+    return st;
+}
+
+public action collect_funcs(Decl decls, FuncList acc, StructEnv structs): FuncList {
+    match (decls) {
+        case DeclNil: { return acc; }
+        case DeclCons(h, rest): {
+            FuncList next = collect_funcs(rest, acc, structs);
+            match (h) {
+                case ActionDecl(n, p, r, b, l, c): {
+                    return lower_action(n, p, b, next, structs);
+                }
+                case EnumDecl(n, v, l, c): { return next; }
+                case StructDecl(n, f, l, c): { return next; }
+                case TopStmt(s): { return next; }
+                case ParamNil: { return next; }
+                case ParamCons(ty, name, r): { return next; }
+                case FieldNil: { return next; }
+                case FieldCons(ty, n, r): { return next; }
+                case VariantNil: { return next; }
+                case VariantCons(n, p, r): { return next; }
+                case DeclNil: { return next; }
+                case DeclCons(a, b): { return next; }
+            }
+            return next;
+        }
+        case ActionDecl(n, p, r, b, l, c): { return acc; }
+        case EnumDecl(n, v, l, c): { return acc; }
+        case StructDecl(n, f, l, c): { return acc; }
+        case TopStmt(s): { return acc; }
+        case ParamNil: { return acc; }
+        case ParamCons(ty, name, r): { return acc; }
+        case FieldNil: { return acc; }
+        case FieldCons(ty, n, r): { return acc; }
+        case VariantNil: { return acc; }
+        case VariantCons(n, p, r): { return acc; }
+    }
+    return acc;
+}
+
+public action lower_program(Program prog): IrModule {
+    StructEnv structs = collect_structs(prog.decls, StructEnv.SENil);
+    FuncList funcs = collect_funcs(prog.decls, FuncList.FNil, structs);
+    EmitState st;
+    st.code = InstrList.Nil;
+    st.scope = Scope.EmptyScope;
+    st.next_local = 0;
+    st.next_label = 0;
+    st.structs = structs;
+    EmitState done = lower_decls(prog.decls, st, funcs);
+    done.code = ir_prepend(done.code, Instr.Return);
+    IrModule m;
+    m.code = ir_reverse(done.code);
+    m.funcs = funcs;
+    m.label_count = done.next_label;
+    m.local_count = done.next_local;
+    return m;
+}
+
+public action locals_get(ValList locals, int idx): int {
+    int i = 0;
+    ValList cur = locals;
+    int keep = 1;
+    while (keep == 1) {
+        match (cur) {
+            case VNil: { keep = 0; }
+            case VCons(v, rest): {
+                if (i == idx) { return v; }
+                i = i + 1;
+                cur = rest;
+            }
+        }
+    }
+    return 0;
+}
+
+public action locals_set(ValList locals, int idx, int value): ValList {
+    match (locals) {
+        case VNil: {
+            if (idx == 0) {
+                return ValList.VCons(value, ValList.VNil);
+            }
+            return ValList.VCons(0, locals_set(ValList.VNil, idx - 1, value));
+        }
+        case VCons(v, rest): {
+            if (idx == 0) {
+                return ValList.VCons(value, rest);
+            }
+            return ValList.VCons(v, locals_set(rest, idx - 1, value));
+        }
+    }
+    return locals;
+}
+
+public action stack_push(ValList st, int v): ValList {
+    return ValList.VCons(v, st);
+}
+
+public action stack_pop(ValList st): ValList {
+    match (st) {
+        case VNil: { return ValList.VNil; }
+        case VCons(v, rest): { return rest; }
+    }
+    return ValList.VNil;
+}
+
+public action stack_top(ValList st): int {
+    match (st) {
+        case VNil: { return 0; }
+        case VCons(v, rest): { return v; }
+    }
+    return 0;
+}
+
+public action str_push(StrList st, string v): StrList {
+    return StrList.SCons(v, st);
+}
+
+public action str_pop(StrList st): StrList {
+    match (st) {
+        case SNil: { return StrList.SNil; }
+        case SCons(v, rest): { return rest; }
+    }
+    return StrList.SNil;
+}
+
+public action str_top(StrList st): string {
+    match (st) {
+        case SNil: { return ""; }
+        case SCons(v, rest): { return v; }
+    }
+    return "";
+}
+
+public action find_label(InstrList code, int lab): int {
+    int i = 0;
+    InstrList cur = code;
+    int keep = 1;
+    while (keep == 1) {
+        match (cur) {
+            case Nil: { keep = 0; }
+            case Cons(ins, rest): {
+                match (ins) {
+                    case Label(n): {
+                        if (n == lab) { return i; }
+                    }
+                    case Const(v): { }
+                    case ConstStr(s): { }
+                    case Add: { }
+                    case Sub: { }
+                    case Mul: { }
+                    case Div: { }
+                    case CmpEq: { }
+                    case CmpNe: { }
+                    case CmpLt: { }
+                    case Load(x): { }
+                    case Store(x): { }
+                    case Jump(x): { }
+                    case JumpIfFalse(x): { }
+                    case Print: { }
+                    case PrintStr: { }
+                    case Pop: { }
+                    case Call(n, a): { }
+                    case MkEnum(n, a): { }
+                    case MkStruct(f): { }
+                    case GetField(f): { }
+                    case SetField(f): { }
+                    case JumpIfNotVariant(n, x): { }
+                    case GetPayload(x): { }
+                    case Return: { }
+                }
+                i = i + 1;
+                cur = rest;
+            }
+        }
+    }
+    return 0 - 1;
+}
+
+public action code_at_label(InstrList code, int lab): InstrList {
+    InstrList cur = code;
+    int keep = 1;
+    while (keep == 1) {
+        match (cur) {
+            case Nil: { keep = 0; }
+            case Cons(ins, rest): {
+                match (ins) {
+                    case Label(n): {
+                        if (n == lab) {
+                            return cur;
+                        }
+                    }
+                    case Const(v): { }
+                    case ConstStr(s): { }
+                    case Add: { }
+                    case Sub: { }
+                    case Mul: { }
+                    case Div: { }
+                    case CmpEq: { }
+                    case CmpNe: { }
+                    case CmpLt: { }
+                    case Load(x): { }
+                    case Store(x): { }
+                    case Jump(x): { }
+                    case JumpIfFalse(x): { }
+                    case Print: { }
+                    case PrintStr: { }
+                    case Pop: { }
+                    case Call(n, a): { }
+                    case MkEnum(n, a): { }
+                    case MkStruct(f): { }
+                    case GetField(f): { }
+                    case SetField(f): { }
+                    case JumpIfNotVariant(n, x): { }
+                    case GetPayload(x): { }
+                    case Return: { }
+                }
+                cur = rest;
+            }
+        }
+    }
+    return InstrList.Nil;
+}
+
+public action instr_at(InstrList code, int idx): Instr {
+    int i = 0;
+    InstrList cur = code;
+    int keep = 1;
+    while (keep == 1) {
+        match (cur) {
+            case Nil: { keep = 0; }
+            case Cons(ins, rest): {
+                if (i == idx) { return ins; }
+                i = i + 1;
+                cur = rest;
+            }
+        }
+    }
+    return Instr.Return;
+}
+
+public action find_func(FuncList funcs, string name): FuncList {
+    match (funcs) {
+        case FNil: { return FuncList.FNil; }
+        case FCons(n, arity, code, locals, rest): {
+            if (n == name) {
+                return FuncList.FCons(n, arity, code, locals, FuncList.FNil);
+            }
+            return find_func(rest, name);
+        }
+    }
+    return FuncList.FNil;
+}
+
+public action func_index_insert(FuncIndex idx, string name, int arity, InstrList code, int locals): FuncIndex {
+    match (idx) {
+        case FIEmpty: {
+            return FuncIndex.FINode(name, arity, code, locals, FuncIndex.FIEmpty, FuncIndex.FIEmpty);
+        }
+        case FINode(n, a, c, l, left, right): {
+            if (name < n) {
+                return FuncIndex.FINode(n, a, c, l, func_index_insert(left, name, arity, code, locals), right);
+            }
+            if (n < name) {
+                return FuncIndex.FINode(n, a, c, l, left, func_index_insert(right, name, arity, code, locals));
+            }
+            return FuncIndex.FINode(name, arity, code, locals, left, right);
+        }
+    }
+    return idx;
+}
+
+public action build_func_index(FuncList funcs): FuncIndex {
+    FuncIndex idx = FuncIndex.FIEmpty;
+    FuncList cur = funcs;
+    int keep = 1;
+    while (keep == 1) {
+        match (cur) {
+            case FNil: { keep = 0; }
+            case FCons(n, arity, code, locals, rest): {
+                idx = func_index_insert(idx, n, arity, code, locals);
+                cur = rest;
+            }
+        }
+    }
+    return idx;
+}
+
+public action func_index_get(FuncIndex idx, string name): FuncRef {
+    FuncRef out;
+    out.ok = false;
+    out.arity = 0;
+    out.code = InstrList.Nil;
+    out.locals = 0;
+    FuncIndex cur = idx;
+    int keep = 1;
+    while (keep == 1) {
+        match (cur) {
+            case FIEmpty: { keep = 0; }
+            case FINode(n, a, c, l, left, right): {
+                if (name == n) {
+                    out.ok = true;
+                    out.arity = a;
+                    out.code = c;
+                    out.locals = l;
+                    keep = 0;
+                } else if (name < n) {
+                    cur = left;
+                } else {
+                    cur = right;
+                }
+            }
+        }
+    }
+    return out;
+}
+
+public action label_arr_get(LabelArr arr, int idx): InstrList {
+    int i = 0;
+    LabelArr cur = arr;
+    int keep = 1;
+    while (keep == 1) {
+        match (cur) {
+            case LANil: { keep = 0; }
+            case LACons(code, rest): {
+                if (i == idx) {
+                    return code;
+                }
+                i = i + 1;
+                cur = rest;
+            }
+        }
+    }
+    return InstrList.Nil;
+}
+
+public action label_arr_set(LabelArr arr, int idx, InstrList code): LabelArr {
+    match (arr) {
+        case LANil: {
+            if (idx == 0) {
+                return LabelArr.LACons(code, LabelArr.LANil);
+            }
+            return LabelArr.LACons(InstrList.Nil, label_arr_set(LabelArr.LANil, idx - 1, code));
+        }
+        case LACons(v, rest): {
+            if (idx == 0) {
+                return LabelArr.LACons(code, rest);
+            }
+            return LabelArr.LACons(v, label_arr_set(rest, idx - 1, code));
+        }
+    }
+    return arr;
+}
+
+public action build_label_arr(InstrList code): LabelArr {
+    LabelArr arr = LabelArr.LANil;
+    InstrList cur = code;
+    int keep = 1;
+    while (keep == 1) {
+        match (cur) {
+            case Nil: { keep = 0; }
+            case Cons(ins, rest): {
+                match (ins) {
+                    case Label(n): {
+                        arr = label_arr_set(arr, n, cur);
+                    }
+                    case Const(v): { }
+                    case ConstStr(s): { }
+                    case Add: { }
+                    case Sub: { }
+                    case Mul: { }
+                    case Div: { }
+                    case CmpEq: { }
+                    case CmpNe: { }
+                    case CmpLt: { }
+                    case Load(x): { }
+                    case Store(x): { }
+                    case Jump(x): { }
+                    case JumpIfFalse(x): { }
+                    case Print: { }
+                    case PrintStr: { }
+                    case Pop: { }
+                    case Call(n, a): { }
+                    case MkEnum(n, a): { }
+                    case MkStruct(f): { }
+                    case GetField(f): { }
+                    case SetField(f): { }
+                    case JumpIfNotVariant(n, x): { }
+                    case GetPayload(x): { }
+                    case Return: { }
+                }
+                cur = rest;
+            }
+        }
+    }
+    return arr;
+}
+
+public action const_operand(Instr ins): int {
+    int first = 0;
+    match (ins) {
+        case Const(v): { first = v; }
+        case ConstStr(s): { }
+        case Add: { }
+        case Sub: { }
+        case Mul: { }
+        case Div: { }
+        case CmpEq: { }
+        case CmpNe: { }
+        case CmpLt: { }
+        case Load(x): { }
+        case Store(x): { }
+        case Label(x): { }
+        case Jump(x): { }
+        case JumpIfFalse(x): { }
+        case Print: { }
+        case PrintStr: { }
+        case Pop: { }
+        case Call(n, a): { }
+        case MkEnum(n, a): { }
+        case MkStruct(f): { }
+        case GetField(f): { }
+        case SetField(f): { }
+        case JumpIfNotVariant(n, x): { }
+        case GetPayload(x): { }
+        case Return: { }
+    }
+    int second = first;
+    match (ins) {
+        case Const(v): { second = v; }
+        case ConstStr(s): { }
+        case Add: { }
+        case Sub: { }
+        case Mul: { }
+        case Div: { }
+        case CmpEq: { }
+        case CmpNe: { }
+        case CmpLt: { }
+        case Load(x): { }
+        case Store(x): { }
+        case Label(x): { }
+        case Jump(x): { }
+        case JumpIfFalse(x): { }
+        case Print: { }
+        case PrintStr: { }
+        case Pop: { }
+        case Call(n, a): { }
+        case MkEnum(n, a): { }
+        case MkStruct(f): { }
+        case GetField(f): { }
+        case SetField(f): { }
+        case JumpIfNotVariant(n, x): { }
+        case GetPayload(x): { }
+        case Return: { }
+    }
+    return second;
+}
+
+public action run_func_code(InstrList code, ValList arg_locals, FuncIndex funcs, HeapState heap_in): FuncRun {
+    FuncRun out;
+    out.value = 0;
+    out.heap = heap_in;
+    out.did_print = false;
+    out.last_print = 0;
+    out.last_print_str = "";
+    ValList stack = ValList.VNil;
+    ValList locals = arg_locals;
+    HeapState heap = heap_in;
+    InstrList cur = code;
+    LabelArr labels = build_label_arr(code);
+    int guard = 0;
+
+    while (guard < 50000000) {
+        guard = guard + 1;
+        Instr ins = Instr.Return;
+        int took_jump = 0;
+        match (cur) {
+            case Nil: {
+                return out;
+            }
+            case Cons(head_ins, rest_code): {
+                ins = head_ins;
+                cur = rest_code;
+            }
+        }
+        match (ins) {
+            case Const(v): {
+                stack = stack_push(stack, const_operand(ins));
+                took_jump = 0;
+            }
+            case ConstStr(s): {
+                StackHeap shs = exec_const_str(stack, heap, s);
+                stack = shs.stack;
+                heap = shs.heap;
+                took_jump = 0;
+            }
+            case Add: {
+                int b = stack_top(stack);
+                stack = stack_pop(stack);
+                int a = stack_top(stack);
+                stack = stack_pop(stack);
+                if (heap_is_string(heap, a) && heap_is_string(heap, b)) {
+                    StackHeap shadd = exec_string_concat(stack, heap, a, b);
+                    stack = shadd.stack;
+                    heap = shadd.heap;
+                } else {
+                    stack = stack_push(stack, a + b);
+                }
+                took_jump = 0;
+            }
+            case Sub: {
+                int b = stack_top(stack);
+                stack = stack_pop(stack);
+                int a = stack_top(stack);
+                stack = stack_pop(stack);
+                stack = stack_push(stack, a - b);
+                took_jump = 0;
+            }
+            case Mul: {
+                int b = stack_top(stack);
+                stack = stack_pop(stack);
+                int a = stack_top(stack);
+                stack = stack_pop(stack);
+                stack = stack_push(stack, a * b);
+                took_jump = 0;
+            }
+            case Div: {
+                int b = stack_top(stack);
+                stack = stack_pop(stack);
+                int a = stack_top(stack);
+                stack = stack_pop(stack);
+                if (b == 0) {
+                    stack = stack_push(stack, 0);
+                } else {
+                    stack = stack_push(stack, a / b);
+                }
+                took_jump = 0;
+            }
+            case CmpEq: {
+                int b = stack_top(stack);
+                stack = stack_pop(stack);
+                int a = stack_top(stack);
+                stack = stack_pop(stack);
+                if (heap_is_string(heap, a) && heap_is_string(heap, b)) {
+                    if (heap_as_string(heap, a) == heap_as_string(heap, b)) {
+                        stack = stack_push(stack, 1);
+                    } else {
+                        stack = stack_push(stack, 0);
+                    }
+                } else if (a == b) {
+                    stack = stack_push(stack, 1);
+                } else {
+                    stack = stack_push(stack, 0);
+                }
+                took_jump = 0;
+            }
+            case CmpNe: {
+                int b = stack_top(stack);
+                stack = stack_pop(stack);
+                int a = stack_top(stack);
+                stack = stack_pop(stack);
+                if (heap_is_string(heap, a) && heap_is_string(heap, b)) {
+                    if (heap_as_string(heap, a) != heap_as_string(heap, b)) {
+                        stack = stack_push(stack, 1);
+                    } else {
+                        stack = stack_push(stack, 0);
+                    }
+                } else if (a != b) {
+                    stack = stack_push(stack, 1);
+                } else {
+                    stack = stack_push(stack, 0);
+                }
+                took_jump = 0;
+            }
+            case CmpLt: {
+                int b = stack_top(stack);
+                stack = stack_pop(stack);
+                int a = stack_top(stack);
+                stack = stack_pop(stack);
+                if (a < b) {
+                    stack = stack_push(stack, 1);
+                } else {
+                    stack = stack_push(stack, 0);
+                }
+                took_jump = 0;
+            }
+            case Load(id): {
+                stack = stack_push(stack, locals_get(locals, id));
+                took_jump = 0;
+            }
+            case Store(id): {
+                int v = stack_top(stack);
+                stack = stack_pop(stack);
+                locals = locals_set(locals, id, v);
+                took_jump = 0;
+            }
+            case Label(n): {
+                took_jump = 0;
+            }
+            case Jump(lab): {
+                cur = label_arr_get(labels, lab); took_jump = 1;
+            }
+            case JumpIfFalse(lab): {
+                int v = stack_top(stack);
+                stack = stack_pop(stack);
+                if (v == 0) {
+                    cur = label_arr_get(labels, lab); took_jump = 1;
+                } else {
+                    took_jump = 0;
+                }
+            }
+            case Print: {
+                int v = stack_top(stack);
+                stack = stack_pop(stack);
+                if (heap_is_string(heap, v)) {
+                    string s = heap_as_string(heap, v);
+                    print s;
+                    out.last_print_str = s;
+                } else {
+                    print v;
+                    out.last_print = v;
+                }
+                out.did_print = true;
+                took_jump = 0;
+            }
+            case PrintStr: {
+                int h = stack_top(stack);
+                stack = stack_pop(stack);
+                string s = heap_as_string(heap, h);
+                print s;
+                out.last_print_str = s;
+                out.did_print = true;
+                took_jump = 0;
+            }
+            case Pop: {
+                stack = stack_pop(stack);
+                took_jump = 0;
+            }
+            case Call(n, argc): {
+                StackHeap sh = exec_call(stack, heap, funcs, n, argc);
+                stack = sh.stack;
+                heap = sh.heap;
+                if (sh.did_print) {
+                    out.did_print = true;
+                    out.last_print = sh.last_print;
+                    out.last_print_str = sh.last_print_str;
+                }
+                took_jump = 0;
+            }
+            case MkEnum(tag, arity): {
+                StackHeap sh = exec_mk_enum(stack, heap, tag, arity);
+                stack = sh.stack;
+                heap = sh.heap;
+                took_jump = 0;
+            }
+            case MkStruct(fields): {
+                StackHeap sh = exec_mk_struct(stack, heap, fields);
+                stack = sh.stack;
+                heap = sh.heap;
+                took_jump = 0;
+            }
+            case GetField(field): {
+                StackHeap sh = exec_get_field(stack, heap, field);
+                stack = sh.stack;
+                heap = sh.heap;
+                took_jump = 0;
+            }
+            case SetField(field): {
+                StackHeap sh = exec_set_field(stack, heap, field);
+                stack = sh.stack;
+                heap = sh.heap;
+                took_jump = 0;
+            }
+            case JumpIfNotVariant(tag, lab): {
+                int top = stack_top(stack);
+                bool matched = false;
+                if (top < 0) {
+                    HeapObj obj = heap_get(heap, from_handle(top));
+                    match (obj) {
+                        case HEnum(t, payloads): {
+                            if (t == tag) {
+                                matched = true;
+                            }
+                        }
+                        case HEmpty: { }
+                        case HStruct(f, vals): { }
+                        case HString(s): { }
+                    }
+                }
+                if (!matched) {
+                    cur = label_arr_get(labels, lab); took_jump = 1;
+                } else {
+                    took_jump = 0;
+                }
+            }
+            case GetPayload(idx): {
+                int top = stack_top(stack);
+                int payload = 0;
+                if (top < 0) {
+                    HeapObj obj = heap_get(heap, from_handle(top));
+                    match (obj) {
+                        case HEnum(t, payloads): {
+                            payload = val_at(payloads, idx);
+                        }
+                        case HEmpty: { }
+                        case HStruct(f, vals): { }
+                        case HString(s): { }
+                    }
+                }
+                stack = stack_push(stack, payload);
+                took_jump = 0;
+            }
+            case Return: {
+                out.value = stack_top(stack);
+                out.heap = heap;
+                return out;
+            }
+        }
+    }
+    out.heap = heap;
+    return out;
+}
+
+public action exec_mk_enum(ValList stack, HeapState heap, string tag, int arity): StackHeap {
+    StackHeap out;
+    ValList payloads = ValList.VNil;
+    int i = 0;
+    ValList st = stack;
+    while (i < arity) {
+        int v = stack_top(st);
+        st = stack_pop(st);
+        payloads = ValList.VCons(v, payloads);
+        i = i + 1;
+    }
+    payloads = val_reverse(payloads);
+    FuncRun alloc = heap_alloc(heap, HeapObj.HEnum(tag, payloads));
+    out.stack = stack_push(st, alloc.value);
+    out.heap = alloc.heap;
+    return out;
+}
+
+public action exec_mk_struct(ValList stack, HeapState heap, string fields): StackHeap {
+    StackHeap out;
+    int n = csv_count(fields);
+    FuncRun alloc = heap_alloc(heap, HeapObj.HStruct(fields, zeros_list(n)));
+    out.stack = stack_push(stack, alloc.value);
+    out.heap = alloc.heap;
+    return out;
+}
+
+public action exec_get_field(ValList stack, HeapState heap, string field): StackHeap {
+    StackHeap out;
+    out.heap = heap;
+    int top = stack_top(stack);
+    ValList st = stack_pop(stack);
+    int val = 0;
+    if (top < 0) {
+        HeapObj obj = heap_get(heap, from_handle(top));
+        match (obj) {
+            case HStruct(fields, vals): {
+                int idx = csv_index(fields, field);
+                if (idx >= 0) {
+                    val = val_at(vals, idx);
+                }
+            }
+            case HEmpty: { }
+            case HEnum(t, payloads): { }
+            case HString(s): { }
+        }
+    }
+    out.stack = stack_push(st, val);
+    return out;
+}
+
+public action exec_set_field(ValList stack, HeapState heap, string field): StackHeap {
+    StackHeap out;
+    int value = stack_top(stack);
+    ValList st1 = stack_pop(stack);
+    int handle = stack_top(st1);
+    ValList st2 = stack_pop(st1);
+    HeapState hp = heap;
+    if (handle < 0) {
+        int idx = from_handle(handle);
+        HeapObj obj = heap_get(hp, idx);
+        match (obj) {
+            case HStruct(fields, vals): {
+                int fi = csv_index(fields, field);
+                if (fi >= 0) {
+                    hp = heap_set(hp, idx, HeapObj.HStruct(fields, val_set(vals, fi, value)));
+                }
+            }
+            case HEmpty: { }
+            case HEnum(t, payloads): { }
+            case HString(s): { }
+        }
+    }
+    out.stack = st2;
+    out.heap = hp;
+    return out;
+}
+
+public action exec_call(ValList stack, HeapState heap, FuncIndex funcs, string n, int argc): StackHeap {
+    StackHeap out;
+    out.did_print = false;
+    out.last_print = 0;
+    out.last_print_str = "";
+    ValList call_locals = ValList.VNil;
+    ValList st = stack;
+    int i = argc;
+    while (i > 0) {
+        i = i - 1;
+        int v = stack_top(st);
+        st = stack_pop(st);
+        call_locals = locals_set(call_locals, i, v);
+    }
+
+    if (n == "string.len" || n == "len") {
+        string s = heap_as_string(heap, locals_get(call_locals, 0));
+        out.stack = stack_push(st, string.len(s));
+        out.heap = heap;
+        return out;
+    }
+    if (n == "string.substr" || n == "substr") {
+        string s = heap_as_string(heap, locals_get(call_locals, 0));
+        int start = locals_get(call_locals, 1);
+        int span = 0;
+        if (argc >= 3) {
+            span = locals_get(call_locals, 2);
+        } else {
+            span = string.len(s) - start;
+        }
+        FuncRun alloc = heap_alloc(heap, HeapObj.HString(string.substr(s, start, span)));
+        out.stack = stack_push(st, alloc.value);
+        out.heap = alloc.heap;
+        return out;
+    }
+    if (n == "string.find" || n == "find") {
+        string s = heap_as_string(heap, locals_get(call_locals, 0));
+        string needle = heap_as_string(heap, locals_get(call_locals, 1));
+        out.stack = stack_push(st, string.find(s, needle));
+        out.heap = heap;
+        return out;
+    }
+    if (n == "string.strip" || n == "strip") {
+        string s = heap_as_string(heap, locals_get(call_locals, 0));
+        FuncRun alloc = heap_alloc(heap, HeapObj.HString(string.strip(s)));
+        out.stack = stack_push(st, alloc.value);
+        out.heap = alloc.heap;
+        return out;
+    }
+    if (n == "string.starts_with" || n == "starts_with") {
+        string s = heap_as_string(heap, locals_get(call_locals, 0));
+        string prefix = heap_as_string(heap, locals_get(call_locals, 1));
+        if (string.starts_with(s, prefix)) {
+            out.stack = stack_push(st, 1);
+        } else {
+            out.stack = stack_push(st, 0);
+        }
+        out.heap = heap;
+        return out;
+    }
+    if (n == "string.ends_with" || n == "ends_with") {
+        string s = heap_as_string(heap, locals_get(call_locals, 0));
+        string suffix = heap_as_string(heap, locals_get(call_locals, 1));
+        if (string.ends_with(s, suffix)) {
+            out.stack = stack_push(st, 1);
+        } else {
+            out.stack = stack_push(st, 0);
+        }
+        out.heap = heap;
+        return out;
+    }
+    if (n == "string") {
+        int v = locals_get(call_locals, 0);
+        FuncRun alloc = heap_alloc(heap, HeapObj.HString(string(v)));
+        out.stack = stack_push(st, alloc.value);
+        out.heap = alloc.heap;
+        return out;
+    }
+    if (n == "char_is_digit") {
+        string s = heap_as_string(heap, locals_get(call_locals, 0));
+        if (char_is_digit(s)) {
+            out.stack = stack_push(st, 1);
+        } else {
+            out.stack = stack_push(st, 0);
+        }
+        out.heap = heap;
+        return out;
+    }
+    if (n == "char_is_alpha") {
+        string s = heap_as_string(heap, locals_get(call_locals, 0));
+        if (char_is_alpha(s)) {
+            out.stack = stack_push(st, 1);
+        } else {
+            out.stack = stack_push(st, 0);
+        }
+        out.heap = heap;
+        return out;
+    }
+    if (n == "char_is_space") {
+        string s = heap_as_string(heap, locals_get(call_locals, 0));
+        if (char_is_space(s)) {
+            out.stack = stack_push(st, 1);
+        } else {
+            out.stack = stack_push(st, 0);
+        }
+        out.heap = heap;
+        return out;
+    }
+    if (n == "char_is_ident_start") {
+        string s = heap_as_string(heap, locals_get(call_locals, 0));
+        if (char_is_alpha(s) || s == "_") {
+            out.stack = stack_push(st, 1);
+        } else {
+            out.stack = stack_push(st, 0);
+        }
+        out.heap = heap;
+        return out;
+    }
+    if (n == "char_is_ident_part") {
+        string s = heap_as_string(heap, locals_get(call_locals, 0));
+        if (char_is_alpha(s) || char_is_digit(s) || s == "_") {
+            out.stack = stack_push(st, 1);
+        } else {
+            out.stack = stack_push(st, 0);
+        }
+        out.heap = heap;
+        return out;
+    }
+    if (n == "exit") {
+        out.stack = stack_push(st, 0);
+        out.heap = heap;
+        return out;
+    }
+    if (n == "fs.read") {
+        string p = heap_as_string(heap, locals_get(call_locals, 0));
+        FuncRun alloc = heap_alloc(heap, HeapObj.HString(fs.read(p)));
+        out.stack = stack_push(st, alloc.value);
+        out.heap = alloc.heap;
+        return out;
+    }
+    if (n == "fs.exists") {
+        string p = heap_as_string(heap, locals_get(call_locals, 0));
+        if (fs.exists(p)) {
+            out.stack = stack_push(st, 1);
+        } else {
+            out.stack = stack_push(st, 0);
+        }
+        out.heap = heap;
+        return out;
+    }
+    if (n == "path.join") {
+        string a = heap_as_string(heap, locals_get(call_locals, 0));
+        string b = heap_as_string(heap, locals_get(call_locals, 1));
+        FuncRun alloc = heap_alloc(heap, HeapObj.HString(path.join(a, b)));
+        out.stack = stack_push(st, alloc.value);
+        out.heap = alloc.heap;
+        return out;
+    }
+    if (n == "path.dirname") {
+        string p = heap_as_string(heap, locals_get(call_locals, 0));
+        FuncRun alloc = heap_alloc(heap, HeapObj.HString(path.dirname(p)));
+        out.stack = stack_push(st, alloc.value);
+        out.heap = alloc.heap;
+        return out;
+    }
+
+    FuncRef found = func_index_get(funcs, n);
+    if (!found.ok) {
+        ValList payloads = ValList.VNil;
+        int pi = argc;
+        while (pi > 0) {
+            pi = pi - 1;
+            payloads = ValList.VCons(locals_get(call_locals, pi), payloads);
+        }
+        FuncRun alloc = heap_alloc(heap, HeapObj.HEnum(dotted_tail(n), payloads));
+        out.stack = stack_push(st, alloc.value);
+        out.heap = alloc.heap;
+    } else {
+        FuncRun fr = run_func_code(found.code, call_locals, funcs, heap);
+        out.stack = stack_push(st, fr.value);
+        out.heap = fr.heap;
+        if (fr.did_print) {
+            out.did_print = true;
+            out.last_print = fr.last_print;
+            out.last_print_str = fr.last_print_str;
+        }
+    }
+    return out;
+}
+
+
+public action instr_emit(Instr ins): string {
+    match (ins) {
+        case Const(v): { return "CONST " + string(v); }
+        case ConstStr(s): { return "CONST_STR " + string(string.len(s)) + ":" + s; }
+        case Add: { return "ADD"; }
+        case Sub: { return "SUB"; }
+        case Mul: { return "MUL"; }
+        case Div: { return "DIV"; }
+        case CmpEq: { return "CMP_EQ"; }
+        case CmpNe: { return "CMP_NE"; }
+        case CmpLt: { return "CMP_LT"; }
+        case Load(id): { return "LOAD " + string(id); }
+        case Store(id): { return "STORE " + string(id); }
+        case Label(n): { return "LABEL " + string(n); }
+        case Jump(lab): { return "JUMP " + string(lab); }
+        case JumpIfFalse(lab): { return "JUMP_IF_FALSE " + string(lab); }
+        case Print: { return "PRINT"; }
+        case PrintStr: { return "PRINT_STR"; }
+        case Pop: { return "POP"; }
+        case Call(n, a): { return "CALL " + string(a) + " " + string(string.len(n)) + ":" + n; }
+        case MkEnum(n, a): { return "MK_ENUM " + string(a) + " " + string(string.len(n)) + ":" + n; }
+        case MkStruct(f): { return "MK_STRUCT " + string(string.len(f)) + ":" + f; }
+        case GetField(f): { return "GET_FIELD " + string(string.len(f)) + ":" + f; }
+        case SetField(f): { return "SET_FIELD " + string(string.len(f)) + ":" + f; }
+        case JumpIfNotVariant(n, x): { return "JUMP_IF_NOT_VARIANT " + string(x) + " " + string(string.len(n)) + ":" + n; }
+        case GetPayload(x): { return "GET_PAYLOAD " + string(x); }
+        case Return: { return "RETURN"; }
+    }
+    return "RETURN";
+}
+
+public action append_ir_code(string path, InstrList code) {
+    InstrList cur = code;
+    int keep = 1;
+    while (keep == 1) {
+        match (cur) {
+            case Nil: { keep = 0; }
+            case Cons(ins, rest): {
+                fs.append(path, instr_emit(ins) + "\n");
+                cur = rest;
+            }
+        }
+    }
+}
+
+public action write_ir_module(string path, IrModule m) {
+    fs.write(path, "# mini-ir v1\n.locals " + string(m.local_count) + "\n.labels " + string(m.label_count) + "\n.entry\n");
+    append_ir_code(path, m.code);
+    FuncList fc = m.funcs;
+    int keep = 1;
+    while (keep == 1) {
+        match (fc) {
+            case FNil: { keep = 0; }
+            case FCons(n, a, c, locs, rest): {
+                fs.append(path, ".func " + string(string.len(n)) + ":" + n + " " + string(a) + " " + string(locs) + "\n");
+                append_ir_code(path, c);
+                fc = rest;
+            }
+        }
+    }
+}
+
+public action find_pipe(string s, int start): int {
+    int i = start;
+    int len = string.len(s);
+    while (i < len) {
+        if (string.substr(s, i, 1) == "|") {
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+public action decode_mini_ir_result(string r): RunResult {
+    RunResult out;
+    out.ok = false;
+    out.did_print = false;
+    out.last_print = 0;
+    out.last_print_str = "";
+    if (string.len(r) < 2) {
+        return out;
+    }
+    if (string.substr(r, 0, 2) != "1|") {
+        return out;
+    }
+    out.ok = true;
+    int p1 = find_pipe(r, 2);
+    if (p1 < 0) {
+        return out;
+    }
+    string did = string.substr(r, 2, p1 - 2);
+    if (did == "1") {
+        out.did_print = true;
+    }
+    int p2 = find_pipe(r, p1 + 1);
+    if (p2 < 0) {
+        return out;
+    }
+    string print_s = string.substr(r, p1 + 1, p2 - p1 - 1);
+    out.last_print = int(print_s);
+    out.last_print_str = string.substr(r, p2 + 1, string.len(r) - p2 - 1);
+    return out;
+}
+
+public action run_ir(IrModule m): RunResult {
+    string path = ".mini_ir_run.tmp";
+    write_ir_module(path, m);
+    return decode_mini_ir_result(mini_ir_run_file(path));
+}
+
+public action run_ir_elan(IrModule m): RunResult {
+    RunResult out;
+    out.ok = true;
+    out.last_print = 0;
+    out.did_print = false;
+    out.last_print_str = "";
+
+    ValList stack = ValList.VNil;
+    ValList locals = ValList.VNil;
+    HeapState heap = heap_empty();
+    FuncIndex funcs = build_func_index(m.funcs);
+    InstrList cur = m.code;
+    LabelArr labels = build_label_arr(m.code);
+    int guard = 0;
+
+    while (guard < 50000000) {
+        guard = guard + 1;
+        Instr ins = Instr.Return;
+        int took_jump = 0;
+        match (cur) {
+            case Nil: {
+                out.ok = false;
+                return out;
+            }
+            case Cons(head_ins, rest_code): {
+                ins = head_ins;
+                cur = rest_code;
+            }
+        }
+        match (ins) {
+            case Const(v): {
+                stack = stack_push(stack, const_operand(ins));
+                took_jump = 0;
+            }
+            case ConstStr(s): {
+                StackHeap shs = exec_const_str(stack, heap, s);
+                stack = shs.stack;
+                heap = shs.heap;
+                took_jump = 0;
+            }
+            case Add: {
+                int b = stack_top(stack);
+                stack = stack_pop(stack);
+                int a = stack_top(stack);
+                stack = stack_pop(stack);
+                if (heap_is_string(heap, a) && heap_is_string(heap, b)) {
+                    StackHeap shadd = exec_string_concat(stack, heap, a, b);
+                    stack = shadd.stack;
+                    heap = shadd.heap;
+                } else {
+                    stack = stack_push(stack, a + b);
+                }
+                took_jump = 0;
+            }
+            case Sub: {
+                int b = stack_top(stack);
+                stack = stack_pop(stack);
+                int a = stack_top(stack);
+                stack = stack_pop(stack);
+                stack = stack_push(stack, a - b);
+                took_jump = 0;
+            }
+            case Mul: {
+                int b = stack_top(stack);
+                stack = stack_pop(stack);
+                int a = stack_top(stack);
+                stack = stack_pop(stack);
+                stack = stack_push(stack, a * b);
+                took_jump = 0;
+            }
+            case Div: {
+                int b = stack_top(stack);
+                stack = stack_pop(stack);
+                int a = stack_top(stack);
+                stack = stack_pop(stack);
+                if (b == 0) {
+                    stack = stack_push(stack, 0);
+                } else {
+                    stack = stack_push(stack, a / b);
+                }
+                took_jump = 0;
+            }
+            case CmpEq: {
+                int b = stack_top(stack);
+                stack = stack_pop(stack);
+                int a = stack_top(stack);
+                stack = stack_pop(stack);
+                if (heap_is_string(heap, a) && heap_is_string(heap, b)) {
+                    if (heap_as_string(heap, a) == heap_as_string(heap, b)) {
+                        stack = stack_push(stack, 1);
+                    } else {
+                        stack = stack_push(stack, 0);
+                    }
+                } else if (a == b) {
+                    stack = stack_push(stack, 1);
+                } else {
+                    stack = stack_push(stack, 0);
+                }
+                took_jump = 0;
+            }
+            case CmpNe: {
+                int b = stack_top(stack);
+                stack = stack_pop(stack);
+                int a = stack_top(stack);
+                stack = stack_pop(stack);
+                if (heap_is_string(heap, a) && heap_is_string(heap, b)) {
+                    if (heap_as_string(heap, a) != heap_as_string(heap, b)) {
+                        stack = stack_push(stack, 1);
+                    } else {
+                        stack = stack_push(stack, 0);
+                    }
+                } else if (a != b) {
+                    stack = stack_push(stack, 1);
+                } else {
+                    stack = stack_push(stack, 0);
+                }
+                took_jump = 0;
+            }
+            case CmpLt: {
+                int b = stack_top(stack);
+                stack = stack_pop(stack);
+                int a = stack_top(stack);
+                stack = stack_pop(stack);
+                if (a < b) {
+                    stack = stack_push(stack, 1);
+                } else {
+                    stack = stack_push(stack, 0);
+                }
+                took_jump = 0;
+            }
+            case Load(id): {
+                stack = stack_push(stack, locals_get(locals, id));
+                took_jump = 0;
+            }
+            case Store(id): {
+                int v = stack_top(stack);
+                stack = stack_pop(stack);
+                locals = locals_set(locals, id, v);
+                took_jump = 0;
+            }
+            case Label(n): {
+                took_jump = 0;
+            }
+            case Jump(lab): {
+                cur = label_arr_get(labels, lab); took_jump = 1;
+            }
+            case JumpIfFalse(lab): {
+                int v = stack_top(stack);
+                stack = stack_pop(stack);
+                if (v == 0) {
+                    cur = label_arr_get(labels, lab); took_jump = 1;
+                } else {
+                    took_jump = 0;
+                }
+            }
+            case Print: {
+                int v = stack_top(stack);
+                stack = stack_pop(stack);
+                if (heap_is_string(heap, v)) {
+                    string s = heap_as_string(heap, v);
+                    print s;
+                    out.last_print_str = s;
+                } else {
+                    print v;
+                    out.last_print = v;
+                }
+                out.did_print = true;
+                took_jump = 0;
+            }
+            case PrintStr: {
+                int h = stack_top(stack);
+                stack = stack_pop(stack);
+                string s = heap_as_string(heap, h);
+                print s;
+                out.last_print_str = s;
+                out.did_print = true;
+                took_jump = 0;
+            }
+            case Pop: {
+                stack = stack_pop(stack);
+                took_jump = 0;
+            }
+            case Call(n, argc): {
+                StackHeap sh = exec_call(stack, heap, funcs, n, argc);
+                stack = sh.stack;
+                heap = sh.heap;
+                if (sh.did_print) {
+                    out.did_print = true;
+                    out.last_print = sh.last_print;
+                    out.last_print_str = sh.last_print_str;
+                }
+                took_jump = 0;
+            }
+            case MkEnum(tag, arity): {
+                StackHeap sh = exec_mk_enum(stack, heap, tag, arity);
+                stack = sh.stack;
+                heap = sh.heap;
+                took_jump = 0;
+            }
+            case MkStruct(fields): {
+                StackHeap sh = exec_mk_struct(stack, heap, fields);
+                stack = sh.stack;
+                heap = sh.heap;
+                took_jump = 0;
+            }
+            case GetField(field): {
+                StackHeap sh = exec_get_field(stack, heap, field);
+                stack = sh.stack;
+                heap = sh.heap;
+                took_jump = 0;
+            }
+            case SetField(field): {
+                StackHeap sh = exec_set_field(stack, heap, field);
+                stack = sh.stack;
+                heap = sh.heap;
+                took_jump = 0;
+            }
+            case JumpIfNotVariant(tag, lab): {
+                int top = stack_top(stack);
+                bool matched = false;
+                if (top < 0) {
+                    HeapObj obj = heap_get(heap, from_handle(top));
+                    match (obj) {
+                        case HEnum(t, payloads): {
+                            if (t == tag) {
+                                matched = true;
+                            }
+                        }
+                        case HEmpty: { }
+                        case HStruct(f, vals): { }
+                        case HString(s): { }
+                    }
+                }
+                if (!matched) {
+                    cur = label_arr_get(labels, lab); took_jump = 1;
+                } else {
+                    took_jump = 0;
+                }
+            }
+            case GetPayload(idx): {
+                int top = stack_top(stack);
+                int payload = 0;
+                if (top < 0) {
+                    HeapObj obj = heap_get(heap, from_handle(top));
+                    match (obj) {
+                        case HEnum(t, payloads): {
+                            payload = val_at(payloads, idx);
+                        }
+                        case HEmpty: { }
+                        case HStruct(f, vals): { }
+                        case HString(s): { }
+                    }
+                }
+                stack = stack_push(stack, payload);
+                took_jump = 0;
+            }
+            case Return: {
+                return out;
+            }
+        }
+    }
+    out.ok = false;
+    return out;
+}
+
+public action instr_show(Instr ins): string {
+    match (ins) {
+        case Const(v): { return "CONST " + string(v); }
+        case ConstStr(s): { return "CONST_STR \"" + s + "\""; }
+        case Add: { return "ADD"; }
+        case Sub: { return "SUB"; }
+        case Mul: { return "MUL"; }
+        case Div: { return "DIV"; }
+        case CmpEq: { return "CMPEQ"; }
+        case CmpNe: { return "CMPNE"; }
+        case CmpLt: { return "CMPLT"; }
+        case Load(id): { return "LOAD " + string(id); }
+        case Store(id): { return "STORE " + string(id); }
+        case Label(n): { return "LABEL " + string(n); }
+        case Jump(lab): { return "JUMP " + string(lab); }
+        case JumpIfFalse(lab): { return "JUMP_IF_FALSE " + string(lab); }
+        case Print: { return "PRINT"; }
+        case PrintStr: { return "PRINT_STR"; }
+        case Pop: { return "POP"; }
+        case Call(n, a): { return "CALL " + n + "/" + string(a); }
+        case MkEnum(n, a): { return "MK_ENUM " + n + "/" + string(a); }
+        case MkStruct(f): { return "MK_STRUCT " + f; }
+        case GetField(f): { return "GET_FIELD " + f; }
+        case SetField(f): { return "SET_FIELD " + f; }
+        case JumpIfNotVariant(n, x): { return "JUMP_IF_NOT_VARIANT " + n + " -> " + string(x); }
+        case GetPayload(x): { return "GET_PAYLOAD " + string(x); }
+        case Return: { return "RETURN"; }
+    }
+    return "?";
+}
+
+public action dump_ir(IrModule m) {
+    print "--- IR locals=" + string(m.local_count) + " labels=" + string(m.label_count) + " ---";
+    InstrList cur = m.code;
+    int i = 0;
+    int keep = 1;
+    while (keep == 1) {
+        match (cur) {
+            case Nil: { keep = 0; }
+            case Cons(ins, rest): {
+                print string(i) + ": " + instr_show(ins);
+                i = i + 1;
+                cur = rest;
+            }
+        }
+    }
+    print "--- end IR ---";
+}
+
+public action codegen_and_run(Stmt program): RunResult {
+    IrModule m = lower(program);
+    return run_ir(m);
+}
+
+public action codegen_dump_and_run(Stmt program): RunResult {
+    IrModule m = lower(program);
+    dump_ir(m);
+    return run_ir(m);
+}
+
+public action codegen_program_and_run(Program prog): RunResult {
+    IrModule m = lower_program(prog);
+    dump_ir(m);
+    return run_ir(m);
+}

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <sstream>
 #include <stdexcept>
 
 namespace erelang {
@@ -69,6 +70,9 @@ Value mem_alloc(std::string_view elemType, std::size_t count) {
     block.index = 0;
     g_rawMem[id] = std::move(block);
     g_ptrs[id] = std::string(count * mem_elem_size(elemType), '\0');
+    g_freedPtrIds.erase(id);
+    g_memStats.allocs += 1;
+    g_memStats.live += 1;
     return make_handle_value(HandleKind::Ptr, static_cast<uint32_t>(id));
 }
 
@@ -76,11 +80,15 @@ void mem_free_ptr(const Value& ptr) {
     auto idOpt = ptr_id_of(ptr);
     if (!idOpt) throw std::runtime_error("free: not a pointer");
     const int id = *idOpt;
-    if (!g_rawMem.count(id) && !g_ptrs.count(id)) {
+    if (g_freedPtrIds.count(id) || (!g_rawMem.count(id) && !g_ptrs.count(id))) {
+        g_memStats.double_frees += 1;
         throw std::runtime_error("free: invalid or already freed pointer");
     }
     g_rawMem.erase(id);
     g_ptrs.erase(id);
+    g_freedPtrIds.insert(id);
+    g_memStats.frees += 1;
+    if (g_memStats.live > 0) g_memStats.live -= 1;
 }
 
 Value mem_realloc(const Value& ptr, std::size_t count) {
@@ -204,7 +212,10 @@ Value mem_deref(const Value& ptr) {
         return (*raw->cells)[raw->index];
     }
     auto it = g_ptrs.find(id);
-    if (it == g_ptrs.end()) throw std::runtime_error("dereference of freed pointer");
+    if (it == g_ptrs.end()) {
+        if (g_freedPtrIds.count(id)) g_memStats.use_after_free += 1;
+        throw std::runtime_error("dereference of freed pointer");
+    }
     if (it->second.rfind("ref:", 0) == 0) return Value::from_string(it->second);
     return value_from_legacy_string(it->second);
 }
@@ -269,6 +280,8 @@ Value mem_make_own(std::string_view elemType, Value payload) {
     st.payload = std::move(payload);
     st.alive = true;
     g_owns[id] = std::move(st);
+    g_memStats.allocs += 1;
+    g_memStats.live += 1;
     return make_handle_value(HandleKind::Own, static_cast<uint32_t>(id));
 }
 
@@ -280,6 +293,8 @@ Value mem_make_shared(std::string_view elemType, Value payload) {
     st.strong = 1;
     st.weak = 0;
     g_shareds[id] = std::move(st);
+    g_memStats.allocs += 1;
+    g_memStats.live += 1;
     return make_handle_value(HandleKind::Shared, static_cast<uint32_t>(id));
 }
 
@@ -321,6 +336,8 @@ Value mem_make_buffer(std::string_view elemType, std::size_t count) {
     st.capacity = count;
     st.data.assign(count, mem_zero_value(elemType));
     g_buffers[id] = std::move(st);
+    g_memStats.allocs += 1;
+    g_memStats.live += 1;
     return make_handle_value(HandleKind::Buffer, static_cast<uint32_t>(id));
 }
 
@@ -380,6 +397,8 @@ void mem_release(const Value& v) {
         if (it->second.alive) {
             it->second.alive = false;
             it->second.payload = Value::null_value();
+            g_memStats.frees += 1;
+            if (g_memStats.live > 0) g_memStats.live -= 1;
         }
         g_owns.erase(it);
         return;
@@ -389,6 +408,10 @@ void mem_release(const Value& v) {
         auto it = g_shareds.find(id);
         if (it == g_shareds.end()) return;
         if (it->second.strong > 0) it->second.strong -= 1;
+        if (it->second.strong == 0) {
+            g_memStats.frees += 1;
+            if (g_memStats.live > 0) g_memStats.live -= 1;
+        }
         destroy_shared_if_unused(id);
         return;
     }
@@ -406,8 +429,34 @@ void mem_release(const Value& v) {
         return;
     }
     if (value_is_handle(v, HandleKind::Buffer)) {
-        g_buffers.erase(static_cast<int>(value_handle_id(v)));
+        const int id = static_cast<int>(value_handle_id(v));
+        if (g_buffers.erase(id) > 0) {
+            g_memStats.frees += 1;
+            if (g_memStats.live > 0) g_memStats.live -= 1;
+        }
     }
+}
+
+std::uint64_t mem_live_count() {
+    return static_cast<std::uint64_t>(g_rawMem.size() + g_owns.size() + g_buffers.size()) +
+           static_cast<std::uint64_t>(std::count_if(g_shareds.begin(), g_shareds.end(),
+               [](const auto& kv) { return kv.second.strong > 0; }));
+}
+
+Value mem_stats_value() {
+    std::ostringstream oss;
+    oss << "allocs=" << g_memStats.allocs
+        << " frees=" << g_memStats.frees
+        << " live=" << mem_live_count()
+        << " double_frees=" << g_memStats.double_frees
+        << " use_after_free=" << g_memStats.use_after_free
+        << " leaks_at_reset=" << g_memStats.leaks_at_reset;
+    return Value::from_string(oss.str());
+}
+
+void mem_reset_debug_stats() {
+    g_memStats = MemDebugStats{};
+    g_freedPtrIds.clear();
 }
 
 Value mem_take_own(Value& source) {

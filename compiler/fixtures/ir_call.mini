@@ -1,0 +1,5 @@
+public action add(int a, int b): int {
+  return a + b;
+}
+print add(6, 7);
+print "hi";

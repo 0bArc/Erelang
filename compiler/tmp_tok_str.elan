@@ -1,0 +1,7 @@
+@strict
+enum Tok { Ident, Eof }
+public action main() {
+    print string(Tok.Ident);
+    print string(Tok.Eof);
+}
+run main;

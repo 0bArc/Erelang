@@ -1,0 +1,129 @@
+@strict
+
+enum Tok {
+    Ident,
+    Keyword,
+    Number,
+    String,
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    EqEq,
+    BangEq,
+    Bang,
+    Lt,
+    AndAnd,
+    OrOr,
+    Assign,
+    LParen,
+    RParen,
+    LBrace,
+    RBrace,
+    Comma,
+    Colon,
+    Dot,
+    At,
+    Hash,
+    Semi,
+    Eof,
+    Error
+}
+
+struct Token {
+    Tok kind;
+    string text;
+    int start;
+    int end;
+    int line;
+    int column;
+}
+
+enum TokenList {
+    Nil,
+    Cons(Token, TokenList)
+}
+
+public action tok_name(Tok k): string {
+    match (k) {
+        case Ident: { return "Ident"; }
+        case Keyword: { return "Keyword"; }
+        case Number: { return "Number"; }
+        case String: { return "String"; }
+        case Plus: { return "Plus"; }
+        case Minus: { return "Minus"; }
+        case Star: { return "Star"; }
+        case Slash: { return "Slash"; }
+        case EqEq: { return "EqEq"; }
+        case BangEq: { return "BangEq"; }
+        case Bang: { return "Bang"; }
+        case Lt: { return "Lt"; }
+        case AndAnd: { return "AndAnd"; }
+        case OrOr: { return "OrOr"; }
+        case Assign: { return "Assign"; }
+        case LParen: { return "LParen"; }
+        case RParen: { return "RParen"; }
+        case LBrace: { return "LBrace"; }
+        case RBrace: { return "RBrace"; }
+        case Comma: { return "Comma"; }
+        case Colon: { return "Colon"; }
+        case Dot: { return "Dot"; }
+        case At: { return "At"; }
+        case Hash: { return "Hash"; }
+        case Semi: { return "Semi"; }
+        case Eof: { return "Eof"; }
+        case Error: { return "Error"; }
+    }
+    return "?";
+}
+
+public action make_token(Tok kind, string text, int start, int end, int line, int column): Token {
+    Token t;
+    t.kind = kind;
+    t.text = text;
+    t.start = start;
+    t.end = end;
+    t.line = line;
+    t.column = column;
+    return t;
+}
+
+public action token_list_reverse(TokenList xs): TokenList {
+    TokenList acc = TokenList.Nil;
+    TokenList cur = xs;
+    int keep = 1;
+    while (keep == 1) {
+        match (cur) {
+            case Nil: {
+                keep = 0;
+            }
+            case Cons(t, rest): {
+                acc = TokenList.Cons(t, acc);
+                cur = rest;
+            }
+        }
+    }
+    return acc;
+}
+
+public action is_keyword_text(string s): bool {
+    if (s == "public") { return true; }
+    if (s == "action") { return true; }
+    if (s == "return") { return true; }
+    if (s == "enum") { return true; }
+    if (s == "struct") { return true; }
+    if (s == "match") { return true; }
+    if (s == "case") { return true; }
+    if (s == "if") { return true; }
+    if (s == "else") { return true; }
+    if (s == "while") { return true; }
+    if (s == "true") { return true; }
+    if (s == "false") { return true; }
+    if (s == "int") { return true; }
+    if (s == "string") { return true; }
+    if (s == "bool") { return true; }
+    if (s == "let") { return true; }
+    if (s == "print") { return true; }
+    if (s == "run") { return true; }
+    return false;
+}

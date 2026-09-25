@@ -185,7 +185,31 @@ public action map_opt<T, U>(value: Option<T>, transform: action(T) -> U): Option
 
 Pass a `lambda(...)` (or any `func:` handle). See `tests/types/function_types.elan`.
 
-Generic *function values* (storing `id<T>` itself in a variable without applying type args) are not supported — keep calling `id<int>(x)` at the use site. See `tests/types/generic_function_value_neg.elan`.
+Generic *function values* work: store a generic action in a variable (`any f = id;` or an `action(...)` type) and call it; type args are inferred at the call site when needed. See `tests/types/generic_function_value.elan`.
+
+## Associated types
+
+Traits may declare associated types; implementing types bind them with a type alias `Type::Name = ...` (same `::` type grammar as namespaces). Call sites may name `T::Item` when `T` is constrained.
+
+```elan
+trait Container {
+    type Item;
+    get(i: int): Item;
+}
+
+struct Box {
+    int value;
+    action get(i: int): int { return self.value; }
+}
+
+type Box::Item = int;
+
+public action first<T: Container>(t: T): T::Item {
+    return t.get(0);
+}
+```
+
+Missing bindings diagnose `TC164`; return mismatches against the associated type diagnose `TC165`.
 
 ## Closure capture
 

@@ -29,6 +29,7 @@
 #include "erelang/optimizer.hpp"
 #include "erelang/symboltable.hpp"
 #include "erelang/modules.hpp"
+#include "erelang/packages.hpp"
 #include "erelang/version.hpp"
 #include "erelang/plugins.hpp"
 #include "erelang/features/ast_serializer.hpp"
@@ -107,6 +108,8 @@ static void print_help() {
                  "  erelang --build-native <path\\to\\file.(elan|ere)> [--out <path\\to\\out.exe>]\n"
                  "  erelang --fmt <path\\to\\file.(elan|ere)> [--check]\n"
                  "  erelang --docgen <path\\to\\file.(elan|ere)> [--out <path\\to\\out.md>]\n"
+                 "  erelang --lock [package.elan] [--registry <dir>]\n"
+                 "  erelang --fetch [package.elan] [--registry <dir>] [--cache <dir>]\n"
                  "  erelang --make-debug [--output <path\\to\\debug.exe>]\n"
                  "\n"
                  "Description:\n"
@@ -127,6 +130,8 @@ static void print_help() {
                  "  --check <file> typechecks only (no run); exits non-zero on errors.\n"
                  "  --dap enables line-protocol debugger (stdin/stderr !dap); use with ERELANG_DEBUG=1.\n"
                  "  --docgen emits a markdown API list from public actions/structs/enums.\n"
+                 "  --lock resolves package.elan depends against a local registry and writes erelang.lock.\n"
+                 "  --fetch copies locked packages into .erelang/pkgs (or --cache).\n"
                  "  --make-debug builds a debugger exe from examples/lib/debugger.elan.\n"
                  "  --debug when running loads the debug driver and prefers debug_main.\n";
 }
@@ -291,6 +296,14 @@ static std::optional<std::string> resolve_import_local(const std::string& basePa
         return static_cast<char>(std::tolower(ch));
     });
     if (loweredImp.rfind("builtin/", 0) == 0 || loweredImp.rfind("builtin:", 0) == 0) {
+        return std::nullopt;
+    }
+    if (loweredImp.rfind("pkg/", 0) == 0 || loweredImp.rfind("package/", 0) == 0) {
+        const char* envReg = std::getenv("ERELANG_REGISTRY");
+        fs::path regHint = envReg && *envReg ? fs::path(envReg) : fs::path{};
+        if (auto pkg = erelang::resolve_package_import(normalizedImp, ap, regHint)) {
+            return pkg->string();
+        }
         return std::nullopt;
     }
 
@@ -1880,6 +1893,67 @@ int main(int argc, char** argv) {
         }
     }
 #endif
+
+    if (!args.empty() && (args[0] == "--lock" || args[0] == "--fetch")) {
+        const bool doFetch = args[0] == "--fetch";
+        fs::path packageFile = "package.elan";
+        fs::path registry;
+        fs::path cache;
+        const char* envReg = std::getenv("ERELANG_REGISTRY");
+        if (envReg && *envReg) registry = envReg;
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i] == "--registry" && i + 1 < args.size()) {
+                registry = args[++i];
+                continue;
+            }
+            if (args[i] == "--cache" && i + 1 < args.size()) {
+                cache = args[++i];
+                continue;
+            }
+            if (!args[i].empty() && args[i][0] != '-' && packageFile == "package.elan") {
+                packageFile = args[i];
+            }
+        }
+        if (registry.empty()) {
+            std::cerr << "--lock/--fetch require --registry <dir> or ERELANG_REGISTRY\n";
+            return 1;
+        }
+        if (!fs::exists(packageFile)) {
+            std::cerr << "package.elan not found: " << packageFile.string() << "\n";
+            return 1;
+        }
+        try {
+            auto man = erelang::load_package_manifest(packageFile);
+            if (!man) {
+                std::cerr << "Invalid package.elan (need namespace pkg { global string name/version... })\n";
+                return 1;
+            }
+            auto lock = erelang::resolve_and_lock(*man, registry);
+            const fs::path lockPath = packageFile.parent_path().empty()
+                ? fs::path("erelang.lock")
+                : packageFile.parent_path() / "erelang.lock";
+            if (!erelang::write_package_lock(lockPath, lock)) {
+                std::cerr << "Failed to write " << lockPath.string() << "\n";
+                return 1;
+            }
+            std::cout << "Wrote " << lockPath.string() << " (" << lock.entries.size() << " packages)\n";
+            if (doFetch) {
+                if (cache.empty()) {
+                    cache = (packageFile.parent_path().empty() ? fs::current_path() : packageFile.parent_path())
+                        / ".erelang" / "pkgs";
+                }
+                if (!erelang::fetch_locked_packages(lock, registry, cache)) {
+                    std::cerr << "Fetch failed\n";
+                    return 1;
+                }
+                std::cout << "Fetched into " << cache.string() << "\n";
+            }
+            return 0;
+        } catch (const std::exception& ex) {
+            std::cerr << "Package error: " << ex.what() << "\n";
+            return 1;
+        }
+    }
 
     if (!args.empty() && args[0] == "--check") {
         if (args.size() < 2) {

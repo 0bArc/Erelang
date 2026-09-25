@@ -80,9 +80,12 @@ std::optional<std::string> resolve_builtin_module_method(
 
         if (path_is(normalizedPath, {"builtin/fs", "builtin/erefs", "std/fs"})) {
             if (methodName == "read") return std::string("read_text");
+            if (methodName == "read_text") return std::string("read_text");
             if (methodName == "write") return std::string("write_text");
+            if (methodName == "write_text") return std::string("write_text");
             if (methodName == "append") return std::string("append_text");
             if (methodName == "exists") return std::string("file_exists");
+            if (methodName == "file_exists") return std::string("file_exists");
             if (methodName == "is_dir") return std::string("is_dir");
             if (methodName == "is_file") return std::string("is_file");
             if (methodName == "mkdir") return std::string("mkdirs");
@@ -114,12 +117,24 @@ std::optional<std::string> resolve_builtin_module_method(
             if (methodName == "flush") return std::string("file_flush");
         }
 
+        if (path_is(normalizedPath, {"builtin/log", "std/log"})) {
+            if (methodName == "set_level") return std::string("log_set_level");
+            if (methodName == "to_file") return std::string("log_to_file");
+            if (methodName == "write") return std::string("log_write");
+            if (methodName == "debug") return std::string("log_debug");
+            if (methodName == "info") return std::string("log_info");
+            if (methodName == "warn") return std::string("log_warn");
+            if (methodName == "error") return std::string("log_error");
+            if (methodName.rfind("log_", 0) == 0) return methodName;
+        }
+
         if (path_is(normalizedPath, {"builtin/path", "builtin/erepath", "std/path"})) {
             if (methodName == "join") return std::string("path_join");
             if (methodName == "parent" || methodName == "dirname") return std::string("path_dirname");
             if (methodName == "name" || methodName == "basename") return std::string("path_basename");
             if (methodName == "ext") return std::string("path_ext");
             if (methodName == "exists") return std::string("file_exists");
+            if (methodName == "file_exists") return std::string("file_exists");
         }
 
         if (path_is(normalizedPath, {"builtin/regex"})) {
@@ -190,8 +205,10 @@ std::optional<std::string> resolve_builtin_module_method(
             if (methodName == "get_resp") return std::string("http_get_resp");
             if (methodName == "create_server") return std::string("http_create_server");
             if (methodName == "create_server_tls") return std::string("http_create_server_tls");
+            if (methodName == "udp_bind" || methodName == "udp") return std::string("udp_bind");
             if (methodName.rfind("http_", 0) == 0 || methodName.rfind("network.", 0) == 0 ||
-                methodName == "hls_download_best" || methodName == "url_encode") {
+                methodName == "hls_download_best" || methodName == "url_encode" ||
+                methodName == "udp_bind") {
                 return methodName;
             }
         }
@@ -330,9 +347,12 @@ void bind_builtin_module_aliases(const Program& program, ValueMap& vars) {
 
         if (path_is(normalizedPath, {"builtin/fs", "builtin/erefs", "std/fs"})) {
             bind_alias(alias, "read", "read_text");
+            bind_alias(alias, "read_text", "read_text");
             bind_alias(alias, "write", "write_text");
+            bind_alias(alias, "write_text", "write_text");
             bind_alias(alias, "append", "append_text");
             bind_alias(alias, "exists", "file_exists");
+            bind_alias(alias, "file_exists", "file_exists");
             bind_alias(alias, "is_dir", "is_dir");
             bind_alias(alias, "is_file", "is_file");
             bind_alias(alias, "mkdir", "mkdirs");
@@ -363,6 +383,16 @@ void bind_builtin_module_aliases(const Program& program, ValueMap& vars) {
             bind_alias(alias, "flush", "file_flush");
         }
 
+        if (path_is(normalizedPath, {"builtin/log", "std/log"})) {
+            bind_alias(alias, "set_level", "log_set_level");
+            bind_alias(alias, "to_file", "log_to_file");
+            bind_alias(alias, "write", "log_write");
+            bind_alias(alias, "debug", "log_debug");
+            bind_alias(alias, "info", "log_info");
+            bind_alias(alias, "warn", "log_warn");
+            bind_alias(alias, "error", "log_error");
+        }
+
         if (path_is(normalizedPath, {"builtin/path", "builtin/erepath", "std/path"})) {
             bind_alias(alias, "join", "path_join");
             bind_alias(alias, "parent", "path_dirname");
@@ -371,6 +401,7 @@ void bind_builtin_module_aliases(const Program& program, ValueMap& vars) {
             bind_alias(alias, "basename", "path_basename");
             bind_alias(alias, "ext", "path_ext");
             bind_alias(alias, "exists", "file_exists");
+            bind_alias(alias, "file_exists", "file_exists");
         }
 
         if (path_is(normalizedPath, {"builtin/regex"})) {
@@ -445,13 +476,15 @@ void bind_builtin_module_aliases(const Program& program, ValueMap& vars) {
             bind_alias(alias, "get_resp", "http_get_resp");
             bind_alias(alias, "create_server", "http_create_server");
             bind_alias(alias, "create_server_tls", "http_create_server_tls");
+            bind_alias(alias, "udp_bind", "udp_bind");
+            bind_alias(alias, "udp", "udp_bind");
             bind_same(alias, {
                 "http_get", "http_get_auth", "http_post", "http_post_auth",
                 "http_put", "http_put_auth", "http_patch", "http_patch_auth", "http_delete", "http_delete_auth",
                 "http_head",
                 "http_status", "http_download",
                 "hls_download_best", "url_encode", "json_encode", "json_decode", "http_get_resp",
-                "http_create_server", "http_create_server_tls",
+                "http_create_server", "http_create_server_tls", "udp_bind",
                 "network.ip.flush", "network.ip.release", "network.ip.renew", "network.ip.registerdns",
             });
         }

@@ -1,0 +1,282 @@
+=== fixtures/happy.mini ===
+--- IR locals=2 labels=4 ---
+0: CONST 1
+1: CONST 2
+2: CONST 3
+3: MUL
+4: ADD
+5: STORE 0
+6: CONST 0
+7: STORE 1
+8: LABEL 0
+9: LOAD 1
+10: CONST 3
+11: CMPLT
+12: JUMP_IF_FALSE 1
+13: LOAD 1
+14: CONST 1
+15: ADD
+16: STORE 1
+17: LOAD 1
+18: POP
+19: JUMP 0
+20: LABEL 1
+21: LOAD 0
+22: CONST 10
+23: CMPLT
+24: JUMP_IF_FALSE 2
+25: LOAD 0
+26: LOAD 1
+27: ADD
+28: STORE 0
+29: LOAD 0
+30: POP
+31: JUMP 3
+32: LABEL 2
+33: CONST 0
+34: STORE 0
+35: LOAD 0
+36: POP
+37: LABEL 3
+38: LOAD 0
+39: PRINT
+40: RETURN
+--- end IR ---
+10
+result: 10 (ok)
+=== fixtures/lex_error.mini ===
+error: unexpected character '$'
+  --> fixtures/lex_error.mini:1:11
+=== fixtures/parse_error.mini ===
+error: expected expression
+  --> fixtures/parse_error.mini:1:14
+=== fixtures/type_error.mini ===
+error: type mismatch: arithmetic needs int
+  --> fixtures/type_error.mini:2:9
+=== fixtures/ir_prec.mini ===
+--- IR locals=0 labels=0 ---
+0: CONST 1
+1: CONST 2
+2: CONST 3
+3: MUL
+4: ADD
+5: PRINT
+6: CONST 1
+7: CONST 2
+8: ADD
+9: CONST 3
+10: MUL
+11: PRINT
+12: RETURN
+--- end IR ---
+7
+9
+result: 9 (ok)
+=== fixtures/ir_while.mini ===
+--- IR locals=2 labels=2 ---
+0: CONST 0
+1: STORE 0
+2: CONST 1
+3: STORE 1
+4: LABEL 0
+5: LOAD 1
+6: CONST 5
+7: CMPLT
+8: JUMP_IF_FALSE 1
+9: LOAD 0
+10: LOAD 1
+11: ADD
+12: STORE 0
+13: LOAD 0
+14: POP
+15: LOAD 1
+16: CONST 1
+17: ADD
+18: STORE 1
+19: LOAD 1
+20: POP
+21: JUMP 0
+22: LABEL 1
+23: LOAD 0
+24: PRINT
+25: RETURN
+--- end IR ---
+10
+result: 10 (ok)
+=== fixtures/ir_else.mini ===
+--- IR locals=1 labels=2 ---
+0: CONST 5
+1: STORE 0
+2: LOAD 0
+3: CONST 3
+4: CMPLT
+5: JUMP_IF_FALSE 0
+6: CONST 1
+7: PRINT
+8: JUMP 1
+9: LABEL 0
+10: CONST 2
+11: PRINT
+12: LABEL 1
+13: RETURN
+--- end IR ---
+2
+result: 2 (ok)
+=== fixtures/ir_arith.mini ===
+--- IR locals=2 labels=0 ---
+0: CONST 20
+1: CONST 8
+2: CONST 2
+3: DIV
+4: SUB
+5: STORE 0
+6: LOAD 0
+7: CONST 3
+8: SUB
+9: STORE 1
+10: LOAD 1
+11: PRINT
+12: RETURN
+--- end IR ---
+13
+result: 13 (ok)
+=== fixtures/ir_call.mini ===
+--- IR locals=0 labels=0 ---
+0: CONST 6
+1: CONST 7
+2: CALL add/2
+3: PRINT
+4: CONST_STR "hi"
+5: PRINT_STR
+6: RETURN
+--- end IR ---
+13
+hi
+result: 13 (ok)
+=== fixtures/ir_match.mini ===
+--- IR locals=4 labels=6 ---
+0: MK_STRUCT x,y
+1: STORE 0
+2: LOAD 0
+3: CONST 3
+4: SET_FIELD x
+5: LOAD 0
+6: CONST 4
+7: SET_FIELD y
+8: CONST 0
+9: STORE 1
+10: CONST 10
+11: CALL Blue/1
+12: JUMP_IF_NOT_VARIANT Red -> 1
+13: POP
+14: CONST 1
+15: STORE 1
+16: LOAD 1
+17: POP
+18: JUMP 0
+19: LABEL 1
+20: JUMP_IF_NOT_VARIANT Blue -> 2
+21: GET_PAYLOAD 0
+22: STORE 2
+23: POP
+24: LOAD 2
+25: LOAD 0
+26: GET_FIELD x
+27: ADD
+28: STORE 1
+29: LOAD 1
+30: POP
+31: JUMP 0
+32: LABEL 2
+33: POP
+34: LABEL 0
+35: MK_ENUM Red/0
+36: JUMP_IF_NOT_VARIANT Red -> 4
+37: POP
+38: LOAD 1
+39: LOAD 0
+40: GET_FIELD y
+41: ADD
+42: STORE 1
+43: LOAD 1
+44: POP
+45: JUMP 3
+46: LABEL 4
+47: JUMP_IF_NOT_VARIANT Blue -> 5
+48: GET_PAYLOAD 0
+49: STORE 3
+50: POP
+51: LOAD 1
+52: LOAD 3
+53: ADD
+54: STORE 1
+55: LOAD 1
+56: POP
+57: JUMP 3
+58: LABEL 5
+59: POP
+60: LABEL 3
+61: LOAD 1
+62: PRINT
+63: RETURN
+--- end IR ---
+17
+result: 17 (ok)
+=== fixtures/ir_string.mini ===
+--- IR locals=5 labels=5 ---
+0: MK_STRUCT x,y
+1: STORE 0
+2: LOAD 0
+3: CONST 3
+4: SET_FIELD x
+5: CONST_STR "ok"
+6: STORE 1
+7: LOAD 1
+8: CONST 0
+9: CONST 1
+10: CALL string.substr/3
+11: STORE 2
+12: LOAD 1
+13: CALL string.len/1
+14: STORE 3
+15: CONST 10
+16: CALL Blue/1
+17: JUMP_IF_NOT_VARIANT Red -> 1
+18: POP
+19: CONST 0
+20: STORE 3
+21: LOAD 3
+22: POP
+23: JUMP 0
+24: LABEL 1
+25: JUMP_IF_NOT_VARIANT Blue -> 2
+26: GET_PAYLOAD 0
+27: STORE 4
+28: POP
+29: LOAD 3
+30: LOAD 4
+31: ADD
+32: LOAD 0
+33: GET_FIELD x
+34: ADD
+35: STORE 3
+36: LOAD 3
+37: POP
+38: JUMP 0
+39: LABEL 2
+40: POP
+41: LABEL 0
+42: LOAD 1
+43: CONST_STR "o"
+44: CALL string.starts_with/2
+45: JUMP_IF_FALSE 3
+46: LOAD 3
+47: LOAD 2
+48: CALL string.len/1
+49: ADD
+50: STORE 3
+51: LOAD 3
+52: POP
+53: JUMP 4
+54: LABEL 3
+55: L

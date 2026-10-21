@@ -197,7 +197,7 @@ std::string __erelang_builtin_monitor_dispatch(Runtime* rt, const std::string& n
         int listId = g_nextListId++;
         g_lists[listId] = {};
         for (auto& kv : g_monitors) {
-            g_lists[listId].push_back(std::string("monitor:") + std::to_string(kv.first));
+            g_lists[listId].push_back(Value::from_string(std::string("monitor:") + std::to_string(kv.first)));
         }
         return std::string("list:") + std::to_string(listId);
     }

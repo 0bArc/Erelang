@@ -109,8 +109,8 @@ Runtime values are string-backed; numeric operators parse operands as numbers.
 | `weak<T>` | `weak(s)` | Non-owning; `.get()` → Option |
 | `buffer<T>` | `buffer<u8>(64)` | Owned contiguous buffer |
 | `struct:Name` | - | User-defined struct |
-| `list:T` | `[1, 2, 3]` | Typed list |
-| `map:K,V` | `{"a": 1}` | Typed dictionary |
+| `Array<T>` | `Array<int> a = [1, 2, 3];` | Typed list; `Array<int> a {6};` fixes the length |
+| `Map<K, V>` | `Map<string, int> m = {"a": 1};` | Typed dictionary; `{N}` reserves capacity |
 
 Type constructors for conversion:
 ```elan

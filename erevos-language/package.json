@@ -3,7 +3,7 @@
   "displayName": "Erelang Language",
   "publisher": "localdev",
   "description": "LSP, DAP debugger, and syntax highlighting for Erelang (.elan)",
-  "version": "0.0.34",
+  "version": "0.0.36",
   "engines": {
     "vscode": "^1.85.0"
   },

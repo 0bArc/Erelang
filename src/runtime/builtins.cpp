@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
@@ -55,35 +56,43 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
             std::cerr << "[warn] deprecated builtin '" << builtin << "' (prefer " << replacement << ")\n";
         }
     };
-    if (nameStr == "bitcast") nameStr = "bit_cast";
-    if (nameStr == "fopen") nameStr = "file_open";
-    if (nameStr == "fclose") nameStr = "file_close";
-    if (nameStr == "fread") nameStr = "file_read";
-    if (nameStr == "fwrite") nameStr = "file_write";
-    if (nameStr == "fseek") nameStr = "file_seek";
-    if (nameStr == "ftell") nameStr = "file_tell";
-    if (nameStr == "fflush") nameStr = "file_flush";
-    if (nameStr == "string_buffer_new") nameStr = "strbuf_new";
-    if (nameStr == "string_buffer_append") nameStr = "strbuf_append";
-    if (nameStr == "string_buffer_clear") nameStr = "strbuf_clear";
-    if (nameStr == "string_buffer_len") nameStr = "strbuf_len";
-    if (nameStr == "string_buffer_to_string") nameStr = "strbuf_to_string";
-    if (nameStr == "string_buffer_free") nameStr = "strbuf_free";
-    if (nameStr == "string_buffer_reserve") nameStr = "strbuf_reserve";
-    if (nameStr == "hashmap_new") nameStr = "dict_new";
-    if (nameStr == "hashmap_set") nameStr = "dict_set";
-    if (nameStr == "hashmap_put") nameStr = "dict_set";
-    if (nameStr == "hashmap_get") nameStr = "dict_get";
-    if (nameStr == "hashmap_has") nameStr = "dict_has";
-    if (nameStr == "hashmap_contains") nameStr = "dict_has";
-    if (nameStr == "hashmap_get_or") nameStr = "dict_get_or";
-    if (nameStr == "hashmap_get_or_default") nameStr = "dict_get_or";
-    if (nameStr == "hashmap_remove") nameStr = "dict_remove";
-    if (nameStr == "hashmap_clear") nameStr = "dict_clear";
-    if (nameStr == "hashmap_size") nameStr = "dict_size";
-    if (nameStr == "hashmap_keys") nameStr = "dict_keys";
-    if (nameStr == "hashmap_values") nameStr = "dict_values";
-    if (nameStr == "hashmap_merge") nameStr = "dict_merge";
+    // Legacy spellings -> canonical builtin names (one hash lookup instead of 33 compares).
+    static const std::unordered_map<std::string_view, std::string_view> kBuiltinRenames = {
+        {"bitcast", "bit_cast"},
+        {"fopen", "file_open"},
+        {"fclose", "file_close"},
+        {"fread", "file_read"},
+        {"fs.write", "write_text"},
+        {"fs.append", "append_text"},
+        {"fs.read", "read_text"},
+        {"fs.exists", "file_exists"},
+        {"fwrite", "file_write"},
+        {"fseek", "file_seek"},
+        {"ftell", "file_tell"},
+        {"fflush", "file_flush"},
+        {"string_buffer_new", "strbuf_new"},
+        {"string_buffer_append", "strbuf_append"},
+        {"string_buffer_clear", "strbuf_clear"},
+        {"string_buffer_len", "strbuf_len"},
+        {"string_buffer_to_string", "strbuf_to_string"},
+        {"string_buffer_free", "strbuf_free"},
+        {"string_buffer_reserve", "strbuf_reserve"},
+        {"hashmap_new", "dict_new"},
+        {"hashmap_set", "dict_set"},
+        {"hashmap_put", "dict_set"},
+        {"hashmap_get", "dict_get"},
+        {"hashmap_has", "dict_has"},
+        {"hashmap_contains", "dict_has"},
+        {"hashmap_get_or", "dict_get_or"},
+        {"hashmap_get_or_default", "dict_get_or"},
+        {"hashmap_remove", "dict_remove"},
+        {"hashmap_clear", "dict_clear"},
+        {"hashmap_size", "dict_size"},
+        {"hashmap_keys", "dict_keys"},
+        {"hashmap_values", "dict_values"},
+        {"hashmap_merge", "dict_merge"},
+    };
+    if (auto rn = kBuiltinRenames.find(nameStr); rn != kBuiltinRenames.end()) nameStr = std::string(rn->second);
     // Check both local and global vars for alias binding
     if (auto aliasIt = env.vars.find(nameStr); aliasIt != env.vars.end()) {
         const std::string& aliasTarget = aliasIt->second;
@@ -133,7 +142,6 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
             }
             ExecContext actCtx;
             Env calleeEnv;
-            for (const auto& kv : globalVars_) calleeEnv.vars[kv.first] = kv.second;
             // bind args
             for (size_t i=0;i<sa->params.size() && i<args.size(); ++i) {
                 const std::string paramName = sa->params[i].name;
@@ -153,6 +161,9 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
             return actCtx.returned ? actCtx.returnValue : std::string();
         }
     }
+    // Compare as string_view: checks length first, so the long chain below rejects
+    // non-matching names cheaply. nameStr is final from here on.
+    const std::string_view nv = nameStr;
     // Deterministic scaffolding
     static bool s_deterministic = false;
     static uint64_t s_seed = 0;
@@ -175,14 +186,170 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
     };
     
     // Builtins to control deterministic virtual time
-    if (nameStr == "advance_time" && s_deterministic) {
+    if (nv == "advance_time" && s_deterministic) {
         uint64_t delta = (uint64_t)to_int(eval_string(*args[0], env));
         s_timeVirtual += delta; return std::to_string((long long)s_timeVirtual);
     }
-    if ((nameStr == "now_ms" || nameStr == "time.now_ms") && s_deterministic) {
+    if ((nv == "now_ms" || nv == "time.now_ms") && s_deterministic) {
         return std::to_string((long long)s_timeVirtual);
     }
-    if (nameStr == "plugin_core" || nameStr == "plugin.core") {
+    if (nv == "mini_lex_buffer") {
+        const std::string source = argS(0);
+        Value kinds = mem_make_buffer("Tok", 0);
+        Value texts = mem_make_buffer("string", 0);
+        Value starts = mem_make_buffer("int", 0);
+        Value ends = mem_make_buffer("int", 0);
+        Value lines = mem_make_buffer("int", 0);
+        Value columns = mem_make_buffer("int", 0);
+
+        auto emit = [&](std::string kind, std::string text, int start, int end, int line, int column) {
+            (void)mem_buffer_method(kinds, "push", {Value::from_string(std::move(kind))});
+            (void)mem_buffer_method(texts, "push", {Value::from_string(std::move(text))});
+            (void)mem_buffer_method(starts, "push", {Value::from_int(start)});
+            (void)mem_buffer_method(ends, "push", {Value::from_int(end)});
+            (void)mem_buffer_method(lines, "push", {Value::from_int(line)});
+            (void)mem_buffer_method(columns, "push", {Value::from_int(column)});
+        };
+        auto is_alpha = [](char ch) {
+            const unsigned char c = static_cast<unsigned char>(ch);
+            return std::isalpha(c) || ch == '_';
+        };
+        auto is_digit = [](char ch) {
+            return std::isdigit(static_cast<unsigned char>(ch));
+        };
+        auto is_space = [](char ch) {
+            return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
+        };
+        auto is_keyword = [](const std::string& text) {
+            static const std::unordered_set<std::string> keywords = {
+                "public", "action", "return", "enum", "struct", "match", "case",
+                "if", "else", "while", "true", "false", "int", "string",
+                "bool", "let", "print", "run"
+            };
+            return keywords.count(text) != 0;
+        };
+        auto esc = [](char ch) -> std::string {
+            if (ch == 'n') return "\n";
+            if (ch == 't') return "\t";
+            if (ch == 'r') return "\r";
+            if (ch == '\\') return "\\";
+            if (ch == '"') return "\"";
+            return std::string(1, ch);
+        };
+
+        int i = 0;
+        int line = 1;
+        int col = 1;
+        const int n = static_cast<int>(source.size());
+        while (i < n) {
+            const char c = source[static_cast<size_t>(i)];
+            if (c == '#' && col == 1 && i + 8 <= n && source.compare(static_cast<size_t>(i), 8, "#include") == 0) {
+                while (i < n && source[static_cast<size_t>(i)] != '\n') { ++i; ++col; }
+            } else if (is_space(c)) {
+                if (c == '\n') { ++line; col = 1; } else { ++col; }
+                ++i;
+            } else if (c == '/' && i + 1 < n && source[static_cast<size_t>(i + 1)] == '/') {
+                i += 2;
+                col += 2;
+                while (i < n && source[static_cast<size_t>(i)] != '\n') { ++i; ++col; }
+            } else if (c == '/' && i + 1 < n && source[static_cast<size_t>(i + 1)] == '*') {
+                i += 2;
+                col += 2;
+                while (i + 1 < n && !(source[static_cast<size_t>(i)] == '*' && source[static_cast<size_t>(i + 1)] == '/')) {
+                    if (source[static_cast<size_t>(i)] == '\n') { ++line; col = 1; } else { ++col; }
+                    ++i;
+                }
+                if (i + 1 < n) { i += 2; col += 2; }
+            } else if (is_alpha(c)) {
+                const int start = i;
+                const int startCol = col;
+                ++i;
+                ++col;
+                while (i < n && (is_alpha(source[static_cast<size_t>(i)]) || is_digit(source[static_cast<size_t>(i)]))) { ++i; ++col; }
+                std::string text = source.substr(static_cast<size_t>(start), static_cast<size_t>(i - start));
+                emit(is_keyword(text) ? "Keyword" : "Ident", text, start, i, line, startCol);
+            } else if (is_digit(c)) {
+                const int start = i;
+                const int startCol = col;
+                ++i;
+                ++col;
+                while (i < n && is_digit(source[static_cast<size_t>(i)])) { ++i; ++col; }
+                emit("Number", source.substr(static_cast<size_t>(start), static_cast<size_t>(i - start)), start, i, line, startCol);
+            } else if (c == '"') {
+                const int start = i;
+                const int startLine = line;
+                const int startCol = col;
+                ++i;
+                ++col;
+                std::string text;
+                while (i < n && source[static_cast<size_t>(i)] != '"') {
+                    const char d = source[static_cast<size_t>(i)];
+                    if (d == '\\' && i + 1 < n) {
+                        text += esc(source[static_cast<size_t>(i + 1)]);
+                        i += 2;
+                        col += 2;
+                    } else {
+                        text.push_back(d);
+                        ++i;
+                        if (d == '\n') { ++line; col = 1; } else { ++col; }
+                    }
+                }
+                if (i < n && source[static_cast<size_t>(i)] == '"') {
+                    ++i;
+                    ++col;
+                    emit("String", text, start, i, startLine, startCol);
+                } else {
+                    emit("Error", text, start, i, startLine, startCol);
+                }
+            } else {
+                const int start = i;
+                const int startCol = col;
+                std::string kind;
+                std::string text(1, c);
+                if (c == '=' && i + 1 < n && source[static_cast<size_t>(i + 1)] == '=') { kind = "EqEq"; text = "=="; i += 2; col += 2; }
+                else if (c == '!' && i + 1 < n && source[static_cast<size_t>(i + 1)] == '=') { kind = "BangEq"; text = "!="; i += 2; col += 2; }
+                else if (c == '&' && i + 1 < n && source[static_cast<size_t>(i + 1)] == '&') { kind = "AndAnd"; text = "&&"; i += 2; col += 2; }
+                else if (c == '|' && i + 1 < n && source[static_cast<size_t>(i + 1)] == '|') { kind = "OrOr"; text = "||"; i += 2; col += 2; }
+                else {
+                    switch (c) {
+                        case '=': kind = "Assign"; break;
+                        case '!': kind = "Bang"; break;
+                        case '<': kind = "Lt"; break;
+                        case '>': kind = "Lt"; break;
+                        case '+': kind = "Plus"; break;
+                        case '-': kind = "Minus"; break;
+                        case '*': kind = "Star"; break;
+                        case '/': kind = "Slash"; break;
+                        case '(': kind = "LParen"; break;
+                        case ')': kind = "RParen"; break;
+                        case '{': kind = "LBrace"; break;
+                        case '}': kind = "RBrace"; break;
+                        case ';': kind = "Semi"; break;
+                        case ',': kind = "Comma"; break;
+                        case ':': kind = "Colon"; break;
+                        case '.': kind = "Dot"; break;
+                        case '@': kind = "At"; break;
+                        case '#': kind = "Hash"; break;
+                        default: kind = "Error"; break;
+                    }
+                    ++i;
+                    ++col;
+                }
+                emit(std::move(kind), text, start, i, line, startCol);
+            }
+        }
+        emit("Eof", "", n, n, line, col);
+        return encode_enum_variant("Buffer", {
+            to_display_string(kinds),
+            to_display_string(texts),
+            to_display_string(starts),
+            to_display_string(ends),
+            to_display_string(lines),
+            to_display_string(columns),
+            "0"
+        });
+    }
+    if (nv == "plugin_core" || nv == "plugin.core") {
         if (args.size() < 2) {
             return {};
         }
@@ -236,7 +403,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return lookup(fileName, targetKey);
     }
-    if (nameStr == "plugin_core_files" || nameStr == "plugin.core_files") {
+    if (nv == "plugin_core_files" || nv == "plugin.core_files") {
         if (args.empty()) {
             return {};
         }
@@ -256,7 +423,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return {};
     }
-    if (nameStr == "plugin_core_keys" || nameStr == "plugin.core_keys") {
+    if (nv == "plugin_core_keys" || nv == "plugin.core_keys") {
         if (args.size() < 2) {
             return {};
         }
@@ -282,39 +449,39 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         return {};
     }
     // List/Dict built-ins (cross-platform)
-    if (nameStr == "language_name" || nameStr == "lang.name") {
+    if (nv == "language_name" || nv == "lang.name") {
         return std::string("erelang / Erelang");
     }
-    if (nameStr == "language_version" || nameStr == "lang.version") {
+    if (nv == "language_version" || nv == "lang.version") {
         return std::string(erelang::BuildInfo::version());
     }
-    if (nameStr == "language_about" || nameStr == "lang.about") {
+    if (nv == "language_about" || nv == "lang.about") {
         return std::string("Erelang interpreter for .elan programs.\n");
     }
-    if (nameStr == "language_limitations" || nameStr == "lang.limitations") {
+    if (nv == "language_limitations" || nv == "lang.limitations") {
         return std::string("Windows-first CLI runtime. No GUI. Most I/O is import-gated.\n");
     }
     // Conversion and type-check helpers
-    if (nameStr == "toint" || nameStr == "int") {
+    if (nv == "toint" || nv == "int") {
         return std::to_string((long long)to_int(argS(0)));
     }
-    if (nameStr == "toInt") {
+    if (nv == "toInt") {
         return std::to_string((long long)to_int(argS(0)));
     }
-    if (nameStr == "tofloat" || nameStr == "float") {
+    if (nv == "tofloat" || nv == "float") {
         double v = to_double(argS(0));
         std::ostringstream ss; ss << v; return ss.str();
     }
-    if (nameStr == "tostr" || nameStr == "toString" || nameStr == "string") {
+    if (nv == "tostr" || nv == "toString" || nv == "string") {
         return argS(0);
     }
-    if (nameStr == "tobool" || nameStr == "bool") {
+    if (nv == "tobool" || nv == "bool") {
         return is_truthy(argS(0)) ? std::string("true") : std::string("false");
     }
     // Type-check methods
-    if (nameStr == "int.is") { return is_int_string(argS(0)) ? "true" : "false"; }
-    if (nameStr == "string.is") { return argS(0).empty() ? "false" : "true"; }
-    if (nameStr == "float.is") { return is_float_string(argS(0)) ? "true" : "false"; }
+    if (nv == "int.is") { return is_int_string(argS(0)) ? "true" : "false"; }
+    if (nv == "string.is") { return argS(0).empty() ? "false" : "true"; }
+    if (nv == "float.is") { return is_float_string(argS(0)) ? "true" : "false"; }
     auto normalize_type_name = [](std::string typeName) {
         std::string out;
         out.reserve(typeName.size());
@@ -363,11 +530,11 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         if (t == "float") return 4;
         return 8;
     };
-    if (nameStr == "__builtin_typeof" || nameStr == "__builtin_decltype") {
+    if (nv == "__builtin_typeof" || nv == "__builtin_decltype") {
         if (args.empty()) return "unknown";
         return infer_runtime_type_value(argV(0));
     }
-    if (nameStr == "__builtin_sizeof") {
+    if (nv == "__builtin_sizeof") {
         if (args.empty()) return "0";
         std::string typeName;
         if (std::holds_alternative<ExprString>(args[0]->node)) {
@@ -377,7 +544,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return std::to_string(size_of_type(typeName));
     }
-    if (nameStr == "__builtin_alignof") {
+    if (nv == "__builtin_alignof") {
         if (args.empty()) return "1";
         std::string typeName;
         if (std::holds_alternative<ExprString>(args[0]->node)) {
@@ -387,7 +554,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return std::to_string(align_of_type(typeName));
     }
-    if (nameStr == "__builtin_offsetof") {
+    if (nv == "__builtin_offsetof") {
         if (args.size() < 2) return "0";
         const std::string typeName = argS(0);
         const std::string fieldName = argS(1);
@@ -413,7 +580,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return "0";
     }
-    if (nameStr == "__builtin_is_base_of") {
+    if (nv == "__builtin_is_base_of") {
         if (args.size() < 2 || !currentProgram_) return "false";
         const std::string baseType = argS(0);
         const std::string derivedType = argS(1);
@@ -428,7 +595,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return "false";
     }
-    if (nameStr == "dynamic_cast") {
+    if (nv == "dynamic_cast") {
         if (args.size() < 2) return {};
         const std::string targetType = argS(0);
         std::string sourceName = argS(1);
@@ -456,7 +623,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return {};
     }
-    if (nameStr == "reinterpret_cast") {
+    if (nv == "reinterpret_cast") {
         if (args.size() < 2) return {};
         std::string targetType = argS(0);
         std::string value = argS(1);
@@ -490,7 +657,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return value;
     }
-    if (nameStr == "bit_cast") {
+    if (nv == "bit_cast") {
         if (args.size() < 2) return {};
         std::string targetType = argS(0);
         std::string value = argS(1);
@@ -562,12 +729,12 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return value;
     }
-    if (nameStr == "ptr_new" || nameStr == "make_unique" || nameStr == "make_shared") {
+    if (nv == "ptr_new" || nv == "make_unique" || nv == "make_shared") {
         const int id = g_nextPtrId++;
         g_ptrs[id] = argS(0);
         return format_pointer_handle(id);
     }
-    if (nameStr == "malloc") {
+    if (nv == "malloc") {
         const int id = g_nextPtrId++;
         const std::string sizeOrValue = argS(0);
         if (is_int_string(sizeOrValue)) {
@@ -578,7 +745,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return format_pointer_handle(id);
     }
-    if (nameStr == "ptr_get") {
+    if (nv == "ptr_get") {
         const std::string handle = argS(0);
         auto idOpt = parse_pointer_handle(handle);
         if (!idOpt.has_value()) return {};
@@ -593,7 +760,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return it->second;
     }
-    if (nameStr == "ptr_set") {
+    if (nv == "ptr_set") {
         const std::string handle = argS(0);
         auto idOpt = parse_pointer_handle(handle);
         if (!idOpt.has_value()) return {};
@@ -612,7 +779,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         it->second = argS(1);
         return {};
     }
-    if (nameStr == "memcpy") {
+    if (nv == "memcpy") {
         const std::string dst = argS(0);
         const std::string src = argS(1);
         auto dstId = parse_pointer_handle(dst);
@@ -639,7 +806,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return {};
     }
-    if (nameStr == "realloc") {
+    if (nv == "realloc") {
         const std::string handle = argS(0);
         auto idOpt = parse_pointer_handle(handle);
         if (!idOpt.has_value()) return {};
@@ -649,7 +816,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         it->second.resize(static_cast<std::size_t>(n), '\0');
         return format_pointer_handle(*idOpt);
     }
-    if (nameStr == "memset") {
+    if (nv == "memset") {
         const std::string handle = argS(0);
         auto idOpt = parse_pointer_handle(handle);
         if (!idOpt.has_value()) return {};
@@ -668,7 +835,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         std::fill_n(it->second.begin(), count, static_cast<char>(fillByte));
         return {};
     }
-    if (nameStr == "ptr_free" || nameStr == "unique_reset" || nameStr == "shared_reset") {
+    if (nv == "ptr_free" || nv == "unique_reset" || nv == "shared_reset") {
         const std::string handle = argS(0);
         auto idOpt = parse_pointer_handle(handle);
         if (!idOpt.has_value()) return {};
@@ -676,7 +843,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         g_ptrs.erase(id);
         return {};
     }
-    if (nameStr == "free") {
+    if (nv == "free") {
         const std::string handle = argS(0);
         if (auto idOpt = parse_pointer_handle(handle); idOpt.has_value()) {
             const int id = *idOpt;
@@ -684,14 +851,14 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return {};
     }
-    if (nameStr == "ptr_valid") {
+    if (nv == "ptr_valid") {
         const std::string handle = argS(0);
         auto idOpt = parse_pointer_handle(handle);
         if (!idOpt.has_value()) return "false";
         const int id = *idOpt;
         return g_ptrs.count(id) ? "true" : "false";
     }
-    if (nameStr == "to_json" || nameStr == "json.encode") {
+    if (nv == "to_json" || nv == "json.encode") {
         if (args.empty()) return "null";
         const Value valueV = argV(0);
         const std::string value = to_display_string(valueV);
@@ -727,24 +894,24 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return std::string("\"") + features::json_escape(value) + "\"";
     }
-    if (nameStr == "from_json" || nameStr == "json.decode") {
+    if (nv == "from_json" || nv == "json.decode") {
         if (args.empty()) return {};
         return features::from_json_object_to_dict_handle(argS(0));
     }
-    if (nameStr == "string.lstrip") {
+    if (nv == "string.lstrip") {
         std::string s = argS(0);
         size_t i = 0;
         while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i])) != 0) ++i;
         return s.substr(i);
     }
-    if (nameStr == "string.rstrip") {
+    if (nv == "string.rstrip") {
         std::string s = argS(0);
         if (s.empty()) return s;
         size_t j = s.size();
         while (j > 0 && std::isspace(static_cast<unsigned char>(s[j - 1])) != 0) --j;
         return s.substr(0, j);
     }
-    if (nameStr == "string.strip") {
+    if (nv == "string.strip") {
         std::string s = argS(0);
         size_t i = 0;
         while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i])) != 0) ++i;
@@ -752,36 +919,36 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         while (j > i && std::isspace(static_cast<unsigned char>(s[j - 1])) != 0) --j;
         return s.substr(i, j - i);
     }
-    if (nameStr == "string.lower") {
+    if (nv == "string.lower") {
         std::string s = argS(0);
         for (auto& ch : s) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
         return s;
     }
-    if (nameStr == "string.upper") {
+    if (nv == "string.upper") {
         std::string s = argS(0);
         for (auto& ch : s) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
         return s;
     }
-    if (nameStr == "string.starts_with") {
+    if (nv == "string.starts_with") {
         std::string s = argS(0);
         std::string prefix = argS(1);
         if (prefix.size() > s.size()) return std::string("false");
         return s.compare(0, prefix.size(), prefix) == 0 ? std::string("true") : std::string("false");
     }
-    if (nameStr == "string.ends_with") {
+    if (nv == "string.ends_with") {
         std::string s = argS(0);
         std::string suffix = argS(1);
         if (suffix.size() > s.size()) return std::string("false");
         return s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0 ? std::string("true") : std::string("false");
     }
-    if (nameStr == "string.find") {
+    if (nv == "string.find") {
         std::string s = argS(0);
         std::string needle = argS(1);
         const auto pos = s.find(needle);
         if (pos == std::string::npos) return std::string("-1");
         return std::to_string(static_cast<int>(pos));
     }
-    if (nameStr == "string.substr") {
+    if (nv == "string.substr") {
         std::string s = argS(0);
         int start = to_int(argS(1));
         if (start < 0) start = 0;
@@ -793,42 +960,42 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return s.substr(static_cast<size_t>(start));
     }
-    if (nameStr == "string.len") {
+    if (nv == "string.len") {
         return std::to_string(static_cast<int>(argS(0).size()));
     }
-    if (nameStr == "is_int") {
+    if (nv == "is_int") {
         return is_int_string(argS(0)) ? std::string("true") : std::string("false");
     }
-    if (nameStr == "is_float") {
+    if (nv == "is_float") {
         return is_float_string(argS(0)) ? std::string("true") : std::string("false");
     }
-    if (nameStr == "is_str") {
+    if (nv == "is_str") {
         // Everything is a string at runtime; consider non-empty as true
         return argS(0).empty() ? std::string("false") : std::string("true");
     }
-    if (nameStr == "args_count") {
+    if (nv == "args_count") {
     return std::to_string((int)s_cliArgs.size());
     }
-    if (nameStr == "args_get") {
+    if (nv == "args_get") {
     int idx = to_int(argS(0));
     if (idx >= 0 && idx < (int)s_cliArgs.size()) return s_cliArgs[idx];
     return {};
     }
-    if (nameStr == "os.args") {
+    if (nv == "os.args") {
         int id = g_nextListId++;
         g_lists[id] = {};
-        for (const auto& a : s_cliArgs) g_lists[id].push_back(a);
+        for (const auto& a : s_cliArgs) g_lists[id].push_back(value_from_legacy_string(a));
         return std::string("list:") + std::to_string(id);
     }
-    if (nameStr == "os.args_count") {
+    if (nv == "os.args_count") {
         return std::to_string((int)s_cliArgs.size());
     }
-    if (nameStr == "os.args_get") {
+    if (nv == "os.args_get") {
         int idx = to_int(argS(0));
         if (idx >= 0 && idx < (int)s_cliArgs.size()) return s_cliArgs[idx];
         return {};
     }
-    if (nameStr == "exec") {
+    if (nv == "exec") {
     // Execute arbitrary command (shell). Return exit code as string.
     std::string cmd = argS(0);
 #ifdef _WIN32
@@ -836,20 +1003,20 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
 #else
     std::string full = cmd;
 #endif
-    int code = std::system(full.c_str());
+    std::cout.flush(); int code = std::system(full.c_str());
     return std::to_string(code);
     }
-        if (nameStr == "os.exec") {
+        if (nv == "os.exec") {
         std::string cmd = argS(0);
     #ifdef _WIN32
         std::string full = std::string("cmd /c ") + cmd;
     #else
         std::string full = cmd;
     #endif
-        int code = std::system(full.c_str());
+        std::cout.flush(); int code = std::system(full.c_str());
         return std::to_string(code);
         }
-        if (nameStr == "spawn") {
+        if (nv == "spawn") {
         std::string cmd = argS(0);
     #ifdef _WIN32
         STARTUPINFOA si{};
@@ -877,7 +1044,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         return "1";
     #endif
         }
-        if (nameStr == "os.spawn") {
+        if (nv == "os.spawn") {
         std::string cmd = argS(0);
     #ifdef _WIN32
         STARTUPINFOA si{};
@@ -905,17 +1072,17 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         return "1";
     #endif
         }
-        if (nameStr == "exit") {
+        if (nv == "exit") {
         int code = (int)to_int(argS(0));
         std::exit(code);
         }
-    if (nameStr == "mini_ir_run" || nameStr == "mini_ir.run") {
+    if (nv == "mini_ir_run" || nv == "mini_ir.run") {
         return erelang::mini_ir::encode_result(erelang::mini_ir::run_text(argS(0)));
     }
-    if (nameStr == "mini_ir_run_file" || nameStr == "mini_ir.run_file") {
+    if (nv == "mini_ir_run_file" || nv == "mini_ir.run_file") {
         return erelang::mini_ir::encode_result(erelang::mini_ir::run_file(fsPath(0).string()));
     }
-    if (nameStr == "run_file") {
+    if (nv == "run_file") {
     // Run a file with default OS association (like double-click). No output capture; returns empty.
     std::string fp = argS(0);
 #ifdef _WIN32
@@ -923,25 +1090,25 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
 #endif
     return {};
     }
-    if (nameStr == "run_bat") {
+    if (nv == "run_bat") {
     std::string bat = argS(0);
 #ifdef _WIN32
     std::string full = std::string("cmd /c \"") + bat + "\"";
-    std::system(full.c_str());
+    std::cout.flush(); std::system(full.c_str());
 #endif
     return {};
     }
-    if (nameStr == "read_line" || nameStr == "io.read_line") {
+    if (nv == "read_line" || nv == "io.read_line") {
         std::string s; std::getline(std::cin, s); return s;
     }
-    if (nameStr == "stdin_read" || nameStr == "io.stdin") {
+    if (nv == "stdin_read" || nv == "io.stdin") {
         std::string s; std::getline(std::cin, s); return s;
     }
-    if (nameStr == "stderr_print" || nameStr == "io.stderr") {
+    if (nv == "stderr_print" || nv == "io.stderr") {
         std::cerr << argS(0) << "\n";
         return {};
     }
-    if (nameStr == "input") {
+    if (nv == "input") {
         if (!args.empty()) {
             std::string msg = argS(0);
             std::cout << msg;
@@ -951,29 +1118,29 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         std::getline(std::cin, s);
         return s;
     }
-    if (nameStr == "prompt" || nameStr == "io.prompt" || nameStr == "io.input") {
+    if (nv == "prompt" || nv == "io.prompt" || nv == "io.input") {
         std::string msg = argS(0); std::cout << msg; std::cout.flush(); std::string s; std::getline(std::cin, s); return s;
     }
     // Filesystem utilities (relative paths resolve against entry script directory)
-    if (nameStr == "read_text") {
+    if (nv == "read_text") {
         std::ifstream in(fsPath(0), std::ios::binary);
         if (!in) return {};
         std::ostringstream ss; ss << in.rdbuf();
         return ss.str();
     }
-    if (nameStr == "write_text") {
+    if (nv == "write_text") {
         std::ofstream out(fsPath(0), std::ios::binary);
         if (!out) return {};
         out << argS(1);
         return {};
     }
-    if (nameStr == "append_text") {
+    if (nv == "append_text") {
         std::ofstream out(fsPath(0), std::ios::binary | std::ios::app);
         if (!out) return {};
         out << argS(1);
         return {};
     }
-    if (nameStr == "file_open") {
+    if (nv == "file_open") {
         std::string mode = args.size() >= 2 ? argS(1) : std::string("r+");
         if (mode.empty()) mode = "r+";
         std::ios::openmode openMode = std::ios::binary;
@@ -999,7 +1166,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         g_fileBufs[id] = FileBufState{};
         return std::string("file:") + std::to_string(id);
     }
-    if (nameStr == "file_close") {
+    if (nv == "file_close") {
         const std::string handle = argS(0);
         if (handle.rfind("file:", 0) != 0) return "false";
         const int id = to_int(handle.substr(5));
@@ -1017,7 +1184,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         g_fileBufs.erase(id);
         return "true";
     }
-    if (nameStr == "file_buffer") {
+    if (nv == "file_buffer") {
         const std::string handle = argS(0);
         if (handle.rfind("file:", 0) != 0) return "false";
         const int id = to_int(handle.substr(5));
@@ -1039,7 +1206,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         buf.readPos = 0;
         return "true";
     }
-    if (nameStr == "file_read") {
+    if (nv == "file_read") {
         const std::string handle = argS(0);
         if (handle.rfind("file:", 0) != 0) return {};
         const int id = to_int(handle.substr(5));
@@ -1094,7 +1261,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return out;
     }
-    if (nameStr == "file_write") {
+    if (nv == "file_write") {
         const std::string handle = argS(0);
         if (handle.rfind("file:", 0) != 0) return "0";
         const int id = to_int(handle.substr(5));
@@ -1116,7 +1283,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return std::to_string(static_cast<long long>(data.size()));
     }
-    if (nameStr == "file_seek") {
+    if (nv == "file_seek") {
         const std::string handle = argS(0);
         if (handle.rfind("file:", 0) != 0) return "false";
         const int id = to_int(handle.substr(5));
@@ -1141,7 +1308,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         stream.seekp(static_cast<std::streamoff>(offset), dir);
         return stream.fail() ? "false" : "true";
     }
-    if (nameStr == "file_tell") {
+    if (nv == "file_tell") {
         const std::string handle = argS(0);
         if (handle.rfind("file:", 0) != 0) return "-1";
         const int id = to_int(handle.substr(5));
@@ -1159,7 +1326,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return std::to_string(adj);
     }
-    if (nameStr == "file_flush") {
+    if (nv == "file_flush") {
         const std::string handle = argS(0);
         if (handle.rfind("file:", 0) != 0) return "false";
         const int id = to_int(handle.substr(5));
@@ -1210,59 +1377,59 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
             }
             return {};
         };
-        if (nameStr == "log_set_level") {
+        if (nv == "log_set_level") {
             g_logLevel = level_rank(argS(0));
             return "true";
         }
-        if (nameStr == "log_to_file") {
+        if (nv == "log_to_file") {
             g_logFilePath = argS(0);
             return "true";
         }
-        if (nameStr == "log_write") {
+        if (nv == "log_write") {
             return emit_log(level_rank(argS(0)), argS(1));
         }
-        if (nameStr == "log_debug") return emit_log(0, argS(0));
-        if (nameStr == "log_info") return emit_log(1, argS(0));
-        if (nameStr == "log_warn") return emit_log(2, argS(0));
-        if (nameStr == "log_error") return emit_log(3, argS(0));
+        if (nv == "log_debug") return emit_log(0, argS(0));
+        if (nv == "log_info") return emit_log(1, argS(0));
+        if (nv == "log_warn") return emit_log(2, argS(0));
+        if (nv == "log_error") return emit_log(3, argS(0));
     }
 
-    if (nameStr == "file_exists") {
+    if (nv == "file_exists") {
         std::error_code ec;
         return std::filesystem::exists(fsPath(0), ec) && !ec ? std::string("true") : std::string("false");
     }
-    if (nameStr == "is_dir") {
+    if (nv == "is_dir") {
         std::error_code ec;
         return std::filesystem::is_directory(fsPath(0), ec) && !ec ? std::string("true") : std::string("false");
     }
-    if (nameStr == "is_file") {
+    if (nv == "is_file") {
         std::error_code ec;
         return std::filesystem::is_regular_file(fsPath(0), ec) && !ec ? std::string("true") : std::string("false");
     }
-    if (nameStr == "file_size") {
+    if (nv == "file_size") {
         std::error_code ec;
         auto size = std::filesystem::file_size(fsPath(0), ec);
         if (ec) return "-1";
         return std::to_string(static_cast<long long>(size));
     }
-    if (nameStr == "mkdirs") {
+    if (nv == "mkdirs") {
         std::error_code ec; std::filesystem::create_directories(fsPath(0), ec); return {};
     }
-    if (nameStr == "copy_file") {
+    if (nv == "copy_file") {
         std::error_code ec; bool ok = std::filesystem::copy_file(fsPath(0), fsPath(1), std::filesystem::copy_options::overwrite_existing, ec);
         return ok && !ec ? std::string("true") : std::string("false");
     }
-    if (nameStr == "move_file") {
+    if (nv == "move_file") {
         std::error_code ec; std::filesystem::rename(fsPath(0), fsPath(1), ec);
         return !ec ? std::string("true") : std::string("false");
     }
-    if (nameStr == "delete_file") {
+    if (nv == "delete_file") {
         std::error_code ec; std::filesystem::remove(fsPath(0), ec);
         return !ec ? std::string("true") : std::string("false");
     }
-    if (nameStr == "list_files" || nameStr == "list_dirs" || nameStr == "list_regular_files") {
-        const bool dirsOnly = (nameStr == "list_dirs");
-        const bool filesOnly = (nameStr == "list_regular_files");
+    if (nv == "list_files" || nv == "list_dirs" || nv == "list_regular_files") {
+        const bool dirsOnly = (nv == "list_dirs");
+        const bool filesOnly = (nv == "list_regular_files");
         const auto root = fsPath(0);
         std::error_code ec;
         if (!std::filesystem::is_directory(root, ec) || ec) {
@@ -1278,18 +1445,18 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
             } else if (filesOnly) {
                 if (!e.is_regular_file(tec) || tec) continue;
             }
-            g_lists[id].push_back(e.path().string());
+            g_lists[id].push_back(value_from_legacy_string(e.path().string()));
         }
-        std::sort(g_lists[id].begin(), g_lists[id].end());
+        sort_list_by_display(g_lists[id]);
         return std::string("list:") + std::to_string(id);
     }
-    if (nameStr == "load_elan") {
+    if (nv == "load_elan") {
         return load_elan_file(fsPath(0));
     }
-    if (nameStr == "load_elan_dir") {
+    if (nv == "load_elan_dir") {
         return load_elan_directory(fsPath(0));
     }
-    if (nameStr == "call_action") {
+    if (nv == "call_action") {
         std::vector<std::string> callArgs;
         callArgs.reserve(args.size() > 0 ? args.size() - 1 : 0);
         for (size_t i = 1; i < args.size(); ++i) {
@@ -1297,13 +1464,13 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return call_action_by_name(argS(0), callArgs);
     }
-    if (nameStr == "cwd") {
+    if (nv == "cwd") {
         return std::filesystem::current_path().string();
     }
-    if (nameStr == "chdir") {
+    if (nv == "chdir") {
         std::error_code ec; std::filesystem::current_path(fsPath(0), ec); return !ec ? std::string("true") : std::string("false");
     }
-    if (nameStr == "path_join") {
+    if (nv == "path_join") {
         if (args.empty()) return {};
         std::filesystem::path p = argS(0);
         for (std::size_t i = 1; i < args.size(); ++i) {
@@ -1311,16 +1478,16 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return p.string();
     }
-    if (nameStr == "path_dirname") {
+    if (nv == "path_dirname") {
         return std::filesystem::path(argS(0)).parent_path().string();
     }
-    if (nameStr == "path_basename") {
+    if (nv == "path_basename") {
         return std::filesystem::path(argS(0)).filename().string();
     }
-    if (nameStr == "path_ext") {
+    if (nv == "path_ext") {
         return std::filesystem::path(argS(0)).extension().string();
     }
-    if (nameStr == "file_mtime") {
+    if (nv == "file_mtime") {
         std::error_code ec;
         auto ft = std::filesystem::last_write_time(fsPath(0), ec);
         if (ec) return "0";
@@ -1329,21 +1496,21 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         auto sec = std::chrono::duration_cast<std::chrono::seconds>(sctp.time_since_epoch()).count();
         return std::to_string((long long)sec);
     }
-    if (nameStr == "color.red") return std::string("\x1b[31m") + argS(0) + "\x1b[0m";
-    if (nameStr == "color.green") return std::string("\x1b[32m") + argS(0) + "\x1b[0m";
-    if (nameStr == "color.yellow") return std::string("\x1b[33m") + argS(0) + "\x1b[0m";
-    if (nameStr == "color.blue") return std::string("\x1b[34m") + argS(0) + "\x1b[0m";
-    if (nameStr == "color.magenta") return std::string("\x1b[35m") + argS(0) + "\x1b[0m";
-    if (nameStr == "color.cyan") return std::string("\x1b[36m") + argS(0) + "\x1b[0m";
-    if (nameStr == "color.bold") return std::string("\x1b[1m") + argS(0) + "\x1b[0m";
-    if (nameStr == "color.reset") return std::string("\x1b[0m");
+    if (nv == "color.red") return std::string("\x1b[31m") + argS(0) + "\x1b[0m";
+    if (nv == "color.green") return std::string("\x1b[32m") + argS(0) + "\x1b[0m";
+    if (nv == "color.yellow") return std::string("\x1b[33m") + argS(0) + "\x1b[0m";
+    if (nv == "color.blue") return std::string("\x1b[34m") + argS(0) + "\x1b[0m";
+    if (nv == "color.magenta") return std::string("\x1b[35m") + argS(0) + "\x1b[0m";
+    if (nv == "color.cyan") return std::string("\x1b[36m") + argS(0) + "\x1b[0m";
+    if (nv == "color.bold") return std::string("\x1b[1m") + argS(0) + "\x1b[0m";
+    if (nv == "color.reset") return std::string("\x1b[0m");
     // Debug builtins (no-ops when compiled with --release)
-    if (nameStr == "debug.section") {
+    if (nv == "debug.section") {
         std::string label = argS(0);
         std::cerr << "\n=== " << label << " ===\n";
         return {};
     }
-    if (nameStr == "debug.assert") {
+    if (nv == "debug.assert") {
         std::string cond = argS(0);
         std::string msg = args.size() >= 2 ? argS(1) : "assertion failed";
         if (!is_truthy(cond)) {
@@ -1352,7 +1519,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return cond;
     }
-    if (nameStr == "debug.assert_eq") {
+    if (nv == "debug.assert_eq") {
         std::string a = argS(0);
         std::string b = argS(1);
         std::string msg = args.size() >= 3 ? argS(2) : "assert_eq failed: " + a + " != " + b;
@@ -1362,35 +1529,35 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return "true";
     }
-    if (nameStr == "debug.log") {
+    if (nv == "debug.log") {
         std::cerr << "[LOG] " << argS(0) << "\n";
         return {};
     }
-    if (nameStr == "debug.trace") {
+    if (nv == "debug.trace") {
         std::string cat = argS(0);
         std::string msg = args.size() >= 2 ? argS(1) : std::string();
         std::cerr << "[TRACE][" << cat << "] " << msg << "\n";
         return {};
     }
-    if (nameStr == "debug.warn") {
+    if (nv == "debug.warn") {
         std::cerr << "\x1b[33m[WARN]\x1b[0m " << argS(0) << "\n";
         return {};
     }
-    if (nameStr == "debug.error") {
+    if (nv == "debug.error") {
         std::cerr << "\x1b[31m[ERROR]\x1b[0m " << argS(0) << "\n";
         return {};
     }
-    if (nameStr == "debug.ok") {
+    if (nv == "debug.ok") {
         std::cerr << "\x1b[32m[OK]\x1b[0m " << argS(0) << "\n";
         return {};
     }
-    if (nameStr == "debug.dump") {
+    if (nv == "debug.dump") {
         for (const auto& kv : env.vars) {
             std::cerr << "  " << kv.first << " = " << kv.second << "\n";
         }
         return {};
     }
-    if (nameStr == "debug.dump_var") {
+    if (nv == "debug.dump_var") {
         std::string varName = argS(0);
         auto it = env.vars.find(varName);
         if (it != env.vars.end()) {
@@ -1400,11 +1567,11 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return {};
     }
-    if (nameStr == "debug.stack") {
+    if (nv == "debug.stack") {
         std::cerr << "[STACK] (depth: N/A)\n";
         return {};
     }
-    if (nameStr == "debug.heap") {
+    if (nv == "debug.heap") {
         std::cerr << "[HEAP] lists=" << g_lists.size() << " dicts=" << g_dicts.size()
                   << " sets=" << g_sets.size() << " queues=" << g_queues.size()
                   << " strs=" << g_strBuffers.size() << " ptrs=" << g_ptrs.size() << "\n";
@@ -1412,12 +1579,12 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
     }
     // Debug timers (static storage for simplicity)
     static std::unordered_map<std::string, std::chrono::steady_clock::time_point> s_debugTimers;
-    if (nameStr == "debug.timer_start") {
+    if (nv == "debug.timer_start") {
         std::string label = argS(0);
         s_debugTimers[label] = std::chrono::steady_clock::now();
         return label;
     }
-    if (nameStr == "debug.timer_stop") {
+    if (nv == "debug.timer_stop") {
         std::string label = argS(0);
         auto it = s_debugTimers.find(label);
         if (it != s_debugTimers.end()) {
@@ -1429,7 +1596,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return "0";
     }
-    if (nameStr == "debug.breakpoint") {
+    if (nv == "debug.breakpoint") {
 #ifdef _WIN32
         __debugbreak();
 #else
@@ -1438,27 +1605,27 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         return {};
     }
     // Level and guard are no-ops at runtime (typechecker enforces)
-    if (nameStr == "debug.level.set") { return argS(0); }
-    if (nameStr == "debug.guard") { return argS(0); }
-    if (nameStr == "fail") {
+    if (nv == "debug.level.set") { return argS(0); }
+    if (nv == "debug.guard") { return argS(0); }
+    if (nv == "fail") {
         throw std::runtime_error(argS(0));
     }
     // Thread helpers (spawn/join/kill live in experimental threads module)
-    if (nameStr == "thread.sleep" || nameStr == "thread_sleep") {
+    if (nv == "thread.sleep" || nv == "thread_sleep") {
         int ms = static_cast<int>(to_int(argS(0)));
         std::this_thread::sleep_for(std::chrono::milliseconds(ms));
         return {};
     }
     // thread.result stub until result tracking is wired deeper
-    if (nameStr == "thread.result" || nameStr == "thread_result") {
+    if (nv == "thread.result" || nv == "thread_result") {
         return {};
     }
-    if (nameStr == "strbuf_new") {
+    if (nv == "strbuf_new") {
         const int id = g_nextStrBufId++;
         g_strBuffers[id] = args.empty() ? std::string() : argS(0);
         return std::string("strbuf:") + std::to_string(id);
     }
-    if (nameStr == "strbuf_append") {
+    if (nv == "strbuf_append") {
         const std::string handle = argS(0);
         if (handle.rfind("strbuf:", 0) != 0) return {};
         const int id = to_int(handle.substr(7));
@@ -1467,7 +1634,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         it->second += argS(1);
         return {};
     }
-    if (nameStr == "strbuf_clear") {
+    if (nv == "strbuf_clear") {
         const std::string handle = argS(0);
         if (handle.rfind("strbuf:", 0) != 0) return {};
         const int id = to_int(handle.substr(7));
@@ -1476,7 +1643,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         it->second.clear();
         return {};
     }
-    if (nameStr == "strbuf_len") {
+    if (nv == "strbuf_len") {
         const std::string handle = argS(0);
         if (handle.rfind("strbuf:", 0) != 0) return "0";
         const int id = to_int(handle.substr(7));
@@ -1484,7 +1651,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         if (it == g_strBuffers.end()) return "0";
         return std::to_string(static_cast<long long>(it->second.size()));
     }
-    if (nameStr == "strbuf_to_string") {
+    if (nv == "strbuf_to_string") {
         const std::string handle = argS(0);
         if (handle.rfind("strbuf:", 0) != 0) return {};
         const int id = to_int(handle.substr(7));
@@ -1492,14 +1659,14 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         if (it == g_strBuffers.end()) return {};
         return it->second;
     }
-    if (nameStr == "strbuf_free") {
+    if (nv == "strbuf_free") {
         const std::string handle = argS(0);
         if (handle.rfind("strbuf:", 0) != 0) return {};
         const int id = to_int(handle.substr(7));
         g_strBuffers.erase(id);
         return {};
     }
-    if (nameStr == "strbuf_reserve") {
+    if (nv == "strbuf_reserve") {
         const std::string handle = argS(0);
         if (handle.rfind("strbuf:", 0) != 0) return {};
         const int id = to_int(handle.substr(7));
@@ -1509,48 +1676,48 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         it->second.reserve(static_cast<std::size_t>(cap));
         return {};
     }
-    if (nameStr == "set_new" || nameStr == "set_of") {
+    if (nv == "set_new" || nv == "set_of") {
         const int id = g_nextSetId++;
         g_sets[id] = {};
         for (const auto& a : args) g_sets[id].insert(eval_string(*a, env));
         return std::string("set:") + std::to_string(id);
     }
-    if (nameStr == "set_add") {
+    if (nv == "set_add") {
         const std::string h = argS(0);
         if (h.rfind("set:", 0) != 0) return "false";
         const int id = to_int(h.substr(4));
         const auto inserted = g_sets[id].insert(argS(1));
         return inserted.second ? "true" : "false";
     }
-    if (nameStr == "set_has") {
+    if (nv == "set_has") {
         const std::string h = argS(0);
         if (h.rfind("set:", 0) != 0) return "false";
         const int id = to_int(h.substr(4));
         return g_sets[id].count(argS(1)) ? "true" : "false";
     }
-    if (nameStr == "set_remove") {
+    if (nv == "set_remove") {
         const std::string h = argS(0);
         if (h.rfind("set:", 0) != 0) return "false";
         const int id = to_int(h.substr(4));
         return g_sets[id].erase(argS(1)) > 0 ? "true" : "false";
     }
-    if (nameStr == "set_size") {
+    if (nv == "set_size") {
         const std::string h = argS(0);
         if (h.rfind("set:", 0) != 0) return "0";
         const int id = to_int(h.substr(4));
         return std::to_string(static_cast<long long>(g_sets[id].size()));
     }
-    if (nameStr == "set_values") {
+    if (nv == "set_values") {
         const std::string h = argS(0);
         if (h.rfind("set:", 0) != 0) return {};
         const int id = to_int(h.substr(4));
         const int lid = g_nextListId++;
         g_lists[lid] = {};
-        for (const auto& value : g_sets[id]) g_lists[lid].push_back(value);
-        std::sort(g_lists[lid].begin(), g_lists[lid].end());
+        for (const auto& value : g_sets[id]) g_lists[lid].push_back(value_from_legacy_string(value));
+        sort_list_by_display(g_lists[lid]);
         return std::string("list:") + std::to_string(lid);
     }
-    if (nameStr == "set_union") {
+    if (nv == "set_union") {
         const std::string h1 = argS(0);
         const std::string h2 = argS(1);
         if (h1.rfind("set:", 0) != 0 || h2.rfind("set:", 0) != 0) return {};
@@ -1564,7 +1731,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         if (it2 != g_sets.end()) out.insert(it2->second.begin(), it2->second.end());
         return std::string("set:") + std::to_string(outId);
     }
-    if (nameStr == "set_intersect") {
+    if (nv == "set_intersect") {
         const std::string h1 = argS(0);
         const std::string h2 = argS(1);
         if (h1.rfind("set:", 0) != 0 || h2.rfind("set:", 0) != 0) return {};
@@ -1584,7 +1751,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return std::string("set:") + std::to_string(outId);
     }
-    if (nameStr == "set_diff") {
+    if (nv == "set_diff") {
         const std::string h1 = argS(0);
         const std::string h2 = argS(1);
         if (h1.rfind("set:", 0) != 0 || h2.rfind("set:", 0) != 0) return {};
@@ -1604,20 +1771,20 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return std::string("set:") + std::to_string(outId);
     }
-    if (nameStr == "queue_new") {
+    if (nv == "queue_new") {
         const int id = g_nextQueueId++;
         g_queues[id] = {};
         for (const auto& a : args) g_queues[id].push_back(eval_string(*a, env));
         return std::string("queue:") + std::to_string(id);
     }
-    if (nameStr == "queue_push") {
+    if (nv == "queue_push") {
         const std::string h = argS(0);
         if (h.rfind("queue:", 0) != 0) return {};
         const int id = to_int(h.substr(6));
         g_queues[id].push_back(argS(1));
         return {};
     }
-    if (nameStr == "queue_pop") {
+    if (nv == "queue_pop") {
         const std::string h = argS(0);
         if (h.rfind("queue:", 0) != 0) return {};
         const int id = to_int(h.substr(6));
@@ -1627,7 +1794,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         q.pop_front();
         return out;
     }
-    if (nameStr == "queue_peek") {
+    if (nv == "queue_peek") {
         const std::string h = argS(0);
         if (h.rfind("queue:", 0) != 0) return {};
         const int id = to_int(h.substr(6));
@@ -1635,20 +1802,20 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         if (q.empty()) return {};
         return q.front();
     }
-    if (nameStr == "queue_len") {
+    if (nv == "queue_len") {
         const std::string h = argS(0);
         if (h.rfind("queue:", 0) != 0) return "0";
         const int id = to_int(h.substr(6));
         return std::to_string(static_cast<long long>(g_queues[id].size()));
     }
-    if (nameStr == "queue_clear") {
+    if (nv == "queue_clear") {
         const std::string h = argS(0);
         if (h.rfind("queue:", 0) != 0) return {};
         const int id = to_int(h.substr(6));
         g_queues[id].clear();
         return {};
     }
-    if (nameStr == "chan_new") {
+    if (nv == "chan_new") {
         const int id = g_nextChanId++;
         auto ch = std::make_shared<ChannelState>();
         if (!args.empty()) {
@@ -1659,7 +1826,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         g_channels[id] = ch;
         return std::string("chan:") + std::to_string(id);
     }
-    if (nameStr == "chan_send") {
+    if (nv == "chan_send") {
         const std::string h = argS(0);
         if (h.rfind("chan:", 0) != 0) throw std::runtime_error("chan_send: invalid handle");
         const int id = to_int(h.substr(5));
@@ -1684,7 +1851,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         ch->cv.notify_all();
         return {};
     }
-    if (nameStr == "chan_recv") {
+    if (nv == "chan_recv") {
         const std::string h = argS(0);
         if (h.rfind("chan:", 0) != 0) throw std::runtime_error("chan_recv: invalid handle");
         const int id = to_int(h.substr(5));
@@ -1710,7 +1877,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         ch->cv.notify_all();
         return out;
     }
-    if (nameStr == "chan_try_send") {
+    if (nv == "chan_try_send") {
         const std::string h = argS(0);
         if (h.rfind("chan:", 0) != 0) return "false";
         const int id = to_int(h.substr(5));
@@ -1724,7 +1891,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         ch->cv.notify_all();
         return "true";
     }
-    if (nameStr == "chan_try_recv") {
+    if (nv == "chan_try_recv") {
         const std::string h = argS(0);
         if (h.rfind("chan:", 0) != 0) return {};
         const int id = to_int(h.substr(5));
@@ -1738,7 +1905,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         ch->cv.notify_all();
         return out;
     }
-    if (nameStr == "chan_close") {
+    if (nv == "chan_close") {
         const std::string h = argS(0);
         if (h.rfind("chan:", 0) != 0) return {};
         const int id = to_int(h.substr(5));
@@ -1751,7 +1918,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         it->second->cv.notify_all();
         return {};
     }
-    if (nameStr == "chan_len") {
+    if (nv == "chan_len") {
         const std::string h = argS(0);
         if (h.rfind("chan:", 0) != 0) return "0";
         const int id = to_int(h.substr(5));
@@ -1760,12 +1927,12 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         std::lock_guard<std::mutex> lock(it->second->mu);
         return std::to_string(static_cast<long long>(it->second->q.size()));
     }
-    if (nameStr == "mutex_new") {
+    if (nv == "mutex_new") {
         const int id = g_nextMutexId++;
         g_mutexes[id] = std::make_shared<ScriptMutex>();
         return std::string("mutex:") + std::to_string(id);
     }
-    if (nameStr == "mutex_lock") {
+    if (nv == "mutex_lock") {
         const std::string h = argS(0);
         if (h.rfind("mutex:", 0) != 0) throw std::runtime_error("mutex_lock: invalid handle");
         const int id = to_int(h.substr(6));
@@ -1774,7 +1941,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         it->second->mu.lock();
         return {};
     }
-    if (nameStr == "mutex_unlock") {
+    if (nv == "mutex_unlock") {
         const std::string h = argS(0);
         if (h.rfind("mutex:", 0) != 0) throw std::runtime_error("mutex_unlock: invalid handle");
         const int id = to_int(h.substr(6));
@@ -1783,7 +1950,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         it->second->mu.unlock();
         return {};
     }
-    if (nameStr == "mutex_try_lock") {
+    if (nv == "mutex_try_lock") {
         const std::string h = argS(0);
         if (h.rfind("mutex:", 0) != 0) return "false";
         const int id = to_int(h.substr(6));
@@ -1791,7 +1958,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         if (it == g_mutexes.end() || !it->second) return "false";
         return it->second->mu.try_lock() ? "true" : "false";
     }
-    if (nameStr == "future_cancel") {
+    if (nv == "future_cancel") {
         const std::string h = argS(0);
         if (h.rfind("future:", 0) != 0) return "false";
         const int id = to_int(h.substr(7));
@@ -1811,35 +1978,35 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         notify_channels_for_cancel();
         return "true";
     }
-    if (nameStr == "char_is_digit" || nameStr == "char.is_digit") {
+    if (nv == "char_is_digit" || nv == "char.is_digit") {
         const std::string s = argS(0);
         if (s.empty()) return "false";
         return std::isdigit(static_cast<unsigned char>(s[0])) ? "true" : "false";
     }
-    if (nameStr == "char_is_space" || nameStr == "char.is_space") {
+    if (nv == "char_is_space" || nv == "char.is_space") {
         const std::string s = argS(0);
         if (s.empty()) return "false";
         return std::isspace(static_cast<unsigned char>(s[0])) ? "true" : "false";
     }
-    if (nameStr == "char_is_alpha" || nameStr == "char.is_alpha") {
+    if (nv == "char_is_alpha" || nv == "char.is_alpha") {
         const std::string s = argS(0);
         if (s.empty()) return "false";
         return std::isalpha(static_cast<unsigned char>(s[0])) ? "true" : "false";
     }
-    if (nameStr == "char_is_ident_start" || nameStr == "char.is_ident_start") {
+    if (nv == "char_is_ident_start" || nv == "char.is_ident_start") {
         const std::string s = argS(0);
         if (s.empty()) return "false";
         const unsigned char ch = static_cast<unsigned char>(s[0]);
         return (std::isalpha(ch) || ch == '_') ? "true" : "false";
     }
-    if (nameStr == "char_is_ident_part" || nameStr == "char.is_ident_part") {
+    if (nv == "char_is_ident_part" || nv == "char.is_ident_part") {
         const std::string s = argS(0);
         if (s.empty()) return "false";
         const unsigned char ch = static_cast<unsigned char>(s[0]);
         return (std::isalnum(ch) || ch == '_') ? "true" : "false";
     }
     // Time utilities
-    if (nameStr == "now_iso" || nameStr == "time.now_iso") {
+    if (nv == "now_iso" || nv == "time.now_iso") {
         using namespace std::chrono;
         auto t = system_clock::now(); auto tt = system_clock::to_time_t(t);
         std::tm tm{};
@@ -1852,7 +2019,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
             tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
         return std::string(buf);
     }
-    if (nameStr == "rand_int" || nameStr == "time.rand_int") {
+    if (nv == "rand_int" || nv == "time.rand_int") {
         int a = (int)to_int(argS(0)); int b = (int)to_int(argS(1)); if (a > b) std::swap(a,b);
         if (s_deterministic) {
             uint64_t r = deterministic_rng();
@@ -1864,7 +2031,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
             return std::to_string(dist(rng));
         }
     }
-    if (nameStr == "uuid" || nameStr == "time.uuid") {
+    if (nv == "uuid" || nv == "time.uuid") {
 #ifdef _WIN32
         UUID u; if (UuidCreate(&u) == RPC_S_OK) {
             RPC_CSTR s = nullptr; if (UuidToStringA(&u, &s) == RPC_S_OK && s) {
@@ -1883,7 +2050,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
 #endif
     }
     // map: apply func to each element, return new list
-    if (nameStr == "map") {
+    if (nv == "map") {
         if (args.size() < 2) return {};
         std::string listHandle = eval_string(*args[0], env);
         std::string funcHandle = eval_string(*args[1], env);
@@ -1916,7 +2083,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         return std::string("list:") + std::to_string(newListId);
     }
     // filter: keep elements where func returns truthy
-    if (nameStr == "filter") {
+    if (nv == "filter") {
         if (args.size() < 2) return {};
         std::string listHandle = eval_string(*args[0], env);
         std::string funcHandle = eval_string(*args[1], env);
@@ -1949,7 +2116,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         return std::string("list:") + std::to_string(newListId);
     }
     // reduce: accumulate values
-    if (nameStr == "reduce") {
+    if (nv == "reduce") {
         if (args.size() < 3) return {};
         std::string listHandle = eval_string(*args[0], env);
         std::string funcHandle = eval_string(*args[1], env);
@@ -1980,23 +2147,23 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return acc;
     }
-    if (nameStr == "list_new") {
+    if (nv == "list_new") {
         int id = g_nextListId++;
-        g_lists[id] = {};
+        g_lists[id].reserve(args.size());
         for (const auto& a : args) {
-            g_lists[id].push_back(eval_string(*a, env));
+            g_lists[id].push_back(eval_arg(*a, env));
         }
         return to_display_string(make_handle_value(HandleKind::List, static_cast<uint32_t>(id)));
     }
-    if (nameStr == "list_push") {
+    if (nv == "list_push") {
         warn_deprecated("list_push", "method call list.push(value)");
         Value hv = argV(0); std::string v = argS(1);
         if (value_is_handle(hv, HandleKind::List)) {
-            int id = static_cast<int>(value_handle_id(hv)); g_lists[id].push_back(v);
+            int id = static_cast<int>(value_handle_id(hv)); g_lists[id].push_back(value_from_legacy_string(v));
         }
         return {};
     }
-    if (nameStr == "list_get") {
+    if (nv == "list_get") {
         Value hv = argV(0); int idx = to_int(argS(1));
         if (value_is_handle(hv, HandleKind::List)) {
             int id = static_cast<int>(value_handle_id(hv)); auto& vec = g_lists[id];
@@ -2004,7 +2171,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return {};
     }
-    if (nameStr == "list_len") {
+    if (nv == "list_len") {
         Value hv = argV(0);
         if (value_is_handle(hv, HandleKind::List)) {
             int id = static_cast<int>(value_handle_id(hv));
@@ -2012,7 +2179,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return "0";
     }
-    if (nameStr == "list_join") {
+    if (nv == "list_join") {
         Value hv = argV(0); std::string sep = argS(1);
         if (value_is_handle(hv, HandleKind::List)) {
             int id = static_cast<int>(value_handle_id(hv));
@@ -2022,14 +2189,14 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return {};
     }
-    if (nameStr == "list_clear") {
+    if (nv == "list_clear") {
         Value hv = argV(0);
         if (value_is_handle(hv, HandleKind::List)) {
             int id = static_cast<int>(value_handle_id(hv)); g_lists[id].clear();
         }
         return {};
     }
-    if (nameStr == "list_remove_at") {
+    if (nv == "list_remove_at") {
         Value hv = argV(0); int idx = (int)to_int(argS(1));
         if (value_is_handle(hv, HandleKind::List)) {
             int id = static_cast<int>(value_handle_id(hv));
@@ -2038,14 +2205,13 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return {};
     }
-    if (nameStr == "dict_new") {
+    if (nv == "dict_new") {
         int id = g_nextDictId++;
         g_dicts[id] = {};
         // Optional key/value varargs: dict_new("k1", v1, "k2", v2, ...)
         for (std::size_t i = 0; i + 1 < args.size(); i += 2) {
             std::string key = eval_string(*args[i], env);
-            std::string value = eval_string(*args[i + 1], env);
-            g_dicts[id][key] = value;
+            g_dicts[id][key] = eval_arg(*args[i + 1], env);
         }
         return to_display_string(make_handle_value(HandleKind::Dict, static_cast<uint32_t>(id)));
     }
@@ -2058,7 +2224,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return oss.str();
     };
-    if (nameStr == "dict_set") {
+    if (nv == "dict_set") {
         warn_deprecated("dict_set", "method call dict.set(key, value)");
         Value hv = argV(0);
         if (args.size() < 3) return {};
@@ -2069,7 +2235,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return {};
     }
-    if (nameStr == "dict_get") {
+    if (nv == "dict_get") {
         Value hv = argV(0);
         if (args.size() < 2) return {};
         std::string k = join_builtin_path(1, args.size());
@@ -2080,7 +2246,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return {};
     }
-    if (nameStr == "dict_has") {
+    if (nv == "dict_has") {
         Value hv = argV(0);
         if (args.size() < 2) return "false";
         std::string k = join_builtin_path(1, args.size());
@@ -2090,26 +2256,26 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return "false";
     }
-    if (nameStr == "dict_keys") {
+    if (nv == "dict_keys") {
         Value hv = argV(0);
         if (!value_is_handle(hv, HandleKind::Dict)) return {};
         int id = static_cast<int>(value_handle_id(hv));
         int lid = g_nextListId++; g_lists[lid] = {};
-        for (const auto& kv : g_dicts[id]) g_lists[lid].push_back(kv.first);
-        std::sort(g_lists[lid].begin(), g_lists[lid].end());
+        for (const auto& kv : g_dicts[id]) g_lists[lid].push_back(value_from_legacy_string(kv.first));
+        sort_list_by_display(g_lists[lid]);
         return std::string("list:") + std::to_string(lid);
     }
-    if (nameStr == "dict_values") {
+    if (nv == "dict_values") {
         std::string h = argS(0); if (h.rfind("dict:", 0) != 0) return {};
         int id = to_int(h.substr(5)); int lid = g_nextListId++; g_lists[lid] = {};
-        std::vector<std::pair<std::string, std::string>> ordered;
+        std::vector<std::pair<std::string, Value>> ordered;
         ordered.reserve(g_dicts[id].size());
         for (const auto& kv : g_dicts[id]) ordered.push_back(kv);
         std::sort(ordered.begin(), ordered.end(), [](const auto& a, const auto& b){ return a.first < b.first; });
         for (const auto& kv : ordered) g_lists[lid].push_back(kv.second);
         return std::string("list:") + std::to_string(lid);
     }
-    if (nameStr == "dict_get_or") {
+    if (nv == "dict_get_or") {
         std::string h = argS(0);
         if (args.size() < 3) return {};
         std::string k = join_builtin_path(1, args.size() - 1);
@@ -2121,7 +2287,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return def;
     }
-    if (nameStr == "dict_remove") {
+    if (nv == "dict_remove") {
         std::string h = argS(0);
         if (args.size() < 2) return "false";
         std::string k = join_builtin_path(1, args.size());
@@ -2131,7 +2297,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return "false";
     }
-    if (nameStr == "dict_clear") {
+    if (nv == "dict_clear") {
         std::string h = argS(0);
         if (h.rfind("dict:", 0) == 0) {
             int id = to_int(h.substr(5));
@@ -2139,7 +2305,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return {};
     }
-    if (nameStr == "dict_size") {
+    if (nv == "dict_size") {
         Value hv = argV(0);
         if (value_is_handle(hv, HandleKind::Dict)) {
             int id = static_cast<int>(value_handle_id(hv));
@@ -2147,7 +2313,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return "0";
     }
-    if (nameStr == "dict_merge") {
+    if (nv == "dict_merge") {
         std::string target = argS(0);
         std::string source = argS(1);
         if (target.rfind("dict:", 0) == 0 && source.rfind("dict:", 0) == 0) {
@@ -2159,7 +2325,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return {};
     }
-    if (nameStr == "dict_clone") {
+    if (nv == "dict_clone") {
         std::string source = argS(0);
         int newId = g_nextDictId++;
         g_dicts[newId] = {};
@@ -2169,19 +2335,19 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return std::string("dict:") + std::to_string(newId);
     }
-    if (nameStr == "dict_items" || nameStr == "dict_entries") {
+    if (nv == "dict_items" || nv == "dict_entries") {
         std::string h = argS(0);
         if (h.rfind("dict:", 0) != 0) return {};
         int id = to_int(h.substr(5));
         int lid = g_nextListId++;
         g_lists[lid] = {};
         for (const auto& kv : g_dicts[id]) {
-            g_lists[lid].push_back(kv.first + "=" + kv.second);
+            g_lists[lid].push_back(value_from_legacy_string(kv.first + "=" + to_display_string(kv.second)));
         }
-        std::sort(g_lists[lid].begin(), g_lists[lid].end());
+        sort_list_by_display(g_lists[lid]);
         return std::string("list:") + std::to_string(lid);
     }
-    if (nameStr == "dict_set_path") {
+    if (nv == "dict_set_path") {
         std::string h = argS(0); std::string path = argS(1); std::string v = argS(2);
         if (h.rfind("dict:", 0) == 0) {
             int id = to_int(h.substr(5));
@@ -2189,7 +2355,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return {};
     }
-    if (nameStr == "dict_get_path") {
+    if (nv == "dict_get_path") {
         std::string h = argS(0); std::string path = argS(1);
         std::string def = (args.size() > 2) ? argS(2) : std::string();
         if (h.rfind("dict:", 0) == 0) {
@@ -2199,7 +2365,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return def;
     }
-    if (nameStr == "dict_has_path") {
+    if (nv == "dict_has_path") {
         std::string h = argS(0); std::string path = argS(1);
         if (h.rfind("dict:", 0) == 0) {
             int id = to_int(h.substr(5));
@@ -2207,7 +2373,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return "false";
     }
-    if (nameStr == "dict_remove_path") {
+    if (nv == "dict_remove_path") {
         std::string h = argS(0); std::string path = argS(1);
         if (h.rfind("dict:", 0) == 0) {
             int id = to_int(h.substr(5));
@@ -2215,12 +2381,12 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return "false";
     }
-    if (nameStr == "table_new") {
+    if (nv == "table_new") {
         int id = g_nextDictId++;
         g_dicts[id] = {};
         return std::string("dict:") + std::to_string(id);
     }
-    if (nameStr == "table_put") {
+    if (nv == "table_put") {
         std::string h = argS(0);
         std::string row = argS(1);
         std::string col = argS(2);
@@ -2231,7 +2397,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return {};
     }
-    if (nameStr == "table_get") {
+    if (nv == "table_get") {
         std::string h = argS(0);
         std::string row = argS(1);
         std::string col = argS(2);
@@ -2244,7 +2410,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return def;
     }
-    if (nameStr == "table_has") {
+    if (nv == "table_has") {
         std::string h = argS(0);
         std::string row = argS(1);
         std::string col = argS(2);
@@ -2254,7 +2420,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return "false";
     }
-    if (nameStr == "table_remove") {
+    if (nv == "table_remove") {
         std::string h = argS(0);
         std::string row = argS(1);
         std::string col = argS(2);
@@ -2264,7 +2430,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return "false";
     }
-    if (nameStr == "table_rows") {
+    if (nv == "table_rows") {
         std::string h = argS(0);
         if (h.rfind("dict:", 0) != 0) return {};
         int id = to_int(h.substr(5));
@@ -2277,11 +2443,11 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         int lid = g_nextListId++;
         g_lists[lid] = {};
-        for (const auto& row : rows) g_lists[lid].push_back(row);
-        std::sort(g_lists[lid].begin(), g_lists[lid].end());
+        for (const auto& row : rows) g_lists[lid].push_back(value_from_legacy_string(row));
+        sort_list_by_display(g_lists[lid]);
         return std::string("list:") + std::to_string(lid);
     }
-    if (nameStr == "table_columns") {
+    if (nv == "table_columns") {
         std::string h = argS(0);
         if (h.rfind("dict:", 0) != 0) return {};
         int id = to_int(h.substr(5));
@@ -2294,11 +2460,11 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         int lid = g_nextListId++;
         g_lists[lid] = {};
-        for (const auto& col : cols) g_lists[lid].push_back(col);
-        std::sort(g_lists[lid].begin(), g_lists[lid].end());
+        for (const auto& col : cols) g_lists[lid].push_back(value_from_legacy_string(col));
+        sort_list_by_display(g_lists[lid]);
         return std::string("list:") + std::to_string(lid);
     }
-    if (nameStr == "table_row_keys") {
+    if (nv == "table_row_keys") {
         std::string h = argS(0);
         std::string row = argS(1);
         if (h.rfind("dict:", 0) != 0) return {};
@@ -2308,13 +2474,13 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         g_lists[lid] = {};
         for (const auto& kv : g_dicts[id]) {
             if (kv.first.rfind(prefix, 0) == 0 && kv.first.size() > prefix.size()) {
-                g_lists[lid].push_back(kv.first.substr(prefix.size()));
+                g_lists[lid].push_back(value_from_legacy_string(kv.first.substr(prefix.size())));
             }
         }
-        std::sort(g_lists[lid].begin(), g_lists[lid].end());
+        sort_list_by_display(g_lists[lid]);
         return std::string("list:") + std::to_string(lid);
     }
-    if (nameStr == "table_clear_row") {
+    if (nv == "table_clear_row") {
         std::string h = argS(0);
         std::string row = argS(1);
         if (h.rfind("dict:", 0) == 0) {
@@ -2328,7 +2494,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return {};
     }
-    if (nameStr == "table_count_row") {
+    if (nv == "table_count_row") {
         std::string h = argS(0);
         std::string row = argS(1);
         if (h.rfind("dict:", 0) == 0) {
@@ -2342,11 +2508,11 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return "0";
     }
-    if (nameStr == "now_ms" || nameStr == "time.now_ms") {
+    if (nv == "now_ms" || nv == "time.now_ms") {
         using namespace std::chrono;
         return std::to_string(duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count());
     }
-    if (nameStr == "env" || nameStr == "env.get") {
+    if (nv == "env" || nv == "env.get") {
         std::string key = argS(0);
 #ifdef _WIN32
         std::wstring wkey(key.begin(), key.end());
@@ -2364,7 +2530,7 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         return v ? std::string(v) : std::string();
 #endif
     }
-    if (nameStr == "dotenv_load" || nameStr == "env.load_dotenv") {
+    if (nv == "dotenv_load" || nv == "env.load_dotenv") {
         std::string filepath = argS(0);
         if (filepath.empty()) {
             filepath = ".env";

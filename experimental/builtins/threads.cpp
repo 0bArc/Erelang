@@ -377,7 +377,7 @@ static std::string threads_dispatch(Runtime* rt, const std::string& name, const 
     if (name == "thread_list" || name == "thread.list") {
         std::lock_guard<std::mutex> lg(g_threadMutex);
         int listId = g_nextListId++; g_lists[listId] = {};
-        for (auto & kv : g_threads) g_lists[listId].push_back(threadmgr::handle(kv.first));
+        for (auto & kv : g_threads) g_lists[listId].push_back(value_from_legacy_string(threadmgr::handle(kv.first)));
         return std::string("list:") + std::to_string(listId);
     }
     if (name == "thread_wait_all" || name == "thread.wait_all") { threadmgr::wait_all(); return {}; }

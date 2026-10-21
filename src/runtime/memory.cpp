@@ -62,10 +62,15 @@ Value mem_zero_value(std::string_view typeName) {
 
 Value mem_alloc(std::string_view elemType, std::size_t count) {
     if (count == 0) count = 1;
+    const std::size_t elemSize = mem_elem_size(elemType);
+    if (count > (std::size_t{1} << 31) / elemSize) {
+        throw std::runtime_error("alloc: " + std::to_string(count) + " elements of " + std::string(elemType) +
+                                 " is too large");
+    }
     const int id = g_nextPtrId++;
     RawMemBlock block;
     block.elemType = std::string(elemType);
-    block.elemSize = mem_elem_size(elemType);
+    block.elemSize = elemSize;
     block.cells = std::make_shared<std::vector<Value>>(count, mem_zero_value(elemType));
     block.index = 0;
     g_rawMem[id] = std::move(block);
@@ -258,7 +263,9 @@ Value mem_ptr_add(const Value& ptr, std::int64_t delta) {
     if (next < 0) throw std::runtime_error("pointer arithmetic underflow");
     view.index = static_cast<std::size_t>(next);
     g_rawMem[newId] = std::move(view);
-    g_ptrs[newId] = g_ptrs.count(id) ? g_ptrs[id] : std::string{};
+    // Views share `cells`; the byte shadow is only a validity marker for them. Copying the
+    // parent's shadow made every `p + k` O(block size).
+    g_ptrs[newId] = std::string{};
     return make_handle_value(HandleKind::Ptr, static_cast<uint32_t>(newId));
 }
 
@@ -502,6 +509,14 @@ Value mem_buffer_method(const Value& buf, std::string_view method, const std::ve
     BufferState& st = it->second;
     if (method == "len") return Value::from_int(static_cast<int64_t>(st.data.size()));
     if (method == "cap") return Value::from_int(static_cast<int64_t>(st.capacity));
+    if (method == "get") {
+        if (args.empty()) throw std::runtime_error("buffer.get(index)");
+        const std::int64_t index = value_as_int(args[0]);
+        if (index < 0 || static_cast<std::size_t>(index) >= st.data.size()) {
+            throw std::runtime_error("buffer index out of bounds");
+        }
+        return st.data[static_cast<std::size_t>(index)];
+    }
     if (method == "ptr") {
         const int id = g_nextPtrId++;
         RawMemBlock block;

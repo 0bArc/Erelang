@@ -34,6 +34,17 @@ bool is_float_digits(std::string_view s) {
     return seenDigit && seenDot;
 }
 
+// Two's-complement wrapping: signed overflow is UB in C++, scripts (hashes) rely on wrap.
+int64_t wrap_add(int64_t a, int64_t b) {
+    return static_cast<int64_t>(static_cast<uint64_t>(a) + static_cast<uint64_t>(b));
+}
+int64_t wrap_sub(int64_t a, int64_t b) {
+    return static_cast<int64_t>(static_cast<uint64_t>(a) - static_cast<uint64_t>(b));
+}
+int64_t wrap_mul(int64_t a, int64_t b) {
+    return static_cast<int64_t>(static_cast<uint64_t>(a) * static_cast<uint64_t>(b));
+}
+
 } // namespace
 
 bool is_truthy(const Value& v) {
@@ -264,7 +275,7 @@ Value apply_binary(ValueBinOp op, const Value& left, const Value& right) {
             if (both_numeric(left, right)) {
                 if (any_float(left, right))
                     return Value::from_float(value_as_float(left) + value_as_float(right));
-                return Value::from_int(value_as_int(left) + value_as_int(right));
+                return Value::from_int(wrap_add(value_as_int(left), value_as_int(right)));
             }
             std::string a = to_display_string(left), b = to_display_string(right);
             std::string out;
@@ -297,20 +308,22 @@ Value apply_binary(ValueBinOp op, const Value& left, const Value& right) {
                 return Value::from_float(std::pow(a, b));
             }
             const int64_t a = value_as_int(left), b = value_as_int(right);
-            if (op == ValueBinOp::Sub) return Value::from_int(a - b);
-            if (op == ValueBinOp::Mul) return Value::from_int(a * b);
+            if (op == ValueBinOp::Sub) return Value::from_int(wrap_sub(a, b));
+            if (op == ValueBinOp::Mul) return Value::from_int(wrap_mul(a, b));
             if (op == ValueBinOp::Div) {
                 if (b == 0) throw std::runtime_error("Division by zero");
+                if (b == -1) return Value::from_int(wrap_sub(0, a)); // INT64_MIN / -1 traps on x86
                 return Value::from_int(a / b);
             }
             if (op == ValueBinOp::Mod) {
                 if (b == 0) throw std::runtime_error("Modulo by zero");
+                if (b == -1) return Value::from_int(0);
                 return Value::from_int(a % b);
             }
             if (b < 0) return Value::from_int(0);
             if (b > 62) throw std::runtime_error("Exponent too large for integer power");
             int64_t value = 1;
-            for (int64_t i = 0; i < b; ++i) value *= a;
+            for (int64_t i = 0; i < b; ++i) value = wrap_mul(value, a);
             return Value::from_int(value);
         }
         case ValueBinOp::BitAnd:
@@ -346,7 +359,7 @@ Value apply_unary(ValueUnOp op, const Value& operand) {
         case ValueUnOp::Neg:
             if (operand.kind == ValueKind::Float)
                 return Value::from_float(-operand.f);
-            return Value::from_int(-value_as_int(operand));
+            return Value::from_int(wrap_sub(0, value_as_int(operand)));
         case ValueUnOp::BitNot:
             return Value::from_int(~value_as_int(operand));
     }

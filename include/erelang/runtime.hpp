@@ -11,6 +11,8 @@
 #include <vector>
 #include <optional>
 #include <thread>
+#include <atomic>
+#include <list>
 #include <memory>
 #include <mutex>
 
@@ -32,6 +34,9 @@ using ExprPtr = std::shared_ptr<Expr>;
 #include "erelang/parser.hpp"
 
 namespace erelang {
+
+// True for list/dict methods that produce no result (push, set, clear, ...).
+[[nodiscard]] bool collection_method_is_void(std::string_view method);
 
 class Runtime {
 public:
@@ -130,10 +135,32 @@ private:
     mutable std::unordered_map<std::string, Value> lastReturnFields_;
     std::vector<PluginRecord> pluginRecords_;
 
-    mutable std::vector<Action> dynamicActions_;
+    // std::list: find_action hands out pointers; reloads must not move other actions.
+    mutable std::list<Action> dynamicActions_;
     mutable std::mutex dynamicActionsMutex_;
+    mutable std::atomic<bool> hasDynamicActions_{false};
+
+    // Name -> action for the running program (built by index_actions at run start).
+    // Suffix index maps the last `::` segment; nullptr marks an ambiguous name.
+    mutable const Program* actionIndexProgram_ = nullptr;
+    mutable std::size_t actionIndexCount_ = 0;
+    mutable std::unordered_map<std::string_view, const Action*> actionIndex_;
+    mutable std::unordered_map<std::string_view, const Action*> actionSuffixIndex_;
+    void index_actions(const Program& program) const;
+    // Drops the index when a run ends so it never outlives (or aliases) its Program.
+    struct ActionIndexGuard {
+        const Runtime* rt;
+        ~ActionIndexGuard() {
+            rt->actionIndexProgram_ = nullptr;
+            rt->actionIndexCount_ = 0;
+            rt->actionIndex_.clear();
+            rt->actionSuffixIndex_.clear();
+        }
+    };
 
     void exec_block(const Block& b, const Program& program, ExecContext& ctx, Env& env) const;
+    void release_block_scope(Env& env, std::size_t mark) const;
+    void apply_declared_size(const LetStmt& st, Value& value, const Env& env) const;
     void exec_stmt(const Statement& s, const Program& program, ExecContext& ctx, Env& env) const;
     const Action* find_action(const Program& program, std::string_view name) const;
     const Hook* find_hook(const Program& program, std::string_view name) const;
@@ -141,12 +168,22 @@ private:
     const Action* find_entity_method(const Entity& e, std::string_view name) const;
 
     Value eval_value(const Expr& e, const Env& env) const;
+    Value eval_value_rest(const Expr& e, const Env& env) const;
+    Value eval_binary_slow(const BinaryExpr& binary, Value left, Value right,
+                           std::unordered_map<std::string, Value> leftFields,
+                           const std::unordered_map<std::string, Value>& rightFields,
+                           const Env& env) const;
     std::string eval_string(const Expr& e, const Env& env) const;
+    Value eval_arg(const Expr& e, const Env& env) const;
     Value invoke_async_action(const Action& action, const std::vector<ExprPtr>& args, const Env& env, bool returnFuture) const;
     Value await_future_value(const Value& value) const;
     Value invoke_enum_method(const Action& method, const Value& selfValue, const std::vector<ExprPtr>& args, size_t argOffset, const Env& env) const;
     std::optional<Value> dispatch_value_method(const Value& recv, std::string_view method, const std::vector<Value>& args) const;
+    // List/dict methods on evaluated args; nullopt when recv is not a list/dict or method is unknown.
+    std::optional<Value> collection_method(const Value& recv, std::string_view method, const std::vector<Value>& args) const;
 
+    // Variable lookup: closure cells, slots, locals, then globals. nullptr if unbound.
+    const Value* env_find(const Env& env, const std::string& name) const;
     Value env_get(const Env& env, const std::string& name) const;
     void env_set(Env& env, const std::string& name, Value value) const;
     void prepare_action_slots(Env& env, const Action& action) const;

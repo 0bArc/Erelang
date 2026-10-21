@@ -143,7 +143,7 @@ std::string substitute_type_string(const std::string& typeText,
 namespace {
 constexpr int kMaxParseDepth = 2048;
 bool is_special_expr_keyword(std::string_view w) {
-    return w == "static_cast" || w == "dynamic_cast" || w == "reinterpret_cast"
+    return w == "dynamic_cast" || w == "reinterpret_cast"
         || w == "bit_cast" || w == "bitcast"
         || w == "sizeof" || w == "alignof" || w == "typeof" || w == "decltype"
         || w == "offsetof" || w == "is_base_of" || w == "await";
@@ -411,12 +411,21 @@ static ExprPtr make_default_initializer_for_declared_type(const std::string& dec
     return std::make_shared<Expr>(Expr{ ExprNull{} });
 }
 
+// Synthetic '>' left over after '>>' closed a nested generic. Built once, never mutated,
+// so concurrent parsers (thread builtins, async) do not race on it.
+static const Token& pending_greater_token() {
+    static const Token tok = [] {
+        Token t;
+        t.kind = TokenKind::Greater;
+        t.text = ">";
+        return t;
+    }();
+    return tok;
+}
+
 const Token& Parser::peek(size_t offset) const {
     if (offset == 0 && pendingGreater_) {
-        static Token greaterTok;
-        greaterTok.kind = TokenKind::Greater;
-        greaterTok.text = ">";
-        return greaterTok;
+        return pending_greater_token();
     }
     size_t idx = pos_ + offset;
     if (idx >= tokens_.size()) return tokens_.back();
@@ -426,10 +435,7 @@ const Token& Parser::peek(size_t offset) const {
 const Token& Parser::consume() {
     if (pendingGreater_) {
         pendingGreater_ = false;
-        static Token greaterTok;
-        greaterTok.kind = TokenKind::Greater;
-        greaterTok.text = ">";
-        return greaterTok;
+        return pending_greater_token();
     }
     const Token& t = peek();
     if (pos_ < tokens_.size()) ++pos_;
@@ -865,27 +871,6 @@ ExprPtr Parser::parse_primary() {
         }
         return std::make_shared<Expr>(Expr{ lambda });
     }
-    if ((t.kind == TokenKind::Word || t.kind == TokenKind::Keyword) && t.text == "static_cast") {
-        consume();
-        expect(TokenKind::Less, "<");
-        std::string castType = parse_type_annotation();
-        if (peek().kind == TokenKind::Greater) {
-            consume();
-        }
-        expect(TokenKind::LParen, "(");
-        auto inner = parse_expression();
-        expect(TokenKind::RParen, ")");
-        FunctionCallExpr call;
-        std::string lower = castType;
-        for (auto& ch : lower) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-        if (lower == "int") call.name = "toInt";
-        else if (lower == "double" || lower == "float") call.name = "tofloat";
-        else if (lower == "string" || lower == "str" || lower == "char") call.name = "toString";
-        else if (lower == "bool") call.name = "tobool";
-        else call.name = "toString";
-        call.args.push_back(inner);
-        return apply_postfix(std::make_shared<Expr>(Expr{ call }));
-    }
     if ((t.kind == TokenKind::Word || t.kind == TokenKind::Keyword) && t.text == "dynamic_cast") {
         consume();
         expect(TokenKind::Less, "<");
@@ -1074,7 +1059,10 @@ ExprPtr Parser::parse_primary() {
                     depth += (tokens_[i].kind == TokenKind::Shl) ? 2 : 1;
                 } else if (tokens_[i].kind == TokenKind::Greater || tokens_[i].kind == TokenKind::Shr) {
                     depth -= (tokens_[i].kind == TokenKind::Shr) ? 2 : 1;
-                } else if (tokens_[i].kind == TokenKind::End) {
+                } else if (tokens_[i].kind == TokenKind::End || tokens_[i].kind == TokenKind::Newline ||
+                           tokens_[i].kind == TokenKind::Semicolon || tokens_[i].kind == TokenKind::LBrace ||
+                           tokens_[i].kind == TokenKind::RBrace) {
+                    // Type args never span these; stopping keeps `a < b` comparisons O(1).
                     break;
                 }
                 ++i;
@@ -1574,13 +1562,23 @@ Statement Parser::parse_statement() {
             std::string declaredType = parse_type_annotation();
             const Token& nameTok = consume();
             if (!(nameTok.kind == TokenKind::Word || nameTok.kind == TokenKind::Keyword)) throw std::runtime_error("Variable name");
+            // Sized collection: `Array<int> a {6}`, `Map<string, int> m {64} = {...}`.
+            // `{` right after a declared name is otherwise never valid, so no ambiguity.
+            ExprPtr sizeExpr;
+            if (peek().kind == TokenKind::LBrace) {
+                consume();
+                sizeExpr = parse_expression();
+                expect(TokenKind::RBrace, "} after collection size");
+            }
             ExprPtr val;
             if (match(TokenKind::Assign)) {
                 val = parse_expression();
             } else {
                 val = make_default_initializer_for_declared_type(declaredType);
             }
-            return LetStmt{ isConstDecl, ident_text(nameTok), val, declaredType };
+            LetStmt decl{ isConstDecl, ident_text(nameTok), val, declaredType };
+            decl.sizeExpr = std::move(sizeExpr);
+            return decl;
         } catch (...) {
             pos_ = savePos;
         }

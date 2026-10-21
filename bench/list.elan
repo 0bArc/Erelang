@@ -1,0 +1,23 @@
+@erelang
+
+public action main() {
+    Array<int> a = [0];
+    int i = 0;
+    while (i < 50000) {
+        a.push(i);
+        i = i + 1;
+    }
+    int sum = 0;
+    for (int x : a) {
+        sum = sum + x;
+    }
+    int j = 0;
+    while (j < 50000) {
+        sum = sum + int(a[j]);
+        j = j + 1;
+    }
+    print sum;
+}
+
+run main;
+

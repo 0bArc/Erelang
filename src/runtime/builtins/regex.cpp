@@ -5,6 +5,7 @@
 #include <vector>
 #include <sstream>
 #include <unordered_map>
+#include <memory>
 #include <mutex>
 #include "erelang/runtime.hpp"
 
@@ -16,6 +17,22 @@ static int g_nextPatternId = 1;
 static std::vector<std::string> g_lastCapturedGroups;
 static std::mutex g_regexMutex;
 
+// Compiling a std::regex costs far more than matching; scripts call these in loops with the
+// same few patterns. Bounded so generated patterns cannot grow it without limit.
+static std::shared_ptr<const std::regex> cached_regex(const std::string& pattern) {
+    static std::unordered_map<std::string, std::shared_ptr<const std::regex>> cache;
+    static std::mutex cacheMutex;
+    {
+        std::lock_guard<std::mutex> lock(cacheMutex);
+        if (auto it = cache.find(pattern); it != cache.end()) return it->second;
+    }
+    auto compiled = std::make_shared<const std::regex>(pattern); // throws std::regex_error
+    std::lock_guard<std::mutex> lock(cacheMutex);
+    if (cache.size() >= 128) cache.clear();
+    cache.emplace(pattern, compiled);
+    return compiled;
+}
+
 static std::string regex_dispatch(const std::string& name, const std::vector<std::string>& argv) {
     auto argS = [&](size_t i){ return i<argv.size()?argv[i]:std::string(); };
     // API: re.match(text, pattern), re.find(text, pattern), re.replace(text, pattern, repl)
@@ -23,33 +40,33 @@ static std::string regex_dispatch(const std::string& name, const std::vector<std
     if (name == "regex_match" || name == "re.match") {
         const std::string text = argS(0), pat = argS(1);
         // Full match: the pattern must cover the entire input, not a substring.
-        try { std::regex re(pat); return std::regex_match(text, re) ? "true" : "false"; }
+        try { const auto re = cached_regex(pat); return std::regex_match(text, *re) ? "true" : "false"; }
         catch (...) { return "false"; }
     }
     if (name == "regex_find" || name == "re.find") {
         const std::string text = argS(0), pat = argS(1);
         try {
-            std::regex re(pat); std::smatch m;
-            if (std::regex_search(text, m, re)) { return m.size() > 1 ? m[1].str() : m[0].str(); }
+            const auto re = cached_regex(pat); std::smatch m;
+            if (std::regex_search(text, m, *re)) { return m.size() > 1 ? m[1].str() : m[0].str(); }
         } catch (...) {}
         return {};
     }
     if (name == "regex_replace" || name == "re.replace") {
         const std::string text = argS(0), pat = argS(1), repl = argS(2);
-        try { std::regex re(pat); return std::regex_replace(text, re, repl); }
+        try { const auto re = cached_regex(pat); return std::regex_replace(text, *re, repl); }
         catch (...) { return text; }
     }
     // Find all matches → returns a list handle
     if (name == "regex_find_all" || name == "re.find_all") {
         const std::string text = argS(0), pat = argS(1);
         try {
-            std::regex re(pat);
-            auto begin = std::sregex_iterator(text.begin(), text.end(), re);
+            const auto re = cached_regex(pat);
+            auto begin = std::sregex_iterator(text.begin(), text.end(), *re);
             auto end = std::sregex_iterator();
             int listId = g_nextListId++;
             g_lists[listId] = {};
             for (auto it = begin; it != end; ++it) {
-                g_lists[listId].push_back((*it)[0].str());
+                g_lists[listId].push_back(value_from_legacy_string((*it)[0].str()));
             }
             return std::string("list:") + std::to_string(listId);
         } catch (...) { return {}; }
@@ -58,13 +75,13 @@ static std::string regex_dispatch(const std::string& name, const std::vector<std
     if (name == "regex_split" || name == "re.split") {
         const std::string text = argS(0), pat = argS(1);
         try {
-            std::regex re(pat);
-            auto begin = std::sregex_token_iterator(text.begin(), text.end(), re, -1);
+            const auto re = cached_regex(pat);
+            auto begin = std::sregex_token_iterator(text.begin(), text.end(), *re, -1);
             auto end = std::sregex_token_iterator();
             int listId = g_nextListId++;
             g_lists[listId] = {};
             for (auto it = begin; it != end; ++it) {
-                g_lists[listId].push_back(it->str());
+                g_lists[listId].push_back(value_from_legacy_string(it->str()));
             }
             return std::string("list:") + std::to_string(listId);
         } catch (...) { return {}; }
@@ -75,8 +92,8 @@ static std::string regex_dispatch(const std::string& name, const std::vector<std
         std::lock_guard<std::mutex> lg(g_regexMutex);
         g_lastCapturedGroups.clear();
         try {
-            std::regex re(pat); std::smatch m;
-            if (std::regex_search(text, m, re)) {
+            const auto re = cached_regex(pat); std::smatch m;
+            if (std::regex_search(text, m, *re)) {
                 for (size_t i = 0; i < m.size(); ++i) {
                     g_lastCapturedGroups.push_back(m[i].str());
                 }

@@ -4,14 +4,11 @@ import {
   ProposedFeatures,
   InitializeParams,
   TextDocumentSyncKind,
-  CompletionItem,
-  CompletionItemKind,
   Diagnostic,
   DiagnosticSeverity,
   TextDocumentPositionParams,
   Hover,
   MarkupKind,
-  CompletionParams,
   RenameParams,
   WorkspaceEdit,
   Location,
@@ -22,10 +19,9 @@ import {
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { spawn } from 'child_process';
 import * as fs from 'fs';
-import * as os from 'os';
-import * as path from 'path';
+import { fileURLToPath } from 'url';
 import { resolveErelangExe } from './erelangPath';
-import { LANGUAGE_KEYWORDS, BUILT_INS, ACTION_RE, TYPED_FUNC_RE, LET_RE, STRUCT_RE, ENUM_RE, ENTITY_RE } from './constants';
+import { parseCheckOutput } from './checkOutput';
 import {
   splitLines,
   resolveSymbol,
@@ -40,6 +36,13 @@ const documents = new TextDocuments(TextDocument);
 
 let workspaceRoots: string[] = [];
 let configuredExe = '';
+/** undefined = not resolved yet, null = resolved but missing (cached so `where` is not re-spawned). */
+let cachedExe: string | null | undefined;
+
+function getExe(): string | undefined {
+  if (cachedExe === undefined) cachedExe = resolveErelangExe(workspaceRoots, configuredExe) ?? null;
+  return cachedExe ?? undefined;
+}
 
 connection.onInitialize((params: InitializeParams) => {
   workspaceRoots = (params.workspaceFolders ?? [])
@@ -60,8 +63,12 @@ connection.onInitialize((params: InitializeParams) => {
   if (init?.erelangPath) configuredExe = init.erelangPath;
   return {
     capabilities: {
-      textDocumentSync: TextDocumentSyncKind.Incremental,
-      completionProvider: { triggerCharacters: ['.', '#', '<', '"', '/'] },
+      textDocumentSync: {
+        openClose: true,
+        change: TextDocumentSyncKind.Incremental,
+        save: { includeText: false },
+      },
+      // Completion is served by the client-side ErelangCompletionProvider only.
       hoverProvider: true,
       renameProvider: true,
       referencesProvider: true,
@@ -72,136 +79,145 @@ connection.onInitialize((params: InitializeParams) => {
 connection.onInitialized(() => {
   connection.workspace?.getConfiguration?.('erelang').then((cfg: { executablePath?: string }) => {
     if (cfg?.executablePath) configuredExe = cfg.executablePath;
+    cachedExe = undefined;
   }).catch(() => undefined);
 });
 
-function parseCheckOutput(stderr: string): Diagnostic[] {
-  const out: Diagnostic[] = [];
-  const re = /\[(error|warn|hint)\]\s+(\w+):\s+(.+?)(?:\s+\(([^)]*)\))?\s+at\s+(\d+):(\d+)/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(stderr)) !== null) {
-    const sev = m[1] === 'warn' ? DiagnosticSeverity.Warning
-      : m[1] === 'hint' ? DiagnosticSeverity.Information
-      : DiagnosticSeverity.Error;
-    const line = Math.max(0, parseInt(m[5], 10) - 1);
-    const col = Math.max(0, parseInt(m[6], 10) - 1);
-    const msg = `${m[2]}: ${m[3]}${m[4] ? ` (${m[4]})` : ''}`;
-    out.push({
-      severity: sev,
-      range: { start: { line, character: col }, end: { line, character: col + 1 } },
-      message: msg,
-      source: 'erelang',
-    });
-  }
-  if (!out.length && stderr.trim()) {
-    for (const line of stderr.split(/\r?\n/)) {
-      const t = line.trim();
-      if (!t) continue;
-      out.push({
-        severity: DiagnosticSeverity.Error,
-        range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
-        message: t,
-        source: 'erelang',
-      });
-    }
-  }
-  return out;
-}
+connection.onDidChangeConfiguration(change => {
+  const cfg = (change.settings as { erelang?: { executablePath?: string } } | undefined)?.erelang;
+  configuredExe = cfg?.executablePath ?? '';
+  cachedExe = undefined;
+});
+
+/** Skip host --check on huge amalgamated sources (e.g. compiler/codegen.elan) — freezes Cursor. */
+const MAX_CHECK_CHARS = 48_000;
+const MAX_CHECK_LINES = 2_500;
+const CHECK_DELAY_MS = 800;
+const BURST_DELAY_MS = 1_500;
+const BURST_CHANGES = 5;
 
 const checkTimers = new Map<string, NodeJS.Timeout>();
+const changeBursts = new Map<string, number>();
+const lastPublished = new Map<string, string>();
+/** Docs waiting for the single check slot, in arrival order. */
+const checkQueue = new Set<string>();
+let running: { uri: string; child: ReturnType<typeof spawn> } | undefined;
 
-function scheduleCheck(doc: TextDocument) {
-  const key = doc.uri;
-  const prev = checkTimers.get(key);
-  if (prev) clearTimeout(prev);
-  checkTimers.set(key, setTimeout(() => {
-    checkTimers.delete(key);
-    void runCheck(doc);
-  }, 400));
+function shouldSkipCheck(doc: TextDocument): boolean {
+  const uri = doc.uri.replace(/\\/g, '/').toLowerCase();
+  if (!uri.startsWith('file:')) return true;
+  if (uri.includes('/.firecrawl/') || uri.includes('/node_modules/') || uri.includes('/build/')) {
+    return true;
+  }
+  if (doc.lineCount > MAX_CHECK_LINES) return true;
+  if (doc.getText().length > MAX_CHECK_CHARS) return true;
+  return false;
 }
 
-async function runCheck(doc: TextDocument) {
-  const exe = resolveErelangExe(workspaceRoots, configuredExe);
-  if (!exe) {
-    connection.sendDiagnostics({ uri: doc.uri, diagnostics: [] });
+/** Publish only when the set actually changed — avoids Problems-panel churn during bulk edits. */
+function publish(uri: string, diagnostics: Diagnostic[]) {
+  const key = JSON.stringify(diagnostics);
+  if (lastPublished.get(uri) === key) return;
+  lastPublished.set(uri, key);
+  connection.sendDiagnostics({ uri, diagnostics });
+}
+
+function cancelCheck(uri: string) {
+  const timer = checkTimers.get(uri);
+  if (timer) clearTimeout(timer);
+  checkTimers.delete(uri);
+  checkQueue.delete(uri);
+  if (running?.uri === uri) {
+    try { running.child.kill(); } catch { /* ignore */ }
+  }
+}
+
+function scheduleCheck(uri: string, delayOverride?: number) {
+  cancelCheck(uri);
+  const doc = documents.get(uri);
+  if (!doc) return;
+  if (shouldSkipCheck(doc)) {
+    publish(uri, []);
     return;
   }
-  const tmp = path.join(os.tmpdir(), `erelang-lsp-${process.pid}-${Date.now()}.elan`);
+  const burst = (changeBursts.get(uri) ?? 0) + 1;
+  changeBursts.set(uri, burst);
+  const delay = delayOverride ?? (burst > BURST_CHANGES ? BURST_DELAY_MS : CHECK_DELAY_MS);
+  checkTimers.set(uri, setTimeout(() => {
+    checkTimers.delete(uri);
+    changeBursts.delete(uri);
+    checkQueue.add(uri);
+    pumpQueue();
+  }, delay));
+}
+
+function pumpQueue() {
+  if (running) return;
+  const next = checkQueue.values().next();
+  if (next.done) return;
+  checkQueue.delete(next.value);
+  void runCheck(next.value).finally(() => {
+    running = undefined;
+    pumpQueue();
+  });
+}
+
+/**
+ * Checks the file on disk, not a temp copy: includes resolve relative to the
+ * script, and AI edits land on disk anyway. Unsaved buffers keep their last
+ * diagnostics until saved.
+ */
+async function runCheck(uri: string) {
+  const doc = documents.get(uri);
+  if (!doc || shouldSkipCheck(doc)) return;
+  const exe = getExe();
+  if (!exe) {
+    publish(uri, []);
+    return;
+  }
+  let filePath: string;
+  let onDisk: string;
   try {
-    fs.writeFileSync(tmp, doc.getText(), 'utf8');
-    const child = spawn(exe, ['--check', tmp], { windowsHide: true });
+    filePath = fileURLToPath(uri);
+    onDisk = await fs.promises.readFile(filePath, 'utf8');
+  } catch {
+    return;
+  }
+  if (onDisk !== doc.getText()) return;
+
+  const version = doc.version;
+  try {
+    const child = spawn(exe, ['--check', filePath], { windowsHide: true });
+    running = { uri, child };
     let stderr = '';
     child.stderr.on('data', (d: Buffer) => { stderr += d.toString('utf8'); });
     child.stdout.on('data', () => undefined);
-    const code: number = await new Promise(resolve => {
-      child.on('close', (c) => resolve(c ?? 1));
-      child.on('error', () => resolve(1));
+    const code: number | null = await new Promise(resolve => {
+      child.on('close', (c) => resolve(c));
+      child.on('error', () => resolve(-1));
     });
-    const diags = code === 0 ? [] : parseCheckOutput(stderr);
-    connection.sendDiagnostics({ uri: doc.uri, diagnostics: diags });
+    // Killed (newer edit) or document moved on while checking: drop the result.
+    if (code === null || documents.get(uri)?.version !== version) return;
+    if (code === -1) throw new Error(`could not start ${exe}`);
+    publish(uri, parseCheckOutput(stderr));
   } catch (e) {
-    connection.sendDiagnostics({
-      uri: doc.uri,
-      diagnostics: [{
-        severity: DiagnosticSeverity.Error,
-        range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
-        message: `erelang --check failed: ${e instanceof Error ? e.message : String(e)}`,
-        source: 'erelang',
-      }],
-    });
-  } finally {
-    try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+    publish(uri, [{
+      severity: DiagnosticSeverity.Error,
+      range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+      message: `erelang --check failed: ${e instanceof Error ? e.message : String(e)}`,
+      source: 'erelang',
+    }]);
   }
 }
 
-documents.onDidChangeContent(e => scheduleCheck(e.document));
-documents.onDidOpen(e => scheduleCheck(e.document));
+documents.onDidChangeContent(e => scheduleCheck(e.document.uri));
+documents.onDidSave(e => scheduleCheck(e.document.uri, 150));
 documents.onDidClose(e => {
-  connection.sendDiagnostics({ uri: e.document.uri, diagnostics: [] });
-});
-
-function collectNames(text: string): { actions: string[]; locals: string[]; types: string[] } {
-  const actions: string[] = [];
-  const locals: string[] = [];
-  const types: string[] = [];
-  for (const line of text.split(/\r?\n/)) {
-    let m = ACTION_RE.exec(line) || TYPED_FUNC_RE.exec(line);
-    if (m?.[1]) actions.push(m[1]);
-    m = LET_RE.exec(line);
-    if (m?.[1]) locals.push(m[1]);
-    m = STRUCT_RE.exec(line) || ENUM_RE.exec(line) || ENTITY_RE.exec(line);
-    if (m?.[1]) types.push(m[1]);
-  }
-  return { actions, locals, types };
-}
-
-connection.onCompletion((params: CompletionParams): CompletionItem[] => {
-  const doc = documents.get(params.textDocument.uri);
-  if (!doc) return [];
-  const pos = params.position;
-  const line = doc.getText({
-    start: { line: pos.line, character: 0 },
-    end: { line: pos.line, character: pos.character },
-  });
-  const names = collectNames(doc.getText());
-  const items: CompletionItem[] = [];
-  const seen = new Set<string>();
-  const add = (label: string, kind: CompletionItemKind, detail?: string) => {
-    if (seen.has(label)) return;
-    seen.add(label);
-    items.push({ label, kind, detail });
-  };
-  const member = /([A-Za-z_]\w*)\.([A-Za-z_]\w*)?$/.exec(line);
-  if (member) {
-    for (const a of names.actions) add(a, CompletionItemKind.Method);
-    return items;
-  }
-  for (const k of LANGUAGE_KEYWORDS) add(k, CompletionItemKind.Keyword);
-  for (const b of BUILT_INS) add(b, CompletionItemKind.Function, 'builtin');
-  for (const a of names.actions) add(a, CompletionItemKind.Function, 'action');
-  for (const t of names.types) add(t, CompletionItemKind.Class, 'type');
-  for (const l of names.locals) add(l, CompletionItemKind.Variable, 'local');
-  return items;
+  const uri = e.document.uri;
+  cancelCheck(uri);
+  changeBursts.delete(uri);
+  lastPublished.delete(uri);
+  connection.sendDiagnostics({ uri, diagnostics: [] });
 });
 
 connection.onHover((params: TextDocumentPositionParams): Hover | null => {

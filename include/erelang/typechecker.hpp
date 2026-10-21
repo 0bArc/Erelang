@@ -57,7 +57,15 @@ struct CheckContext {
 // Scope manager with RAII
 class ScopeManager {
 public:
-    struct Guard { ScopeManager* sm; Guard(ScopeManager* s):sm(s){} ~Guard(){ if(sm) sm->pop(); } };
+    // Move-only: a copied Guard would pop the same scope twice.
+    struct Guard {
+        ScopeManager* sm;
+        explicit Guard(ScopeManager* s) : sm(s) {}
+        Guard(const Guard&) = delete;
+        Guard& operator=(const Guard&) = delete;
+        Guard(Guard&& o) noexcept : sm(o.sm) { o.sm = nullptr; }
+        ~Guard() { if (sm) sm->pop(); }
+    };
     Guard push() { scopes_.emplace_back(); return Guard(this); }
     bool declare(const std::string& name, const VarInfo& vi) { return scopes_.back().emplace(name, vi).second; }
     VarInfo* lookup(const std::string& name) {

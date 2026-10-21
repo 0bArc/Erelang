@@ -4,11 +4,13 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <ostream>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace erelang {
 
@@ -57,59 +59,33 @@ struct Value {
         double f;
         Handle h;
     };
-    // Heap string when kind==String; otherwise null.
-    std::string* str{nullptr};
+    // String payload when kind==String; otherwise null. Shared between copies (copying a
+    // Value bumps a refcount instead of duplicating the text); string_mut() unshares first.
+    std::shared_ptr<std::string> str;
 
     Value() : i(0) {}
 
-    ~Value() { delete str; }
+    Value(const Value& other) : kind(other.kind), i(0), str(other.str) { copy_scalar(other); }
 
-    Value(const Value& other) : kind(other.kind), i(0), str(nullptr) {
-        switch (other.kind) {
-            case ValueKind::Bool: b = other.b; break;
-            case ValueKind::Int: i = other.i; break;
-            case ValueKind::Float: f = other.f; break;
-            case ValueKind::Handle: h = other.h; break;
-            case ValueKind::String:
-                if (other.str) str = new std::string(*other.str);
-                break;
-            case ValueKind::Null: i = 0; break;
-        }
-    }
-
-    Value(Value&& other) noexcept : kind(other.kind), i(0), str(other.str) {
-        switch (other.kind) {
-            case ValueKind::Bool: b = other.b; break;
-            case ValueKind::Int: i = other.i; break;
-            case ValueKind::Float: f = other.f; break;
-            case ValueKind::Handle: h = other.h; break;
-            default: break;
-        }
-        other.str = nullptr;
+    Value(Value&& other) noexcept : kind(other.kind), i(0), str(std::move(other.str)) {
+        copy_scalar(other);
         other.kind = ValueKind::Null;
         other.i = 0;
     }
 
     Value& operator=(const Value& other) {
         if (this == &other) return *this;
-        Value tmp(other);
-        *this = std::move(tmp);
+        kind = other.kind;
+        str = other.str;
+        copy_scalar(other);
         return *this;
     }
 
     Value& operator=(Value&& other) noexcept {
         if (this == &other) return *this;
-        delete str;
         kind = other.kind;
-        str = other.str;
-        switch (other.kind) {
-            case ValueKind::Bool: b = other.b; break;
-            case ValueKind::Int: i = other.i; break;
-            case ValueKind::Float: f = other.f; break;
-            case ValueKind::Handle: h = other.h; break;
-            default: i = 0; break;
-        }
-        other.str = nullptr;
+        str = std::move(other.str);
+        copy_scalar(other);
         other.kind = ValueKind::Null;
         other.i = 0;
         return *this;
@@ -123,12 +99,26 @@ struct Value {
 
     std::string& string_mut() {
         if (kind != ValueKind::String || !str) {
-            delete str;
-            str = new std::string();
+            str = std::make_shared<std::string>();
             kind = ValueKind::String;
+        } else if (str.use_count() > 1) {
+            str = std::make_shared<std::string>(*str);
         }
         return *str;
     }
+
+private:
+    void copy_scalar(const Value& other) {
+        switch (other.kind) {
+            case ValueKind::Bool: b = other.b; break;
+            case ValueKind::Int: i = other.i; break;
+            case ValueKind::Float: f = other.f; break;
+            case ValueKind::Handle: h = other.h; break;
+            default: i = 0; break;
+        }
+    }
+
+public:
 
     static Value null_value() { return Value{}; }
     static Value from_bool(bool v) {
@@ -152,7 +142,7 @@ struct Value {
     static Value from_string(std::string v) {
         Value out;
         out.kind = ValueKind::String;
-        out.str = new std::string(std::move(v));
+        out.str = std::make_shared<std::string>(std::move(v));
         return out;
     }
     static Value from_handle(Handle handle) {
@@ -222,6 +212,22 @@ std::basic_ostream<CharT, Traits>& operator<<(std::basic_ostream<CharT, Traits>&
     return false;
 }
 
+// Struct instances are bound as the marker string "struct:<Type>" (fields live in "<name>.<field>").
+[[nodiscard]] inline bool value_is_struct_marker(const Value& v) {
+    return v.kind == ValueKind::String && v.str && v.str->compare(0, 7, "struct:") == 0;
+}
+
+// True when a "<name>.<field>" key could belong to a variable holding v (struct marker,
+// struct baked into a dict, or unknown). Scalars, lists, files etc. never carry fields.
+[[nodiscard]] inline bool value_may_carry_fields(const Value* v) {
+    if (!v) return true;
+    switch (v->kind) {
+        case ValueKind::Int: case ValueKind::Float: case ValueKind::Bool: return false;
+        case ValueKind::Handle: return v->h.kind == HandleKind::Dict;
+        default: return true;
+    }
+}
+
 [[nodiscard]] inline uint32_t value_handle_id(const Value& v) {
     if (v.kind == ValueKind::Handle) return v.h.id;
     Handle h{};
@@ -250,6 +256,9 @@ enum class ValueUnOp { Neg, Not, BitNot };
 // string assignment goes through value_from_legacy_string.
 struct ValueMap {
     std::unordered_map<std::string, Value> data;
+    // Keys created through operator[], in insertion order. Lets a block scope find the
+    // names it introduced without snapshotting every key on entry (see exec_block).
+    std::vector<std::string> insertLog;
 
     struct AssignRef {
         Value& ref;
@@ -272,8 +281,16 @@ struct ValueMap {
         const Value* operator->() const { return &ref; }
     };
 
-    AssignRef operator[](const std::string& key) { return AssignRef{data[key]}; }
-    AssignRef operator[](std::string&& key) { return AssignRef{data[std::move(key)]}; }
+    AssignRef operator[](const std::string& key) {
+        auto [it, inserted] = data.try_emplace(key);
+        if (inserted) insertLog.push_back(key);
+        return AssignRef{it->second};
+    }
+    AssignRef operator[](std::string&& key) {
+        auto [it, inserted] = data.try_emplace(std::move(key));
+        if (inserted) insertLog.push_back(it->first);
+        return AssignRef{it->second};
+    }
 
     auto find(const std::string& key) { return data.find(key); }
     auto find(const std::string& key) const { return data.find(key); }
@@ -285,7 +302,7 @@ struct ValueMap {
     auto cend() const { return data.cend(); }
     std::size_t count(const std::string& key) const { return data.count(key); }
     std::size_t erase(const std::string& key) { return data.erase(key); }
-    void clear() { data.clear(); }
+    void clear() { data.clear(); insertLog.clear(); }
     bool empty() const { return data.empty(); }
     std::size_t size() const { return data.size(); }
 };

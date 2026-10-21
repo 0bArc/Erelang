@@ -1,0 +1,22 @@
+@erelang
+
+public action main() {
+    Map<string, int> m = {"seed": 0};
+    int i = 0;
+    while (i < 20000) {
+        string k = "k{i}";
+        m[k] = i;
+        i = i + 1;
+    }
+    int sum = 0;
+    int j = 0;
+    while (j < 20000) {
+        string k2 = "k{j}";
+        sum = sum + int(m[k2]);
+        j = j + 1;
+    }
+    print sum;
+}
+
+run main;
+

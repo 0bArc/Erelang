@@ -1,0 +1,9 @@
+// expect: TC171
+@strict
+
+public action main() {
+    Array<int> a {"six"};
+    print a[0];
+}
+
+run main;

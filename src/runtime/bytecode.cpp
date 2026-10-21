@@ -412,17 +412,6 @@ Value run_chunk(const Chunk& chunk, Runtime& rt, Runtime::Env& env) {
                 if (left.kind == ValueKind::Int && right.kind == ValueKind::Int) {
                     const int64_t a = left.i, b = right.i;
                     switch (bin) {
-                        case ValueBinOp::Add: stack.push_back(Value::from_int(a + b)); break;
-                        case ValueBinOp::Sub: stack.push_back(Value::from_int(a - b)); break;
-                        case ValueBinOp::Mul: stack.push_back(Value::from_int(a * b)); break;
-                        case ValueBinOp::Div:
-                            if (b == 0) throw std::runtime_error("Division by zero");
-                            stack.push_back(Value::from_int(a / b));
-                            break;
-                        case ValueBinOp::Mod:
-                            if (b == 0) throw std::runtime_error("Modulo by zero");
-                            stack.push_back(Value::from_int(a % b));
-                            break;
                         case ValueBinOp::Eq: stack.push_back(Value::from_bool(a == b)); break;
                         case ValueBinOp::Ne: stack.push_back(Value::from_bool(a != b)); break;
                         case ValueBinOp::Lt: stack.push_back(Value::from_bool(a < b)); break;

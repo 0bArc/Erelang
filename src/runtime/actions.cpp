@@ -25,7 +25,44 @@
 
 namespace erelang {
 
+void Runtime::index_actions(const Program& program) const {
+    actionIndex_.clear();
+    actionSuffixIndex_.clear();
+    actionIndex_.reserve(program.actions.size());
+    for (const auto& a : program.actions) {
+        actionIndex_.emplace(a.name, &a);
+        const auto sep = a.name.rfind("::");
+        if (sep == std::string::npos || sep + 2 >= a.name.size()) continue;
+        const std::string_view last = std::string_view(a.name).substr(sep + 2);
+        auto [it, inserted] = actionSuffixIndex_.emplace(last, &a);
+        if (!inserted) it->second = nullptr; // ambiguous unqualified name
+    }
+    actionIndexProgram_ = &program;
+    actionIndexCount_ = program.actions.size();
+}
+
 const Action* Runtime::find_action(const Program& program, std::string_view name) const {
+    if (&program == actionIndexProgram_ && program.actions.size() == actionIndexCount_) {
+        if (auto it = actionIndex_.find(name); it != actionIndex_.end()) return it->second;
+        const bool hasDynamic = hasDynamicActions_.load(std::memory_order_acquire);
+        if (hasDynamic) {
+            std::lock_guard<std::mutex> lock(dynamicActionsMutex_);
+            for (const auto& a : dynamicActions_) if (a.name == name) return &a;
+        }
+        if (name.find("::") != std::string_view::npos) return nullptr;
+        if (auto it = actionSuffixIndex_.find(name); it != actionSuffixIndex_.end()) return it->second;
+        if (!hasDynamic) return nullptr;
+        const Action* found = nullptr;
+        std::string suffix = std::string("::") + std::string(name);
+        std::lock_guard<std::mutex> lock(dynamicActionsMutex_);
+        for (const auto& a : dynamicActions_) {
+            if (a.name.size() > suffix.size() && a.name.rfind(suffix) == a.name.size() - suffix.size()) {
+                if (found) return nullptr;
+                found = &a;
+            }
+        }
+        return found;
+    }
     for (const auto& a : program.actions) if (a.name == name) return &a;
     {
         std::lock_guard<std::mutex> lock(dynamicActionsMutex_);
@@ -82,7 +119,7 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
     }
     if (std::holds_alternative<PrintStmt>(s)) {
         const auto& st = std::get<PrintStmt>(s);
-        std::cout << eval_string(*st.value, env) << std::endl;
+        std::cout << eval_string(*st.value, env) << '\n';
         return;
     }
     if (std::holds_alternative<SleepStmt>(s)) {
@@ -166,7 +203,7 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                         }
                         lastReturnFields_.clear();
                     } else if constexpr (std::is_same_v<N, PatArray>) {
-                        std::vector<std::string>* list = nullptr;
+                        std::vector<Value>* list = nullptr;
                         int listId = -1;
                         if (value.rfind("list:", 0) == 0) {
                             listId = to_int(value.substr(5));
@@ -180,7 +217,7 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                             throw std::runtime_error("Array destructuring: too few elements");
                         }
                         for (size_t i = 0; i < node.elements.size(); ++i) {
-                            bind_destructure(node.elements[i], (*list)[i]);
+                            bind_destructure(node.elements[i], to_display_string((*list)[i]));
                         }
                     } else if constexpr (std::is_same_v<N, PatTuple>) {
                         std::vector<std::string>* tup = nullptr;
@@ -237,7 +274,7 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                         for (const auto& f : sd->fields) {
                             auto fit = dit->second.find(f.name);
                             if (fit != dit->second.end()) {
-                                env_set(env, st.name + "." + f.name, value_from_legacy_string(fit->second));
+                                env_set(env, st.name + "." + f.name, fit->second);
                             }
                         }
                     }
@@ -388,6 +425,7 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                     );
                 }
             }
+            if (st.sizeExpr) apply_declared_size(st, value, env);
             {
                 Value prev = env_get(env, st.name);
                 if (mem_is_owner(prev) || value_is_handle(prev, HandleKind::Weak)) {
@@ -421,17 +459,19 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
     }
     if (std::holds_alternative<ReturnStmt>(s)) {
         const auto& rs = std::get<ReturnStmt>(s);
-        Value rv = Value::from_string("");
+        Value rv;
         ctx.returnFields.clear();
-        if (rs.value && *rs.value) {
+        if (!rs.value || !*rs.value) {
+            rv = Value::from_string("");
+        } else {
             if (std::holds_alternative<ExprIdent>((*rs.value)->node)) {
                 const std::string& name = std::get<ExprIdent>((*rs.value)->node).name;
                 if (mem_try_move_own_ident(env.vars, name, rv)) {
                     // moved
                 } else {
-                    Value bound = env_get(env, name);
-                    if (bound.rfind("struct:", 0) == 0) {
-                        rv = bound;
+                    const Value* bound = env_find(env, name);
+                    if (bound && value_is_struct_marker(*bound)) {
+                        rv = *bound;
                         const std::string prefix = name + ".";
                         for (const auto& kv : env.vars) {
                             if (kv.first.rfind(prefix, 0) == 0)
@@ -448,7 +488,7 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 }
             } else {
                 rv = eval_value(**rs.value, env);
-                if (rv.rfind("struct:", 0) == 0 && !lastReturnFields_.empty())
+                if (value_is_struct_marker(rv) && !lastReturnFields_.empty())
                     ctx.returnFields = lastReturnFields_;
             }
         }
@@ -568,16 +608,20 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
     }
     if (std::holds_alternative<ForInStmt>(s)) {
         const auto& st = std::get<ForInStmt>(s);
-        std::string iter = eval_string(*st.iterable, env);
-        if (iter.rfind("list:", 0) == 0) {
+        const Value iterValue = eval_value(*st.iterable, env);
+        if (value_is_handle(iterValue, HandleKind::List)) {
             if (st.valueVar) {
                 throw std::runtime_error("List iteration supports only one variable: for (item : list)");
             }
-            int id = to_int(iter.substr(5));
+            const int id = static_cast<int>(value_handle_id(iterValue));
             auto it = g_lists.find(id);
             if (it != g_lists.end()) {
-                for (const auto& item : it->second) {
-                    env_set(env, st.var, value_from_legacy_string(item));
+                // Index loop: the body may push to this list (reallocation) or create lists (rehash).
+                const std::size_t count = it->second.size();
+                for (std::size_t i = 0; i < count; ++i) {
+                    auto cur = g_lists.find(id);
+                    if (cur == g_lists.end() || i >= cur->second.size()) break;
+                    env_set(env, st.var, cur->second[i]);
                     exec_block(*st.body, program, ctx, env);
                     if (ctx.breakSignal) {
                         ctx.breakSignal = false;
@@ -592,14 +636,16 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                     }
                 }
             }
-        } else if (iter.rfind("dict:", 0) == 0) {
-            int id = to_int(iter.substr(5));
+        } else if (value_is_handle(iterValue, HandleKind::Dict)) {
+            const int id = static_cast<int>(value_handle_id(iterValue));
             auto it = g_dicts.find(id);
             if (it != g_dicts.end()) {
-                for (const auto& kv : it->second) {
+                // Snapshot: the body may insert keys (rehash invalidates live iterators).
+                const auto entries = it->second;
+                for (const auto& kv : entries) {
                     if (st.valueVar) {
                         env_set(env, st.var, value_from_legacy_string(kv.first));
-                        env_set(env, *st.valueVar, value_from_legacy_string(kv.second));
+                        env_set(env, *st.valueVar, kv.second);
                     } else {
                         env_set(env, st.var, value_from_legacy_string(kv.first));
                     }
@@ -660,22 +706,29 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
     if (std::holds_alternative<IndexSetStmt>(s)) {
         const auto& st = std::get<IndexSetStmt>(s);
         const Value object = eval_value(*st.object, env);
-        const int64_t index = value_as_int(eval_value(*st.index, env));
-        const Value value = eval_value(*st.value, env);
+        const Value indexValue = eval_value(*st.index, env);
+        Value value = eval_value(*st.value, env);
+        if (value_is_handle(object, HandleKind::Dict)) {
+            auto& dict = g_dicts[static_cast<int>(value_handle_id(object))];
+            if (indexValue.kind == ValueKind::String) dict[indexValue.string_ref()] = std::move(value);
+            else dict[to_display_string(indexValue)] = std::move(value);
+            return;
+        }
+        const int64_t index = value_as_int(indexValue);
         if (value_is_handle(object, HandleKind::Buffer)) {
             mem_buffer_index_set(object, index, value);
             return;
         }
-        if (to_display_string(object).rfind("list:", 0) == 0) {
-            const int id = to_int(to_display_string(object).substr(5));
-            auto& list = g_lists[id];
+        if (value_is_handle(object, HandleKind::List)) {
+            auto& list = g_lists[static_cast<int>(value_handle_id(object))];
             if (index < 0 || static_cast<std::size_t>(index) >= list.size()) {
-                throw std::runtime_error("list index out of bounds");
+                throw std::runtime_error("list index " + std::to_string(index) + " out of bounds (length " +
+                                         std::to_string(list.size()) + ")");
             }
-            list[static_cast<std::size_t>(index)] = to_display_string(value);
+            list[static_cast<std::size_t>(index)] = std::move(value);
             return;
         }
-        throw std::runtime_error("index assignment requires buffer or list");
+        throw std::runtime_error("index assignment requires buffer, list or map");
     }
     if (std::holds_alternative<SwitchStmt>(s)) {
         const auto& sw = std::get<SwitchStmt>(s);
@@ -710,7 +763,7 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 auto dit = g_dicts.find(id);
                 if (dit != g_dicts.end()) {
                     for (const auto& kv : dit->second) {
-                        caseEnv.vars[name + "." + kv.first] = value_from_legacy_string(kv.second);
+                        caseEnv.vars[name + "." + kv.first] = kv.second;
                     }
                 }
             }
@@ -849,8 +902,8 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
         if (std::holds_alternative<CompoundAssignExpr>(st.expr->node)) {
             const auto& ca = std::get<CompoundAssignExpr>(st.expr->node);
             if (auto name = lvalue_name(ca.left)) {
-                auto binExpr = std::make_shared<Expr>(Expr{ BinaryExpr{ ca.op, std::make_shared<Expr>(Expr{ExprIdent{*name}}), ca.right } });
-                env_set(env, *name, eval_value(*binExpr, env));
+                const Expr binExpr{ BinaryExpr{ ca.op, ca.left, ca.right } };
+                env_set(env, *name, eval_value(binExpr, env));
             } else {
                 (void)eval_value(*st.expr, env);
             }
@@ -867,14 +920,15 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
             }
             auto it = env.objects.find(st.objectName);
             if (it == env.objects.end()) {
-                auto structIt = env.vars.find(st.objectName);
-                if (structIt != env.vars.end() && structIt->second.rfind("dict:", 0) == 0) {
-                    int id = to_int(structIt->second.substr(5));
+                const Value* bound = env_find(env, st.objectName);
+                const std::string boundText = bound ? to_display_string(*bound) : std::string();
+                if (boundText.rfind("dict:", 0) == 0) {
+                    int id = to_int(boundText.substr(5));
                     std::string val = eval_string(*st.value, env);
                     g_dicts[id][st.varOrField] = val;
                     return;
                 }
-                if (structIt != env.vars.end() && structIt->second.rfind("struct:", 0) == 0) {
+                if (boundText.rfind("struct:", 0) == 0) {
                     std::string val = eval_string(*st.value, env);
                     env_set(env, st.objectName + "." + st.varOrField, value_from_legacy_string(std::move(val)));
                     return;
@@ -952,6 +1006,43 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
         std::string methodName = mc.method;
         {
             Value recv = env_get(env, mc.objectName);
+            const bool isList = value_is_handle(recv, HandleKind::List);
+            if (isList || value_is_handle(recv, HandleKind::Dict)) {
+                if (methodName == "forEach") {
+                    // forEach(actionName): runs the action with `item` (list) or `key`/`value` (dict).
+                    if (mc.args.empty()) return;
+                    const std::string actionName = eval_string(*mc.args[0], env);
+                    const int id = static_cast<int>(value_handle_id(recv));
+                    if (isList) {
+                        const std::vector<Value> items = g_lists[id];
+                        for (const auto& item : items) {
+                            if (const Action* a = find_action(program, actionName)) {
+                                Env callee; callee.vars["item"] = item; exec_block(a->body, program, ctx, callee);
+                            }
+                        }
+                    } else {
+                        const auto entries = g_dicts[id];
+                        for (const auto& kv : entries) {
+                            if (const Action* a = find_action(program, actionName)) {
+                                Env callee;
+                                callee.vars["key"] = kv.first;
+                                callee.vars["value"] = kv.second;
+                                exec_block(a->body, program, ctx, callee);
+                            }
+                        }
+                    }
+                    return;
+                }
+                std::vector<Value> cargs;
+                cargs.reserve(mc.args.size());
+                for (const auto& a : mc.args) cargs.push_back(eval_arg(*a, env));
+                if (auto result = collection_method(recv, methodName, cargs)) {
+                    if (result->kind != ValueKind::Null || !collection_method_is_void(methodName)) {
+                        env.vars["_"] = std::move(*result);
+                    }
+                    return;
+                }
+            }
             if (value_is_handle(recv, HandleKind::Buffer)) {
                 std::vector<Value> bargs;
                 bargs.reserve(mc.args.size());
@@ -973,8 +1064,9 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 }
             }
         }
-        if (auto moduleBuiltin = env.vars.find(mc.objectName + "." + mc.method); moduleBuiltin != env.vars.end()) {
-            if (moduleBuiltin->second.rfind(kBuiltinAliasPrefix.data(), 0) == 0) {
+        if (const Value* moduleBuiltin = env_find(env, mc.objectName + "." + mc.method)) {
+            if (moduleBuiltin->kind == ValueKind::String &&
+                moduleBuiltin->string_ref().rfind(kBuiltinAliasPrefix.data(), 0) == 0) {
                 env.vars["_"] = eval_builtin_call(mc.objectName + "." + mc.method, mc.args, env);
                 return;
             }
@@ -1005,7 +1097,6 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                     throw std::runtime_error("Action not public: " + aliased->name);
                 }
                 Env calleeEnv;
-                for (const auto& kv : globalVars_) calleeEnv.vars[kv.first] = kv.second;
                 for (size_t i = 0; i < aliased->params.size() && i < mc.args.size(); ++i) {
                     calleeEnv.vars[aliased->params[i].name] = eval_string(*mc.args[i], env);
                 }
@@ -1018,316 +1109,8 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
             break;
         }
 
-        auto vhit = env.vars.find(mc.objectName);
-        if (vhit != env.vars.end()) {
-            const std::string& handle = vhit->second;
-            std::string listMethod = methodName;
-            if (listMethod == "append" || listMethod == "push_back" || listMethod == "emplace_back" || listMethod == "emplace") listMethod = "push";
-            if (listMethod == "pop_back") listMethod = "pop";
-            if (listMethod == "remove_at" || listMethod == "remove") listMethod = "erase";
-            if (listMethod == "length") listMethod = "len";
-            if (listMethod == "at") listMethod = "get";
-            if (listMethod == "first") listMethod = "front";
-            if (listMethod == "last") listMethod = "back";
-
-            std::string mapMethod = methodName;
-            if (mapMethod == "put" || mapMethod == "insert" || mapMethod == "emplace" || mapMethod == "try_emplace" || mapMethod == "insert_or_assign") mapMethod = "set";
-            if (mapMethod == "contains" || mapMethod == "containsKey" || mapMethod == "count") mapMethod = "has";
-            if (mapMethod == "getOrDefault" || mapMethod == "get_or" || mapMethod == "get_or_default") mapMethod = "getOr";
-            if (mapMethod == "length") mapMethod = "len";
-            if (mapMethod == "at") mapMethod = "get";
-            if (mapMethod == "erase") mapMethod = "remove";
-            if (mapMethod == "set_path") mapMethod = "set";
-            if (mapMethod == "get_path") mapMethod = "get";
-            if (mapMethod == "has_path") mapMethod = "has";
-            if (mapMethod == "remove_path") mapMethod = "remove";
-
-            if (handle.rfind("list:", 0) == 0 && listMethod == "forEach") {
-                if (mc.args.empty()) return;
-                int id = to_int(handle.substr(5));
-                // forEach(actionName)
-                std::string actionName = eval_string(*mc.args[0], env);
-                for (const auto& item : g_lists[id]) {
-                    if (const Action* a = find_action(program, actionName)) {
-                        Env callee; callee.vars["item"] = item; exec_block(a->body, program, ctx, callee);
-                    }
-                }
-                return;
-            }
-            if (handle.rfind("list:", 0) == 0 && listMethod == "push") {
-
-                int id = to_int(handle.substr(5));
-                if (!mc.args.empty()) {
-                    std::string v = eval_string(*mc.args[0], env);
-                    g_lists[id].push_back(v);
-                }
-                return;
-            }
-            if (handle.rfind("list:", 0) == 0 && listMethod == "insert") {
-                int id = to_int(handle.substr(5));
-                if (mc.args.size() >= 2) {
-                    int idx = to_int(eval_string(*mc.args[0], env));
-                    std::string value = eval_string(*mc.args[1], env);
-                    auto& vec = g_lists[id];
-                    if (idx < 0) idx = 0;
-                    if (idx > static_cast<int>(vec.size())) idx = static_cast<int>(vec.size());
-                    vec.insert(vec.begin() + idx, value);
-                }
-                return;
-            }
-            if (handle.rfind("list:", 0) == 0 && listMethod == "set") {
-                int id = to_int(handle.substr(5));
-                if (mc.args.size() >= 2) {
-                    int idx = to_int(eval_string(*mc.args[0], env));
-                    std::string value = eval_string(*mc.args[1], env);
-                    auto& vec = g_lists[id];
-                    if (idx >= 0 && idx < static_cast<int>(vec.size())) {
-                        vec[idx] = value;
-                    }
-                }
-                return;
-            }
-            if (handle.rfind("list:", 0) == 0 && listMethod == "get") {
-                int id = to_int(handle.substr(5));
-                if (!mc.args.empty()) {
-                    int idx = to_int(eval_string(*mc.args[0], env));
-                    auto& vec = g_lists[id];
-                    if (idx >= 0 && idx < (int)vec.size()) {
-                        // Write into a special var `_` to return a value (printing via print `_`)
-                        env.vars["_"] = vec[idx];
-                    } else {
-                        env.vars["_"] = std::string();
-                    }
-                }
-                return;
-            }
-            if (handle.rfind("list:", 0) == 0 && listMethod == "pop") {
-                int id = to_int(handle.substr(5));
-                auto& vec = g_lists[id];
-                if (!vec.empty()) {
-                    env.vars["_"] = vec.back();
-                    vec.pop_back();
-                } else {
-                    env.vars["_"] = std::string();
-                }
-                return;
-            }
-            if (handle.rfind("list:", 0) == 0 && listMethod == "erase") {
-                int id = to_int(handle.substr(5));
-                if (!mc.args.empty()) {
-                    int idx = to_int(eval_string(*mc.args[0], env));
-                    auto& vec = g_lists[id];
-                    if (idx >= 0 && idx < static_cast<int>(vec.size())) {
-                        vec.erase(vec.begin() + idx);
-                        env.vars["_"] = "true";
-                    } else {
-                        env.vars["_"] = "false";
-                    }
-                }
-                return;
-            }
-            if (handle.rfind("list:", 0) == 0 && listMethod == "clear") {
-                int id = to_int(handle.substr(5));
-                g_lists[id].clear();
-                return;
-            }
-            if (handle.rfind("list:", 0) == 0 && listMethod == "len") {
-                int id = to_int(handle.substr(5));
-                env.vars["_"] = std::to_string((int)g_lists[id].size());
-                return;
-            }
-            if (handle.rfind("list:", 0) == 0 && listMethod == "capacity") {
-                int id = to_int(handle.substr(5));
-                env.vars["_"] = std::to_string((int)g_lists[id].size());
-                return;
-            }
-            if (handle.rfind("list:", 0) == 0 && (listMethod == "reserve" || listMethod == "shrink_to_fit")) {
-                return;
-            }
-            if (handle.rfind("list:", 0) == 0 && listMethod == "empty") {
-                int id = to_int(handle.substr(5));
-                env.vars["_"] = g_lists[id].empty() ? "true" : "false";
-                return;
-            }
-            if (handle.rfind("list:", 0) == 0 && listMethod == "front") {
-                int id = to_int(handle.substr(5));
-                auto& vec = g_lists[id];
-                env.vars["_"] = vec.empty() ? std::string() : vec.front();
-                return;
-            }
-            if (handle.rfind("list:", 0) == 0 && listMethod == "back") {
-                int id = to_int(handle.substr(5));
-                auto& vec = g_lists[id];
-                env.vars["_"] = vec.empty() ? std::string() : vec.back();
-                return;
-            }
-            if (handle.rfind("list:", 0) == 0 && listMethod == "contains") {
-                int id = to_int(handle.substr(5));
-                std::string needle = mc.args.empty() ? std::string() : eval_string(*mc.args[0], env);
-                auto& vec = g_lists[id];
-                const bool found = std::find(vec.begin(), vec.end(), needle) != vec.end();
-                env.vars["_"] = found ? "true" : "false";
-                return;
-            }
-            if (handle.rfind("list:", 0) == 0 && (listMethod == "find" || listMethod == "index_of")) {
-                int id = to_int(handle.substr(5));
-                std::string needle = mc.args.empty() ? std::string() : eval_string(*mc.args[0], env);
-                auto& vec = g_lists[id];
-                auto hit = std::find(vec.begin(), vec.end(), needle);
-                env.vars["_"] = (hit == vec.end()) ? "-1" : std::to_string(static_cast<int>(hit - vec.begin()));
-                return;
-            }
-            if (handle.rfind("list:", 0) == 0 && listMethod == "join") {
-                int id = to_int(handle.substr(5));
-                std::string sep = mc.args.empty() ? std::string() : eval_string(*mc.args[0], env);
-                std::ostringstream out;
-                const auto& vec = g_lists[id];
-                for (size_t i = 0; i < vec.size(); ++i) {
-                    if (i) out << sep;
-                    out << vec[i];
-                }
-                env.vars["_"] = out.str();
-                return;
-            }
-            if (handle.rfind("dict:", 0) == 0 && mapMethod == "forEach") {
-                if (mc.args.empty()) return;
-                int id = to_int(handle.substr(5));
-                std::string actionName = eval_string(*mc.args[0], env);
-                for (const auto& kv : g_dicts[id]) {
-                    if (const Action* a = find_action(program, actionName)) {
-                        Env callee; callee.vars["key"] = kv.first; callee.vars["value"] = kv.second; exec_block(a->body, program, ctx, callee);
-                    }
-                }
-                return;
-            }
-            if (handle.rfind("dict:", 0) == 0 && mapMethod == "set") {
-                int id = to_int(handle.substr(5));
-                if (mc.args.size() >= 2) {
-                    std::ostringstream key;
-                    for (size_t i = 0; i + 1 < mc.args.size(); ++i) {
-                        if (i) key << '.';
-                        key << eval_string(*mc.args[i], env);
-                    }
-                    std::string k = key.str();
-                    std::string v = eval_string(*mc.args[mc.args.size() - 1], env);
-                    g_dicts[id][k] = v;
-                }
-                return;
-            }
-            if (handle.rfind("dict:", 0) == 0 && mapMethod == "get") {
-                int id = to_int(handle.substr(5));
-                if (!mc.args.empty()) {
-                    std::ostringstream key;
-                    for (size_t i = 0; i < mc.args.size(); ++i) {
-                        if (i) key << '.';
-                        key << eval_string(*mc.args[i], env);
-                    }
-                    std::string k = key.str();
-                    auto it = g_dicts[id].find(k);
-                    env.vars["_"] = (it != g_dicts[id].end()) ? it->second : std::string();
-                }
-                return;
-            }
-            if (handle.rfind("dict:", 0) == 0 && mapMethod == "has") {
-                int id = to_int(handle.substr(5));
-                if (!mc.args.empty()) {
-                    std::ostringstream key;
-                    for (size_t i = 0; i < mc.args.size(); ++i) {
-                        if (i) key << '.';
-                        key << eval_string(*mc.args[i], env);
-                    }
-                    std::string k = key.str();
-                    env.vars["_"] = (g_dicts[id].count(k) ? "true" : "false");
-                }
-                return;
-            }
-            if (handle.rfind("dict:", 0) == 0 && mapMethod == "getOr") {
-                int id = to_int(handle.substr(5));
-                if (mc.args.size() >= 2) {
-                    std::ostringstream key;
-                    for (size_t i = 0; i + 1 < mc.args.size(); ++i) {
-                        if (i) key << '.';
-                        key << eval_string(*mc.args[i], env);
-                    }
-                    std::string k = key.str();
-                    std::string def = eval_string(*mc.args[mc.args.size() - 1], env);
-                    auto it = g_dicts[id].find(k);
-                    env.vars["_"] = (it != g_dicts[id].end()) ? it->second : def;
-                }
-                return;
-            }
-            if (handle.rfind("dict:", 0) == 0 && mapMethod == "remove") {
-                int id = to_int(handle.substr(5));
-                if (!mc.args.empty()) {
-                    std::ostringstream key;
-                    for (size_t i = 0; i < mc.args.size(); ++i) {
-                        if (i) key << '.';
-                        key << eval_string(*mc.args[i], env);
-                    }
-                    std::string k = key.str();
-                    env.vars["_"] = g_dicts[id].erase(k) ? "true" : "false";
-                }
-                return;
-            }
-            if (handle.rfind("dict:", 0) == 0 && mapMethod == "clear") {
-                int id = to_int(handle.substr(5));
-                g_dicts[id].clear();
-                return;
-            }
-            if (handle.rfind("dict:", 0) == 0 && (mapMethod == "size" || mapMethod == "len")) {
-                int id = to_int(handle.substr(5));
-                env.vars["_"] = std::to_string((int)g_dicts[id].size());
-                return;
-            }
-            if (handle.rfind("dict:", 0) == 0 && mapMethod == "empty") {
-                int id = to_int(handle.substr(5));
-                env.vars["_"] = g_dicts[id].empty() ? "true" : "false";
-                return;
-            }
-            if (handle.rfind("dict:", 0) == 0 && mapMethod == "keys") {
-                int id = to_int(handle.substr(5));
-                int lid = g_nextListId++;
-                g_lists[lid] = {};
-                for (const auto& kv : g_dicts[id]) g_lists[lid].push_back(kv.first);
-                env.vars["_"] = std::string("list:") + std::to_string(lid);
-                return;
-            }
-            if (handle.rfind("dict:", 0) == 0 && mapMethod == "values") {
-                int id = to_int(handle.substr(5));
-                int lid = g_nextListId++;
-                g_lists[lid] = {};
-                for (const auto& kv : g_dicts[id]) g_lists[lid].push_back(kv.second);
-                env.vars["_"] = std::string("list:") + std::to_string(lid);
-                return;
-            }
-            if (handle.rfind("dict:", 0) == 0 && (mapMethod == "items" || mapMethod == "entries")) {
-                int id = to_int(handle.substr(5));
-                int lid = g_nextListId++;
-                g_lists[lid] = {};
-                for (const auto& kv : g_dicts[id]) g_lists[lid].push_back(kv.first + ":" + kv.second);
-                env.vars["_"] = std::string("list:") + std::to_string(lid);
-                return;
-            }
-            if (handle.rfind("dict:", 0) == 0 && mapMethod == "merge") {
-                int id = to_int(handle.substr(5));
-                if (!mc.args.empty()) {
-                    std::string otherHandle = eval_string(*mc.args[0], env);
-                    if (otherHandle.rfind("dict:", 0) == 0) {
-                        int sourceId = to_int(otherHandle.substr(5));
-                        for (const auto& kv : g_dicts[sourceId]) {
-                            g_dicts[id][kv.first] = kv.second;
-                        }
-                    }
-                }
-                return;
-            }
-            if (handle.rfind("dict:", 0) == 0 && mapMethod == "clone") {
-                int id = to_int(handle.substr(5));
-                int cloneId = g_nextDictId++;
-                g_dicts[cloneId] = g_dicts[id];
-                env.vars["_"] = std::string("dict:") + std::to_string(cloneId);
-                return;
-            }
+        if (const Value* bound = env_find(env, mc.objectName)) {
+            const std::string handle = to_display_string(*bound);
             // Set handle dispatch (handle prefix "set:")
             {
             if (handle.rfind("set:", 0) == 0 && methodName == "add") {
@@ -1359,7 +1142,7 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 int id = to_int(handle.substr(4));
                 int lid = g_nextListId++;
                 g_lists[lid] = {};
-                for (const auto& v : g_sets[id]) g_lists[lid].push_back(v);
+                for (const auto& v : g_sets[id]) g_lists[lid].push_back(value_from_legacy_string(v));
                 env.vars["_"] = std::string("list:") + std::to_string(lid);
                 return;
             }
@@ -1522,7 +1305,7 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 else if (methodName == "buffer") builtinName = "file_buffer";
                 if (!builtinName.empty()) {
                     std::vector<ExprPtr> callArgs;
-                    callArgs.push_back(std::make_shared<Expr>(Expr{ExprString{handle}}));
+                    callArgs.push_back(std::make_shared<Expr>(Expr{ExprString{handle, true}}));
                     for (const auto& a : mc.args) callArgs.push_back(a);
                     env.vars["_"] = eval_builtin_call(builtinName, callArgs, env, true);
                     return;
@@ -1687,7 +1470,6 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 }
 
                 Env callEnv;
-                for (const auto& kv : globalVars_) callEnv.vars[kv.first] = kv.second;
                 for (size_t i = 0; i < method->params.size() && i < mc.args.size(); ++i) {
                     callEnv.vars[method->params[i].name] = eval_string(*mc.args[i], env);
                 }
@@ -1737,8 +1519,6 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
             throw std::runtime_error("Method hidden: " + mc.method);
         }
         Env callEnv;
-        // Seed with current shared globals
-        for (const auto& kv : globalVars_) callEnv.vars[kv.first] = kv.second;
         // bind positional args into method params
         for (size_t i=0; i<meth->params.size() && i<mc.args.size(); ++i) {
             callEnv.vars[meth->params[i].name] = eval_string(*mc.args[i], env);
@@ -1778,30 +1558,33 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                 return;
             }
             Env calleeEnv;
-            // Seed with current shared globals
-            for (const auto& kv : globalVars_) calleeEnv.vars[kv.first] = kv.second;
             // Bind positional args into parameter names
             for (size_t i=0; i<a->params.size() && i<call.args.size(); ++i) {
                 const std::string paramName = a->params[i].name;
                 if (std::holds_alternative<ExprIdent>(call.args[i]->node)) {
                     const auto& id = std::get<ExprIdent>(call.args[i]->node).name;
-                    Value argValue = env_get(env, id);
-                    if (argValue.rfind("struct:", 0) == 0)
-                        calleeEnv.vars[paramName] = argValue;
+                    const Value* bound = env_find(env, id);
+                    const bool carriesFields = value_may_carry_fields(bound);
+                    if (bound && value_is_struct_marker(*bound))
+                        calleeEnv.vars[paramName] = *bound;
                     else
-                        calleeEnv.vars[paramName] = eval_string(*call.args[i], env);
-                    auto oit = env.objects.find(id);
-                    if (oit != env.objects.end()) {
-                        calleeEnv.objects[paramName] = oit->second;
+                        calleeEnv.vars[paramName] = eval_value(*call.args[i], env);
+                    if (!env.objects.empty()) {
+                        auto oit = env.objects.find(id);
+                        if (oit != env.objects.end()) {
+                            calleeEnv.objects[paramName] = oit->second;
+                        }
                     }
-                    for (const auto& kv : env.vars) {
+                    if (carriesFields) {
                         const std::string prefix = id + ".";
-                        if (kv.first.rfind(prefix, 0) == 0) {
-                            calleeEnv.vars[paramName + kv.first.substr(id.size())] = kv.second;
+                        for (const auto& kv : env.vars) {
+                            if (kv.first.rfind(prefix, 0) == 0) {
+                                calleeEnv.vars[paramName + kv.first.substr(id.size())] = kv.second;
+                            }
                         }
                     }
                 } else {
-                    calleeEnv.vars[paramName] = eval_string(*call.args[i], env);
+                    calleeEnv.vars[paramName] = eval_arg(*call.args[i], env);
                 }
             }
             prepare_action_slots(calleeEnv, *a);
@@ -1819,9 +1602,9 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
         }
         else {
             // Check if name resolves to a func:N handle in env
-            auto envIt = env.vars.find(call.name);
-            if (envIt != env.vars.end() && envIt->second.rfind("func:", 0) == 0) {
-                const std::string& handle = envIt->second;
+            const Value* bound = env_find(env, call.name);
+            const std::string handle = bound ? to_display_string(*bound) : std::string();
+            if (handle.rfind("func:", 0) == 0) {
                 const std::string funcIdStr = handle.substr(5);
                 int funcId = 0;
                 try { funcId = std::stoi(funcIdStr); }
@@ -1836,7 +1619,6 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
                             callEnv.vars[cv.name] = *cv.cell;
                         }
                     }
-                    for (const auto& kv : globalVars_) callEnv.vars[kv.first] = kv.second;
                     for (size_t i = 0; i < cd->body.params.size() && i < call.args.size(); ++i) {
                         callEnv.vars[cd->body.params[i].name] = eval_string(*call.args[i], env);
                     }
@@ -1859,11 +1641,83 @@ void Runtime::exec_stmt(const Statement& s, const Program& program, ExecContext&
     }
 }
 
+// `Array<T> a {N} = init`: a list of exactly N elements (initializer, then zero values of T),
+// marked fixed so push/pop/insert/erase/clear fail. Map/Set: N reserves capacity.
+void Runtime::apply_declared_size(const LetStmt& st, Value& value, const Env& env) const {
+    const int64_t n = value_as_int(eval_value(*st.sizeExpr, env));
+    if (n < 0) {
+        throw std::runtime_error("collection size for '" + st.name + "' must not be negative (got " +
+                                 std::to_string(n) + ")");
+    }
+    const auto size = static_cast<std::size_t>(n);
+    if (value_is_handle(value, HandleKind::List)) {
+        int id = static_cast<int>(value_handle_id(value));
+        if (!std::holds_alternative<ListLiteralExpr>(st.value->node)) {
+            // Initialized from another list: copy so the source keeps its own length.
+            const int copyId = g_nextListId++;
+            g_lists[copyId] = g_lists[id];
+            id = copyId;
+            value = make_handle_value(HandleKind::List, static_cast<uint32_t>(id));
+        }
+        auto& items = g_lists[id];
+        if (items.size() > size) {
+            throw std::runtime_error("Array '" + st.name + "' has fixed size " + std::to_string(size) + " but " +
+                                     std::to_string(items.size()) + " elements were given");
+        }
+        std::string elemType;
+        if (!parse_runtime_array_type(normalize_runtime_type_name(st.declaredType), elemType)) elemType = "int";
+        items.reserve(size);
+        items.resize(size, mem_zero_value(elemType));
+        g_fixedLists.insert(id);
+        return;
+    }
+    if (value_is_handle(value, HandleKind::Dict)) {
+        g_dicts[static_cast<int>(value_handle_id(value))].reserve(size);
+        return;
+    }
+    if (value_is_handle(value, HandleKind::Set)) {
+        g_sets[static_cast<int>(value_handle_id(value))].reserve(size);
+        return;
+    }
+    throw std::runtime_error("size `{N}` on '" + st.name + "' requires an Array, Map or Set value");
+}
+
+// Releases owners/weak refs and closes files bound to names this block introduced
+// (keys inserted into env.vars since `mark`). Names that existed before the block stay.
+// Surviving new names stay logged so an enclosing block still treats them as its own.
+void Runtime::release_block_scope(Env& env, std::size_t mark) const {
+    auto& log = env.vars.insertLog;
+    std::size_t keep = mark;
+    for (std::size_t i = mark; i < log.size(); ++i) {
+        auto it = env.vars.data.find(log[i]);
+        if (it == env.vars.data.end()) continue;
+        const Value& v = it->second;
+        bool released = false;
+        if (v.kind == ValueKind::Handle || v.kind == ValueKind::String) {
+            if (mem_is_owner(v) || value_is_handle(v, HandleKind::Weak)) {
+                mem_release(v);
+                env.vars.data.erase(it);
+                released = true;
+            } else if (value_is_handle(v, HandleKind::File) ||
+                       (v.kind == ValueKind::String && v.string_ref().rfind("file:", 0) == 0)) {
+                std::vector<ExprPtr> callArgs{
+                    std::make_shared<Expr>(Expr{ ExprString{ to_display_string(v), true } }) };
+                (void)eval_builtin_call("file_close", callArgs, env, true);
+                env.vars.data.erase(it);
+                released = true;
+            }
+        }
+        if (!released) {
+            if (keep != i) log[keep] = std::move(log[i]);
+            ++keep;
+        }
+    }
+    log.resize(keep);
+}
+
 void Runtime::exec_block(const Block& b, const Program& program, ExecContext& ctx, Env& env) const {
     const bool dbg = debug_enabled();
-    std::unordered_set<std::string> before;
-    before.reserve(env.vars.size());
-    for (const auto& kv : env.vars) before.insert(kv.first);
+    const std::size_t mark = env.vars.insertLog.size();
     for (size_t i = 0; i < b.stmts.size(); ++i) {
         if (dbg) {
             const int line = (i < b.lines.size()) ? b.lines[i] : 0;
@@ -1876,52 +1730,14 @@ void Runtime::exec_block(const Block& b, const Program& program, ExecContext& ct
             ctx.returnValue = prop.value;
             break;
         } catch (...) {
-            for (auto it = env.vars.begin(); it != env.vars.end(); ) {
-                if (before.count(it->first)) {
-                    ++it;
-                    continue;
-                }
-                if (mem_is_owner(it->second) || value_is_handle(it->second, HandleKind::Weak)) {
-                    mem_release(it->second);
-                    it = env.vars.data.erase(it);
-                } else if (value_is_handle(it->second, HandleKind::File) ||
-                           to_display_string(it->second).rfind("file:", 0) == 0) {
-                    auto makeArg = [](const Value& v) {
-                        return std::make_shared<Expr>(Expr{ ExprString{ to_display_string(v) } });
-                    };
-                    std::vector<ExprPtr> callArgs{ makeArg(it->second) };
-                    (void)eval_builtin_call("file_close", callArgs, env, true);
-                    it = env.vars.data.erase(it);
-                } else {
-                    ++it;
-                }
-            }
+            release_block_scope(env, mark);
             throw;
         }
         if (ctx.returned || ctx.breakSignal || ctx.continueSignal) {
             break;
         }
     }
-    for (auto it = env.vars.begin(); it != env.vars.end(); ) {
-        if (before.count(it->first)) {
-            ++it;
-            continue;
-        }
-        if (mem_is_owner(it->second) || value_is_handle(it->second, HandleKind::Weak)) {
-            mem_release(it->second);
-            it = env.vars.data.erase(it);
-        } else if (value_is_handle(it->second, HandleKind::File) ||
-                   to_display_string(it->second).rfind("file:", 0) == 0) {
-            auto makeArg = [](const Value& v) {
-                return std::make_shared<Expr>(Expr{ ExprString{ to_display_string(v) } });
-            };
-            std::vector<ExprPtr> callArgs{ makeArg(it->second) };
-            (void)eval_builtin_call("file_close", callArgs, env, true);
-            it = env.vars.data.erase(it);
-        } else {
-            ++it;
-        }
-    }
+    release_block_scope(env, mark);
 }
 
 } // namespace erelang

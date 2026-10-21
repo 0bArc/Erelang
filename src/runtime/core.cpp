@@ -168,6 +168,8 @@ int Runtime::run(const Program& program) const {
     reset_global_container_state();
     currentProgram_ = &program;
     scriptDirectory_ = infer_entry_script_directory(program);
+    index_actions(program);
+    ActionIndexGuard indexGuard{this};
     // Park thread-builtin workers on every exit path (including exceptions) so
     // they can never outlive this Program/Runtime.
     struct ParkGuard { ~ParkGuard() { Runtime::park_worker_threads(); } } parkGuard;
@@ -375,6 +377,8 @@ void Runtime::dispatch_plugin_hooks(const Program& program, std::string_view hoo
 int Runtime::run_single_action(const Program& program, std::string_view actionName) const {
     currentProgram_ = &program;
     scriptDirectory_ = infer_entry_script_directory(program);
+    index_actions(program);
+    ActionIndexGuard indexGuard{this};
     const Action* a = find_action(program, actionName);
     if (!a) { currentProgram_ = nullptr; return 1; }
     if (program.strict && a->visibility != Visibility::Public) { currentProgram_ = nullptr; return 2; }
@@ -492,12 +496,9 @@ std::string Runtime::load_elan_file(const std::filesystem::path& path) const {
     {
         std::lock_guard<std::mutex> lock(dynamicActionsMutex_);
         // Drop previously loaded actions for this stem (reload support)
-        dynamicActions_.erase(
-            std::remove_if(dynamicActions_.begin(), dynamicActions_.end(),
-                [&](const Action& a) {
-                    return a.name.rfind(prefix, 0) == 0;
-                }),
-            dynamicActions_.end());
+        dynamicActions_.remove_if([&](const Action& a) {
+            return a.name.rfind(prefix, 0) == 0;
+        });
 
         for (Action a : mod.actions) {
             // Keep already-prefixed names; otherwise namespace by file stem
@@ -506,6 +507,7 @@ std::string Runtime::load_elan_file(const std::filesystem::path& path) const {
             }
             dynamicActions_.push_back(std::move(a));
         }
+        hasDynamicActions_.store(!dynamicActions_.empty(), std::memory_order_release);
     }
 
     return stem;
@@ -541,7 +543,7 @@ std::string Runtime::load_elan_directory(const std::filesystem::path& dir) const
     for (const auto& file : files) {
         std::string stem = load_elan_file(file);
         if (!stem.empty()) {
-            g_lists[id].push_back(stem);
+            g_lists[id].push_back(Value::from_string(stem));
         }
     }
     return std::string("list:") + std::to_string(id);

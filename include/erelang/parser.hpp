@@ -17,7 +17,8 @@ enum class BinOp { Add, Sub, Mul, Div, Mod, Pow, EQ, NE, LT, LE, GT, GE, And, Or
 enum class UnOp { Neg, Not, Deref, AddressOf, BitNot };
 enum class Visibility { Public, Private };
 
-struct ExprString { std::string v; };
+// raw: runtime-built argument carrying an already-evaluated value; never interpolated.
+struct ExprString { std::string v; bool raw{false}; };
 struct ExprNull {};
 struct ExprNumber {
     int64_t v{0};
@@ -84,6 +85,8 @@ struct LetStmt {
     ExprPtr value;
     std::string declaredType;
     PatternPtr pattern;
+    // `Array<T> a {N}`: fixed length N (zero-filled). Map/Set: capacity hint. Null if absent.
+    ExprPtr sizeExpr;
 };
 struct ReturnStmt { std::optional<ExprPtr> value; };
 struct SetStmt { bool isMember{false}; std::string varOrField; std::string objectName; ExprPtr value; };

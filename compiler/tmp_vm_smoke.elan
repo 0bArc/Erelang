@@ -1,6 +1,0 @@
-@strict
-public action main() {
-    string r = mini_ir_run_file("fixtures/mini_ir_vm_smoke.ir");
-    print r;
-}
-run main;

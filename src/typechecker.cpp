@@ -246,6 +246,7 @@ bool TypeChecker::is_assignable(const TypeInfo& from, const TypeInfo& to) const 
     if (to.name == "any" || from.name == "any") return true;
     if (from.name == "never") return true;
     if (to.name == "never") return from.name == "never";
+    if (from.name == "unknown" && (to.name.rfind("enum:", 0) == 0 || to.name.rfind("struct:", 0) == 0)) return true;
     if (to.name == "unknown" || from.name == "unknown") return false;
     if (types_equal(from, to)) return true;
 
@@ -366,10 +367,12 @@ TypeInfo TypeChecker::resolve_type(const std::string& syntax, const Program* pro
     if (declNormalized == "double" || declNormalized == "float") return TypeInfo{"double"};
     if (declNormalized == "bool") return TypeInfo{"bool"};
     if (declNormalized == "string" || declNormalized == "str" || declNormalized == "char") return TypeInfo{"string"};
-    if (declNormalized == "array") return TypeInfo{"array<any>"};
     if (baseLower == "array" || baseLower == "Array") {
         if (applied.args.empty()) return TypeInfo{"array<any>"};
-        TypeInfo elem = resolve_type(type_ref_canonical(applied.args[0]), program, known);
+        // Unresolvable element types (generic parameters like T) stay array<any>.
+        bool elemKnown = true;
+        TypeInfo elem = resolve_type(type_ref_canonical(applied.args[0]), program, &elemKnown);
+        if (!elemKnown || elem.name == "unknown") return TypeInfo{"array<any>"};
         return TypeInfo{"array<" + elem.name + ">"};
     }
     if (decl.rfind("array<", 0) == 0) return TypeInfo{decl};
@@ -803,6 +806,43 @@ bool try_operator_method(TypeChecker& tc, TCResult& result, CheckContext& ctx,
 
 } // namespace
 
+// Result type of `recv.method(...)` for Array<T> / Map<K, V> receivers (runtime: collection_method).
+static std::optional<TypeInfo> collection_method_type(const TypeChecker& tc, const std::string& recvType,
+                                                      const std::string& method, CheckContext& ctx) {
+    const bool isArray = recvType.rfind("array<", 0) == 0;
+    const bool isMap = recvType.rfind("map<", 0) == 0;
+    if (!isArray && !isMap) return std::nullopt;
+    TypeRef ref;
+    try { ref = parse_type_ref_string(recvType); } catch (...) { return std::nullopt; }
+    auto arg = [&](std::size_t i) -> TypeInfo {
+        if (i >= ref.args.size()) return {"unknown"};
+        const std::string t = type_ref_canonical(ref.args[i]);
+        if (t == "any") return {"unknown"};
+        return tc.resolve_type(t, ctx.program, nullptr);
+    };
+    auto is = [&](std::initializer_list<const char*> names) {
+        for (const char* n : names) if (method == n) return true;
+        return false;
+    };
+    if (isArray) {
+        if (is({"len", "length", "size", "capacity", "find", "index_of"})) return TypeInfo{"int"};
+        if (is({"empty", "contains", "erase", "remove", "remove_at"})) return TypeInfo{"bool"};
+        if (is({"get", "at", "front", "back", "first", "last", "pop", "pop_back"})) return arg(0);
+        if (is({"push", "append", "push_back", "emplace_back", "emplace", "insert", "set", "clear",
+                "reserve", "shrink_to_fit"})) return TypeInfo{"void"};
+        if (method == "join") return TypeInfo{"string"};
+        return std::nullopt;
+    }
+    if (is({"len", "length", "size"})) return TypeInfo{"int"};
+    if (is({"has", "contains", "containsKey", "count", "remove", "erase", "empty"})) return TypeInfo{"bool"};
+    if (is({"get", "at", "getOr", "get_or", "get_or_default", "getOrDefault"})) return arg(1);
+    if (method == "keys") return TypeInfo{"array<" + arg(0).name + ">"};
+    if (method == "values") return TypeInfo{"array<" + arg(1).name + ">"};
+    if (method == "clone") return TypeInfo{recvType};
+    if (is({"set", "put", "insert", "clear", "merge"})) return TypeInfo{"void"};
+    return std::nullopt;
+}
+
 // ================= ExprChecker =================
 TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
     if (!e) return {"void"};
@@ -1078,9 +1118,24 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
                 auto lt = ot.name.find('<');
                 auto gt = ot.name.rfind('>');
                 if (lt != std::string::npos && gt > lt) {
-                    inferred = tc_.resolve_type(ot.name.substr(lt + 1, gt - lt - 1), ctx.program, nullptr);
+                    std::string inner = ot.name.substr(lt + 1, gt - lt - 1);
+                    TypeInfo resolved = tc_.resolve_type(inner, ctx.program, nullptr);
+                    inferred = resolved.name == "unknown" ? TypeInfo{inner} : resolved;
                 } else {
                     inferred = {"unknown"};
+                }
+            } else if (ot.name.rfind("array<", 0) == 0 || ot.name.rfind("map<", 0) == 0) {
+                // a[i] on Array<T> is T; m[k] on Map<K, V> is V.
+                inferred = {"unknown"};
+                try {
+                    const TypeRef ref = parse_type_ref_string(ot.name);
+                    const bool isArray = ot.name.rfind("array<", 0) == 0;
+                    const std::size_t want = isArray ? 0 : 1;
+                    if (ref.args.size() > want) {
+                        const std::string elem = type_ref_canonical(ref.args[want]);
+                        if (elem != "any") inferred = tc_.resolve_type(elem, ctx.program, nullptr);
+                    }
+                } catch (...) {
                 }
             } else if (const Action* method = find_type_method(ctx.program, ot, "get")) {
                 inferred = method->returnType.empty()
@@ -1336,18 +1391,32 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
                                 inferred = TypeInfo{"*" + inner};
                                 return;
                             }
+                            if (method == "get") {
+                                auto lt = tn.find('<');
+                                auto gt = tn.rfind('>');
+                                std::string inner = (lt != std::string::npos && gt > lt)
+                                    ? tn.substr(lt + 1, gt - lt - 1) : "any";
+                                TypeInfo resolved = tc_.resolve_type(inner, ctx.program, nullptr);
+                                inferred = resolved.name == "unknown" ? TypeInfo{inner} : resolved;
+                                return;
+                            }
                             if (method == "pop") {
                                 auto lt = tn.find('<');
                                 auto gt = tn.rfind('>');
                                 std::string inner = (lt != std::string::npos && gt > lt)
                                     ? tn.substr(lt + 1, gt - lt - 1) : "any";
-                                inferred = tc_.resolve_type(inner, ctx.program, nullptr);
+                                inferred = TypeInfo{inner};
                                 return;
                             }
                             if (method == "push" || method == "resize" || method == "clear" || method == "reserve") {
                                 inferred = {"void"};
                                 return;
                             }
+                        }
+                        if (auto typed = collection_method_type(tc_, tn, method, ctx)) {
+                            for (const auto& arg : node.args) (void)check(arg, ctx);
+                            inferred = *typed;
+                            return;
                         }
                     }
                 }
@@ -1368,12 +1437,21 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
                         inferred = TypeInfo{"*" + inner};
                         return;
                     }
+                    if (method == "get") {
+                        auto lt = recv.name.find('<');
+                        auto gt = recv.name.rfind('>');
+                        std::string inner = (lt != std::string::npos && gt > lt)
+                            ? recv.name.substr(lt + 1, gt - lt - 1) : "any";
+                        TypeInfo resolved = tc_.resolve_type(inner, ctx.program, nullptr);
+                        inferred = resolved.name == "unknown" ? TypeInfo{inner} : resolved;
+                        return;
+                    }
                     if (method == "pop") {
                         auto lt = recv.name.find('<');
                         auto gt = recv.name.rfind('>');
                         std::string inner = (lt != std::string::npos && gt > lt)
                             ? recv.name.substr(lt + 1, gt - lt - 1) : "any";
-                        inferred = tc_.resolve_type(inner, ctx.program, nullptr);
+                        inferred = TypeInfo{inner};
                         return;
                     }
                     if (method == "push" || method == "resize" || method == "clear" || method == "reserve") {
@@ -2190,8 +2268,66 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                 };
                 bind_pattern(stmt.pattern, valT);
             } else {
-            if (scopes.lookup(stmt.name)) DiagBuilder(result_, Severity::Error, "Variable redeclaration: " + stmt.name, "TC030", ctx.actionName()).emit();
-            VarInfo vi; vi.type = expr_.check(stmt.value, ctx); vi.isConst = stmt.isConst; vi.assigned=true;
+            // `_`, `res`, `req` are implicit runtime injectables, not user declarations.
+            const bool implicitName = stmt.name == "_" || stmt.name == "res" || stmt.name == "req";
+            if (scopes.lookup(stmt.name) && !(implicitName && !scopes.current().count(stmt.name))) {
+                DiagBuilder(result_, Severity::Error, "Variable redeclaration: " + stmt.name, "TC030", ctx.actionName()).emit();
+            }
+            VarInfo vi; vi.isConst = stmt.isConst; vi.assigned=true;
+            if (stmt.sizeExpr) {
+                // `Array<T> a {N}` (fixed length) / `Map<K,V> m {N}`, `Set<T> s {N}` (capacity).
+                const TypeInfo sizeT = expr_.check(stmt.sizeExpr, ctx);
+                if (sizeT.name != "int" && sizeT.name != "unknown" && sizeT.name != "any") {
+                    DiagBuilder(result_, Severity::Error,
+                        "Collection size for '" + stmt.name + "' must be int, got " + sizeT.name,
+                        "TC171", ctx.actionName())
+                        .hint("Example: `Array<int> a {6} = [1, 2, 3];`")
+                        .emit();
+                }
+                std::optional<int64_t> constSize;
+                if (std::holds_alternative<ExprNumber>(stmt.sizeExpr->node) &&
+                    !std::get<ExprNumber>(stmt.sizeExpr->node).isFloatLiteral) {
+                    constSize = std::get<ExprNumber>(stmt.sizeExpr->node).v;
+                } else if (std::holds_alternative<UnaryExpr>(stmt.sizeExpr->node)) {
+                    const auto& un = std::get<UnaryExpr>(stmt.sizeExpr->node);
+                    if (un.op == UnOp::Neg && un.expr && std::holds_alternative<ExprNumber>(un.expr->node)) {
+                        constSize = -std::get<ExprNumber>(un.expr->node).v;
+                    }
+                }
+                if (constSize && *constSize < 0) {
+                    DiagBuilder(result_, Severity::Error,
+                        "Collection size for '" + stmt.name + "' must not be negative", "TC171", ctx.actionName()).emit();
+                }
+                const TypeInfo declT = tc_.resolve_type(stmt.declaredType, ctx.program, nullptr);
+                const bool isArray = declT.name.rfind("array<", 0) == 0;
+                const bool isMapOrSet = declT.name.rfind("map<", 0) == 0 || declT.name.rfind("set<", 0) == 0;
+                if (!isArray && !isMapOrSet) {
+                    DiagBuilder(result_, Severity::Error,
+                        "Size `{N}` is only allowed on Array, Map and Set declarations ('" + stmt.name + "' is " +
+                            stmt.declaredType + ")",
+                        "TC173", ctx.actionName()).emit();
+                }
+                const bool emptyDefault = stmt.value &&
+                    ((std::holds_alternative<ListLiteralExpr>(stmt.value->node) &&
+                      std::get<ListLiteralExpr>(stmt.value->node).elements.empty()) ||
+                     (std::holds_alternative<DictLiteralExpr>(stmt.value->node) &&
+                      std::get<DictLiteralExpr>(stmt.value->node).entries.empty()));
+                if (isArray && constSize && stmt.value && std::holds_alternative<ListLiteralExpr>(stmt.value->node)) {
+                    const auto count = std::get<ListLiteralExpr>(stmt.value->node).elements.size();
+                    if (static_cast<int64_t>(count) > *constSize) {
+                        DiagBuilder(result_, Severity::Error,
+                            "Array '" + stmt.name + "' has fixed size " + std::to_string(*constSize) + " but " +
+                                std::to_string(count) + " elements were given",
+                            "TC172", ctx.actionName())
+                            .hint("Raise the size or drop elements; missing elements are zero-filled")
+                            .emit();
+                    }
+                }
+                // A sized declaration may omit the initializer (empty literal is filled at runtime).
+                vi.type = emptyDefault ? declT : expr_.check(stmt.value, ctx);
+            } else {
+                vi.type = expr_.check(stmt.value, ctx);
+            }
             if (!stmt.declaredType.empty()) {
                 bool known = true;
                 TypeInfo expected = tc_.resolve_type(stmt.declaredType, ctx.program, &known);
@@ -2530,7 +2666,8 @@ void TypeChecker::pass_collect(const Program& program) {
     externActions_.clear();
     structs_.clear(); enums_.clear(); aliases_.clear(); traits_.clear();
     specializedTypeCache_.clear();
-    init_builtins();
+    // builtins_ is set up by check() (init_builtins + imported modules); re-initializing
+    // here would overwrite module-specific signatures such as ws.recv_timeout.
     for (const auto& a : program.actions) { actions_[a.name] = &a; actionUsage_[a.name]; }
     for (const auto& e : program.externs) { externActions_.insert(e.name); }
     for (const auto& s : program.structs) structs_[s.name] = &s;
@@ -2671,6 +2808,8 @@ void TypeChecker::pass_check_program(const Program& program, TCResult& out) {
             VarInfo reqInfo; reqInfo.type = {"string"}; reqInfo.assigned = true; reqInfo.used = true;
             scopes.declare("req", reqInfo);
         }
+        // Body locals get their own scope so they may reuse the implicit names above.
+        auto bodyScope = scopes.push();
         auto rf = stmt.check_block(a.body, ctx, scopes, [&]() -> std::string {
             if (a.returnType.empty()) return "void";
             for (const auto& tp : a.typeParams) {
@@ -2893,6 +3032,7 @@ void TypeChecker::register_imported_module_builtins(const Program& program) {
         add("file_buffer", 1, 2, "bool");
         add("fs.open", 1, 2, "string"); add("fs.close", 1, 1, "bool");
         add("fs.read", 1, 1, "string"); add("fs.write", 2, 2, "void");
+        add("fs.append", 2, 2, "void"); add("fs.exists", 1, 1, "bool");
     }
     if (program_imports_module(&program, "builtin/log") || program_imports_module(&program, "std/log")) {
         add("log_set_level", 1, 1, "bool");
@@ -2945,6 +3085,7 @@ void TypeChecker::init_builtins() {
     add("mini_ir.run",1,1,"string");
     add("mini_ir_run_file",1,1,"string");
     add("mini_ir.run_file",1,1,"string");
+    add("mini_lex_buffer",1,1,"unknown");
     add("int",1,1,"int");
     add("float",1,1,"double");
     add("string",1,1,"string");

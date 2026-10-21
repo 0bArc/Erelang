@@ -191,7 +191,7 @@ function buildDocumentIndex(doc: vscode.TextDocument): DocumentIndex {
       if (tw === 'map' || tw === 'dictionary' || tw === 'hashmap' || rhs.startsWith('dict_new(') || rhs.startsWith('hashmap_new(') || rhs.startsWith('{')) out.dictionaries.add(vn);
     }
 
-    const gen = /^\s*(?:constexpr\s+)?(?:static\s+)?(Array<[^>\n]{0,80}>|Map<[^>\n]{0,80}>|HashMap<[^>\n]{0,80}>)\s+([A-Za-z_]\w*)\s*=/.exec(text);
+    const gen = /^\s*(?:constexpr\s+)?(?:static\s+)?(Array<[^>\n]{0,80}>|Map<[^>\n]{0,80}>|HashMap<[^>\n]{0,80}>)\s+([A-Za-z_]\w*)\s*(?:\{[^}\n]{0,40}\}\s*)?(?:=|;)/.exec(text);
     if (gen) {
       const tw = gen[1];
       const vn = gen[2];

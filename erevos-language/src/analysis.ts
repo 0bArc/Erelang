@@ -210,7 +210,7 @@ function typedLocal(line: string): { name: string; type?: string; start: number 
     if (start < 0) return null;
     return { name: colon[1], type: colon[2].trim().replace(/\s*=.*$/, '').trim(), start };
   }
-  const typed = /^\s*(?:public|private|export)?\s*(?:constexpr\s+)?(?:static\s+)?(Array<[^>\n]{0,80}>|Map<[^>\n]{0,80}>|HashMap<[^>\n]{0,80}>|[A-Za-z_]\w*(?:<[^>\n]{0,80}>)?)\s+([A-Za-z_]\w*)\s*(?:=|;)/.exec(line);
+  const typed = /^\s*(?:public|private|export)?\s*(?:constexpr\s+)?(?:static\s+)?(Array<[^>\n]{0,80}>|Map<[^>\n]{0,80}>|HashMap<[^>\n]{0,80}>|[A-Za-z_]\w*(?:<[^>\n]{0,80}>)?)\s+([A-Za-z_]\w*)\s*(?:\{[^}\n]{0,40}\}\s*)?(?:=|;)/.exec(line);
   if (typed) {
     const typeName = typed[1];
     const base = typeName.replace(/<.*$/, '');

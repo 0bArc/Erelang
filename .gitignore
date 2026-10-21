@@ -54,6 +54,12 @@ test_print.0bs
 Thumbs.db
 Desktop.ini
 
+# Scrapes / scratch (never commit)
+.firecrawl/
+compiler/tmp_*
+compiler/.mini_ir_*.tmp
+.mini_ir_*.tmp
+
 dev/
 dev/*
 .github/

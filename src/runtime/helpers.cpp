@@ -19,9 +19,10 @@ namespace erelang {
 namespace fs = std::filesystem;
 
 int g_nextListId = 1;
-std::unordered_map<int, std::vector<std::string>> g_lists;
+std::unordered_map<int, std::vector<Value>> g_lists;
+std::unordered_set<int> g_fixedLists;
 int g_nextDictId = 1;
-std::unordered_map<int, std::unordered_map<std::string, std::string>> g_dicts;
+std::unordered_map<int, std::unordered_map<std::string, Value>> g_dicts;
 int g_nextTupleId = 1;
 std::unordered_map<int, std::vector<std::string>> g_tuples;
 int g_nextEnumVarId = 1;
@@ -58,6 +59,22 @@ std::unordered_map<int, ClosureData*> g_closures;
 int g_nextFutureId = 1;
 std::unordered_map<int, std::shared_ptr<FutureState>> g_futures;
 thread_local std::shared_ptr<FutureState> tls_current_future;
+
+std::vector<Value> legacy_string_list(const std::vector<std::string>& items) {
+    std::vector<Value> out;
+    out.reserve(items.size());
+    for (const auto& s : items) out.push_back(value_from_legacy_string(s));
+    return out;
+}
+
+void sort_list_by_display(std::vector<Value>& items) {
+    std::vector<std::pair<std::string, Value>> keyed;
+    keyed.reserve(items.size());
+    for (auto& v : items) keyed.emplace_back(to_display_string(v), std::move(v));
+    std::stable_sort(keyed.begin(), keyed.end(),
+                     [](const auto& a, const auto& b) { return a.first < b.first; });
+    for (std::size_t i = 0; i < keyed.size(); ++i) items[i] = std::move(keyed[i].second);
+}
 
 void notify_channels_for_cancel() {
     for (auto& kv : g_channels) {
@@ -194,6 +211,7 @@ void async_pool_shutdown() {
 void reset_global_container_state() {
     g_memStats.leaks_at_reset += mem_live_count();
     g_lists.clear();
+    g_fixedLists.clear();
     g_dicts.clear();
     g_tuples.clear();
     g_enumVars.clear();

@@ -29,7 +29,7 @@ endfunction()
 # Control whether erelang embeds the full compiler payload (static lib + headers). Off by default to keep erelang small.
 option(ERELANG_EMBED_PAYLOAD "Embed erelang static lib and headers into erelang for out-of-tree portability" OFF)
 option(SPLIT_RUNTIME_DLLS "Build runtime as many small component DLLs instead of one monolithic erelang.dll" OFF)
-option(BUILD_SHARED_RUNTIME "Build erelang as a shared DLL (erelang.dll). OFF = no runtime DLLs produced" ON)
+option(BUILD_SHARED_RUNTIME "Build erelang as a shared DLL (erelang.dll). OFF = no runtime DLLs produced" OFF)
 option(BUILD_DEBUGGER_EXE "Build debug.exe helper via --make-debug after erelang links" OFF)
 option(ERELANG_BUNDLE_MINGW_RUNTIME "Copy MinGW runtime DLLs next to erelang.exe for portable sharing" ON)
 option(ERELANG_AUTO_UPDATE_EXTENSION "Auto package/install VS Code extension after erelang build" OFF)
@@ -43,27 +43,25 @@ if (ERELANG_EXPERIMENTAL)
   )
 endif()
 
-# Default to Release if not specified
-if (NOT CMAKE_BUILD_TYPE)
+# Default to Release if not specified (single-config generators only)
+get_property(_ob_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if (NOT _ob_multi_config AND NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
-if (CMAKE_BUILD_TYPE STREQUAL "Release")
-  # Favor size + link-time optimization
-  if (MSVC)
-    add_compile_options(/O1 /GL /GS- /Gy /Gw)
-    set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} /LTCG /OPT:REF /OPT:ICF")
-    set(CMAKE_STATIC_LINKER_FLAGS_RELEASE "${CMAKE_STATIC_LINKER_FLAGS_RELEASE} /LTCG")
-  else()
-      add_compile_options(-Os -ffunction-sections -fdata-sections -fvisibility=hidden -fvisibility-inlines-hidden)
-      add_link_options(-Wl,--gc-sections -Wl,--strip-all -Wl,-s)
-      # Avoid enabling IPO/LTO globally for MinGW/GCC to prevent ICE with <filesystem>/DLL link
-      include(CheckIPOSupported)
-      check_ipo_supported(RESULT lto_ok OUTPUT lto_out)
-      if (lto_ok AND MSVC)
-        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
-      endif()
-    endif()
+# Release: optimize for speed (interpreter hot loops), dead-strip unused sections.
+# Generator expressions keep this correct for multi-config generators (Visual Studio).
+if (MSVC)
+  add_compile_options($<$<CONFIG:Release>:/O2> $<$<CONFIG:Release>:/Oi> $<$<CONFIG:Release>:/GL>
+                      $<$<CONFIG:Release>:/GS-> $<$<CONFIG:Release>:/Gy> $<$<CONFIG:Release>:/Gw>)
+  add_link_options($<$<CONFIG:Release>:/LTCG> $<$<CONFIG:Release>:/OPT:REF> $<$<CONFIG:Release>:/OPT:ICF>)
+  set(CMAKE_STATIC_LINKER_FLAGS_RELEASE "${CMAKE_STATIC_LINKER_FLAGS_RELEASE} /LTCG")
+else()
+  add_compile_options($<$<CONFIG:Release>:-O2> $<$<CONFIG:Release>:-ffunction-sections>
+                      $<$<CONFIG:Release>:-fdata-sections> $<$<CONFIG:Release>:-fvisibility=hidden>
+                      $<$<CONFIG:Release>:-fvisibility-inlines-hidden>)
+  add_link_options($<$<CONFIG:Release>:-Wl,--gc-sections> $<$<CONFIG:Release>:-Wl,--strip-all>)
+  # No IPO/LTO for MinGW/GCC: known ICE with <filesystem> + DLL link.
 endif()
 
 add_library(erelang STATIC
@@ -370,7 +368,7 @@ if (BUILD_SHARED_RUNTIME)
   add_dependencies(erelang_runner erelang_shared)
 endif()
 
-if (CMAKE_BUILD_TYPE STREQUAL "Release" AND NOT MSVC)
+if (NOT MSVC AND NOT _ob_multi_config AND CMAKE_BUILD_TYPE STREQUAL "Release")
   add_custom_command(TARGET erelang_runner POST_BUILD
     COMMAND ${CMAKE_STRIP} $<TARGET_FILE:erelang_runner>
     COMMENT "Stripping symbols from erelang for smaller size")
@@ -421,11 +419,14 @@ if (EXISTS "${CMAKE_SOURCE_DIR}/erevos-language" AND ERELANG_AUTO_UPDATE_EXTENSI
   )
 endif()
 
-if (MSVC)
-  add_compile_options(/W4 /permissive-)
-else()
-  add_compile_options(-Wall -Wextra -Wpedantic)
-endif()
+# add_compile_options here would come after every target and apply to none; set per target.
+foreach(_ob_warn_target IN ITEMS erelang erelang_runner obc)
+  if (MSVC)
+    target_compile_options(${_ob_warn_target} PRIVATE /W4 /permissive-)
+  else()
+    target_compile_options(${_ob_warn_target} PRIVATE -Wall -Wextra)
+  endif()
+endforeach()
 
 # Windows-specific UI/linking settings
 if (WIN32)

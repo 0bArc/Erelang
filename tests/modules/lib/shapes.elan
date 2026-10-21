@@ -1,0 +1,17 @@
+@strict
+
+// Included by tests/modules/include_types.elan (not a test on its own).
+
+struct Point {
+    int x;
+    int y;
+}
+
+enum Mode {
+    Fast,
+    Slow
+}
+
+public action origin_x(): int {
+    return 7;
+}

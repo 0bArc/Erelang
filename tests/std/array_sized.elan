@@ -1,0 +1,63 @@
+@strict
+
+public action check(bool ok, string what) {
+    if (!ok) {
+        fail(what);
+    }
+}
+
+public action main() {
+    // Fixed length: initializer first, the rest zero-filled.
+    Array<int> a {6} = [1, 2, 3];
+    check(a.len() == 6, "check 1");
+    check(a[0] + a[2] == 4, "check 2");
+    check(a[5] == 0, "check 3");
+    a[5] = 42;
+    check(a[5] == 42, "check 4");
+
+    // No initializer: all zero values of the element type.
+    Array<string> names {3};
+    check(names.len() == 3, "check 5");
+    names[1] = "bob";
+    check(names[1] == "bob", "check 6");
+
+    // Size from a runtime expression.
+    int n = 4;
+    Array<int> zeros {n * 2};
+    check(zeros.len() == 8, "check 7");
+
+    int total = 0;
+    for (int v : a) {
+        total = total + v;
+    }
+    check(total == 48, "check 8");
+
+    // Length is fixed: growing or shrinking is an error, in-bounds writes are fine.
+    bool pushFailed = false;
+    try {
+        a.push(7);
+    } catch (e) {
+        pushFailed = true;
+    }
+    check(pushFailed, "check 9");
+    bool oobFailed = false;
+    try {
+        a[6] = 1;
+    } catch (e) {
+        oobFailed = true;
+    }
+    check(oobFailed, "check 10");
+    check(a.len() == 6, "check 11");
+
+    // Copying from another list leaves the source untouched.
+    Array<int> src = [9, 8];
+    Array<int> padded {4} = src;
+    check(padded.len() == 4, "check 12");
+    check(src.len() == 2, "check 13");
+    src.push(7);
+    check(src.len() == 3, "check 14");
+
+    print "std-array-sized-ok";
+}
+
+run main;

@@ -41,8 +41,18 @@ extern int g_nextOwnId;
 extern int g_nextSharedId;
 extern int g_nextWeakId;
 extern int g_nextBufferId;
-extern std::unordered_map<int, std::vector<std::string>> g_lists;
-extern std::unordered_map<int, std::unordered_map<std::string, std::string>> g_dicts;
+// Elements are typed Values. Writers that only have legacy display text should go
+// through value_from_legacy_string so "5" still reads back as an int.
+extern std::unordered_map<int, std::vector<Value>> g_lists;
+extern std::unordered_map<int, std::unordered_map<std::string, Value>> g_dicts;
+// Lists declared with a fixed length (`Array<T> a {N}`): no push/pop/insert/erase/clear.
+extern std::unordered_set<int> g_fixedLists;
+[[nodiscard]] inline bool list_is_fixed(int id) {
+    return !g_fixedLists.empty() && g_fixedLists.count(id) > 0;
+}
+[[nodiscard]] std::vector<Value> legacy_string_list(const std::vector<std::string>& items);
+// Lexicographic by display text (the order lists had when elements were strings).
+void sort_list_by_display(std::vector<Value>& items);
 extern std::unordered_map<int, std::vector<std::string>> g_tuples;
 
 struct EnumVarState {

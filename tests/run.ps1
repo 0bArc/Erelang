@@ -25,6 +25,7 @@ $files = Get-ChildItem -Path (Join-Path $root "tests") -Recurse -Filter *.elan |
         $_.Name -ne "cycle_b.elan" -and
         $_.Name -ne "package.elan" -and
         $_.FullName -notmatch '[\\/]packages[\\/]registry[\\/]' -and
+        $_.FullName -notmatch '[\\/]tests[\\/]modules[\\/]lib[\\/]' -and
         $_.FullName -notmatch '[\\/]\.erelang[\\/]'
     } |
     Sort-Object FullName

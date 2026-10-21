@@ -40,6 +40,9 @@ The typechecker emits `TC***` codes before the script runs. **Errors** stop exec
 | `TC163` | Range `..` / `..<` bounds are not `int` |
 | `TC164` | Trait associated type missing on concrete type (`type T::Item = ...`) |
 | `TC165` | Trait method return mismatches associated type binding |
+| `TC171` | Collection size `{N}` is not an `int`, or is a negative constant |
+| `TC172` | Fixed-size array literal has more elements than its declared size |
+| `TC173` | Size `{N}` used on a type other than `Array`, `Map` or `Set` |
 
 ## Warning codes
 

@@ -47,7 +47,7 @@ std::string list_handle_to_json(std::string_view listHandle) {
     for (const auto& item : it->second) {
         if (!first) oss << ',';
         first = false;
-        oss << '"' << json_escape(item) << '"';
+        oss << '"' << json_escape(to_display_string(item)) << '"';
     }
     oss << ']';
     return oss.str();
@@ -66,7 +66,7 @@ std::string dict_handle_to_json(std::string_view dictHandle) {
     for (const auto& [key, value] : it->second) {
         if (!first) oss << ',';
         first = false;
-        oss << '"' << json_escape(key) << "\":\"" << json_escape(value) << '"';
+        oss << '"' << json_escape(key) << "\":\"" << json_escape(to_display_string(value)) << '"';
     }
     oss << '}';
     return oss.str();

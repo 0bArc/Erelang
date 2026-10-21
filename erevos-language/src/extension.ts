@@ -92,12 +92,11 @@ export function activate(ctx: vscode.ExtensionContext) {
   };
   const clientOptions: LanguageClientOptions = {
     documentSelector: [{ scheme: 'file', language: 'erelang' }],
-    synchronize: {
-      fileEvents: vscode.workspace.createFileSystemWatcher('**/*.{elan,ere}'),
-    },
+    // No workspace-wide elan file watcher — disk storms + erelang --check pile-ups freeze Cursor.
     initializationOptions: {
       erelangPath: exePath,
     },
+    synchronize: { configurationSection: 'erelang' },
   };
   client = new LanguageClient('erelang', 'Erelang Language Server', serverOptions, clientOptions);
   ctx.subscriptions.push({ dispose: () => { void client?.stop(); } });
@@ -143,7 +142,7 @@ export function activate(ctx: vscode.ExtensionContext) {
     }),
   );
 
-  // Rich client-side completions keep include-path / member heuristics; LSP also offers basics.
+  // Sole completion source (the LSP server no longer offers completions).
   ctx.subscriptions.push(
     vscode.languages.registerCompletionItemProvider(
       { language: 'erelang' },
@@ -152,7 +151,7 @@ export function activate(ctx: vscode.ExtensionContext) {
     ),
   );
   ctx.subscriptions.push(
-    vscode.languages.registerDocumentSymbolProvider({ language: 'erelang' }, new ErelangDocumentSymbolProvider()),
+    vscode.languages.registerDocumentSymbolProvider({ scheme: 'file', language: 'erelang' },new ErelangDocumentSymbolProvider()),
   );
   ctx.subscriptions.push(
     vscode.languages.registerWorkspaceSymbolProvider(new ErelangWorkspaceSymbolProvider()),

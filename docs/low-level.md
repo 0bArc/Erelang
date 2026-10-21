@@ -94,7 +94,10 @@ See [examples/test.elan](../examples/test.elan) for a pointer sample.
 
 ## Casts
 
-`reinterpret_cast<T>(x)`, `bit_cast<T>(x)`, `dynamic_cast<T>(x)`: for low-level type manipulation.
+Conversions use type constructors: `int(x)`, `string(x)`, `bool(x)`, `double(x)`.
+
+Low-level only: `reinterpret_cast<T>(x)`, `bit_cast<T>(x)`, `dynamic_cast<T>(x)`.
+No `static_cast` — use type constructors.
 
 ## Related
 

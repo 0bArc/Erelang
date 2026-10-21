@@ -2,8 +2,7 @@
 .locals 0
 .labels 0
 .entry
-CONST 10
-CONST 3
-ADD
+CONST_STR 2:42
+CALL 1 3:int
 PRINT
 RETURN

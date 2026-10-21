@@ -1,0 +1,25 @@
+@strict
+
+public action check(bool ok, string what) {
+    if (!ok) {
+        fail(what);
+    }
+}
+
+public action main() {
+    // For maps the size is a capacity hint: entries can still be added freely.
+    Map<string, int> m {64} = {"x": 1};
+    m["y"] = 2;
+    check(m["x"] + m["y"] == 3, "check 1");
+    check(m.has("y"), "check 2");
+    check(m.len() == 2, "check 3");
+
+    Map<string, int> empty {16};
+    check(empty.len() == 0, "check 4");
+    empty["k"] = 5;
+    check(empty["k"] == 5, "check 5");
+
+    print "std-map-sized-ok";
+}
+
+run main;

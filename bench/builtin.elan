@@ -1,0 +1,14 @@
+@erelang
+
+public action main() {
+    int i = 0;
+    int total = 0;
+    string s = "hello world";
+    while (i < 100000) {
+        total = total + string.len(s);
+        i = i + 1;
+    }
+    print total;
+}
+
+run main;

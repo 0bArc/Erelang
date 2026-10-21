@@ -23,7 +23,7 @@ export function needsSemicolon(line: string): boolean {
 
 const KEYWORD_CALLS = new Set([
   'if', 'while', 'for', 'switch', 'match', 'catch', 'sizeof', 'typeof',
-  'decltype', 'alignof', 'offsetof', 'lambda', 'action', 'static_cast',
+  'decltype', 'alignof', 'offsetof', 'lambda', 'action',
   'dynamic_cast', 'reinterpret_cast', 'bit_cast', 'bitcast',
 ]);
 

@@ -1221,6 +1221,63 @@ struct ExecutionContext {
     return 0;
 }
 
+// Folds every loaded module (all but the last entry of `ordered`) into the entry program.
+// Module declarations come first; the entry program wins on name clashes. Structs, enums,
+// type aliases, traits and externs were previously dropped, so an `#include`d struct or
+// enum was an unknown type in the including file.
+erelang::Program merge_loaded_programs(std::vector<erelang::Program>& ordered) {
+    erelang::Program mainProgram = std::move(ordered.back());
+    const std::size_t moduleCount = ordered.size() - 1;
+
+    auto merge_named = [&](auto member) {
+        auto& dest = mainProgram.*member;
+        std::unordered_set<std::string> seen;
+        for (const auto& item : dest) seen.insert(item.name);
+        std::remove_reference_t<decltype(dest)> fromModules;
+        for (std::size_t i = 0; i < moduleCount; ++i) {
+            for (auto& item : ordered[i].*member) {
+                if (seen.insert(item.name).second) fromModules.push_back(std::move(item));
+            }
+        }
+        dest.insert(dest.begin(), std::make_move_iterator(fromModules.begin()),
+                    std::make_move_iterator(fromModules.end()));
+    };
+    // Actions/hooks/entities keep every copy (first match wins at lookup), as before.
+    auto prepend_all = [&](auto member) {
+        auto& dest = mainProgram.*member;
+        std::remove_reference_t<decltype(dest)> fromModules;
+        for (std::size_t i = 0; i < moduleCount; ++i) {
+            auto& src = ordered[i].*member;
+            fromModules.insert(fromModules.end(), std::make_move_iterator(src.begin()),
+                               std::make_move_iterator(src.end()));
+        }
+        dest.insert(dest.begin(), std::make_move_iterator(fromModules.begin()),
+                    std::make_move_iterator(fromModules.end()));
+    };
+    prepend_all(&erelang::Program::actions);
+    prepend_all(&erelang::Program::hooks);
+    prepend_all(&erelang::Program::entities);
+    merge_named(&erelang::Program::structs);
+    merge_named(&erelang::Program::enums);
+    merge_named(&erelang::Program::typeAliases);
+    merge_named(&erelang::Program::traits);
+    merge_named(&erelang::Program::externs);
+
+    std::unordered_set<std::string> globalNames;
+    for (const auto& g : mainProgram.globals) globalNames.insert(g.name);
+    std::unordered_set<std::string> importPaths;
+    for (const auto& imp : mainProgram.imports) importPaths.insert(imp.path);
+    for (std::size_t i = 0; i < moduleCount; ++i) {
+        for (auto& g : ordered[i].globals) {
+            if (globalNames.insert(g.name).second) mainProgram.globals.push_back(std::move(g));
+        }
+        for (auto& imp : ordered[i].imports) {
+            if (importPaths.insert(imp.path).second) mainProgram.imports.push_back(std::move(imp));
+        }
+    }
+    return mainProgram;
+}
+
 [[nodiscard]] int handle_run(const cli::RunOptions& options,
                              ExecutionContext& ctx,
                              const std::vector<std::string>& originalArgs) {
@@ -1282,37 +1339,7 @@ struct ExecutionContext {
             return 1;
         }
 
-        erelang::Program merged;
-        for (std::size_t i = 0; i + 1 < ordered.size(); ++i) {
-            const auto& mod = ordered[i];
-            merged.actions.insert(merged.actions.end(), mod.actions.begin(), mod.actions.end());
-            merged.hooks.insert(merged.hooks.end(), mod.hooks.begin(), mod.hooks.end());
-            merged.entities.insert(merged.entities.end(), mod.entities.begin(), mod.entities.end());
-        }
-
-        erelang::Program mainProgram = ordered.back();
-        if (!merged.actions.empty()) {
-            mainProgram.actions.insert(mainProgram.actions.begin(), merged.actions.begin(), merged.actions.end());
-        }
-        if (!merged.hooks.empty()) {
-            mainProgram.hooks.insert(mainProgram.hooks.begin(), merged.hooks.begin(), merged.hooks.end());
-        }
-        if (!merged.entities.empty()) {
-            mainProgram.entities.insert(mainProgram.entities.begin(), merged.entities.begin(), merged.entities.end());
-        }
-        for (std::size_t mi = 0; mi + 1 < ordered.size(); ++mi) {
-            const auto& m = ordered[mi];
-            for (const auto& g : m.globals) {
-                if (!std::any_of(mainProgram.globals.begin(), mainProgram.globals.end(),
-                                 [&](const erelang::GlobalDecl& e){ return e.name == g.name; }))
-                    mainProgram.globals.push_back(g);
-            }
-            for (const auto& imp : m.imports) {
-                if (!std::any_of(mainProgram.imports.begin(), mainProgram.imports.end(),
-                                 [&](const erelang::ImportDecl& e){ return e.path == imp.path; }))
-                    mainProgram.imports.push_back(imp);
-            }
-        }
+        erelang::Program mainProgram = merge_loaded_programs(ordered);
 
         const auto append_aliases = [&](const erelang::Program& src) {
             for (const auto& alias : src.pluginAliases) {
@@ -1416,37 +1443,7 @@ static bool load_merged_program_for_script(const fs::path& script,
             return false;
         }
 
-        erelang::Program merged;
-        for (std::size_t i = 0; i + 1 < ordered.size(); ++i) {
-            const auto& mod = ordered[i];
-            merged.actions.insert(merged.actions.end(), mod.actions.begin(), mod.actions.end());
-            merged.hooks.insert(merged.hooks.end(), mod.hooks.begin(), mod.hooks.end());
-            merged.entities.insert(merged.entities.end(), mod.entities.begin(), mod.entities.end());
-        }
-
-        erelang::Program mainProgram = ordered.back();
-        if (!merged.actions.empty()) {
-            mainProgram.actions.insert(mainProgram.actions.begin(), merged.actions.begin(), merged.actions.end());
-        }
-        if (!merged.hooks.empty()) {
-            mainProgram.hooks.insert(mainProgram.hooks.begin(), merged.hooks.begin(), merged.hooks.end());
-        }
-        if (!merged.entities.empty()) {
-            mainProgram.entities.insert(mainProgram.entities.begin(), merged.entities.begin(), merged.entities.end());
-        }
-        for (std::size_t mj = 0; mj + 1 < ordered.size(); ++mj) {
-            const auto& mo = ordered[mj];
-            for (const auto& g : mo.globals) {
-                if (!std::any_of(mainProgram.globals.begin(), mainProgram.globals.end(),
-                                 [&](const erelang::GlobalDecl& e){ return e.name == g.name; }))
-                    mainProgram.globals.push_back(g);
-            }
-            for (const auto& imp : mo.imports) {
-                if (!std::any_of(mainProgram.imports.begin(), mainProgram.imports.end(),
-                                 [&](const erelang::ImportDecl& e){ return e.path == imp.path; }))
-                    mainProgram.imports.push_back(imp);
-            }
-        }
+        erelang::Program mainProgram = merge_loaded_programs(ordered);
 
         const auto append_aliases = [&](const erelang::Program& src) {
             for (const auto& alias : src.pluginAliases) {
@@ -1727,12 +1724,13 @@ int main(int argc, char** argv) {
     std::vector<std::string> args(argv + 1, argv + argc);
     // Pass CLI args to runtime for deterministic seed scan
     erelang::Runtime::set_cli_args(args);
+    // Before plugin discovery: --help needs no plugins (discovery scans/creates plugin dirs).
+    if (args.size() == 1 && (args[0] == "--help" || args[0] == "-h")) { print_help(); return 0; }
     erelang::ExecutionContext ctx = erelang::build_execution_context(argc > 0 ? argv[0] : nullptr);
     [[maybe_unused]] auto& pluginManifests = ctx.pluginManifests;
 #ifdef ERELANG_STATIC_RUNNER
     [[maybe_unused]] auto& runtimePluginRecords = ctx.runtimePlugins;
 #endif
-    if (args.size() == 1 && (args[0] == "--help" || args[0] == "-h")) { print_help(); return 0; }
 
     if (!args.empty() && (args[0] == "--fmt" || args[0] == "--docgen")) {
         const bool isFmt = args[0] == "--fmt";

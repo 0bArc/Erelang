@@ -482,9 +482,44 @@ void stack_pop(std::vector<std::int64_t>& st) {
     return read_file_all(path, err);
 }
 
+[[nodiscard]] bool fs_write(const std::string& path, const std::string& data) {
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out) return false;
+    out << data;
+    return static_cast<bool>(out);
+}
+
+[[nodiscard]] bool fs_append(const std::string& path, const std::string& data) {
+    std::ofstream out(path, std::ios::binary | std::ios::app);
+    if (!out) return false;
+    out << data;
+    return static_cast<bool>(out);
+}
+
 [[nodiscard]] bool fs_exists(const std::string& path) {
     std::ifstream in(path, std::ios::binary);
     return static_cast<bool>(in);
+}
+
+[[nodiscard]] std::int64_t parse_int_string(const std::string& s) {
+    try {
+        size_t idx = 0;
+        while (idx < s.size() && std::isspace(static_cast<unsigned char>(s[idx]))) ++idx;
+        if (idx >= s.size()) return 0;
+        size_t consumed = 0;
+        return std::stoll(s.substr(idx), &consumed);
+    } catch (...) {
+        return 0;
+    }
+}
+
+[[nodiscard]] bool call_name_must_resolve(const std::string& n) {
+    if (n.find('.') != std::string::npos) return true;
+    if (n.empty()) return true;
+    for (char c : n) {
+        if (std::isupper(static_cast<unsigned char>(c))) return false;
+    }
+    return true;
 }
 
 [[nodiscard]] std::string path_join(const std::string& a, const std::string& b) {
@@ -580,6 +615,15 @@ RunResult run_code(const Module& mod,
         push(alloc(st, std::move(obj)));
         return true;
     }
+    if (n == "int" || n == "toint") {
+        const std::int64_t arg = locals_get(call_locals, 0);
+        if (heap_is_string(st, arg)) {
+            push(parse_int_string(heap_as_string(st, arg)));
+        } else {
+            push(arg);
+        }
+        return true;
+    }
     if (n == "char_is_digit") {
         push(char_is_digit(heap_as_string(st, locals_get(call_locals, 0))) ? 1 : 0);
         return true;
@@ -606,14 +650,26 @@ RunResult run_code(const Module& mod,
         push(0);
         return true;
     }
-    if (n == "fs.read") {
+    if (n == "fs.read" || n == "read_text" || n == "read") {
         HeapObj obj;
         obj.kind = HeapKind::String;
         obj.str = fs_read(heap_as_string(st, locals_get(call_locals, 0)));
         push(alloc(st, std::move(obj)));
         return true;
     }
-    if (n == "fs.exists") {
+    if (n == "fs.write" || n == "write_text" || n == "write") {
+        const std::string path = heap_as_string(st, locals_get(call_locals, 0));
+        const std::string data = heap_as_string(st, locals_get(call_locals, 1));
+        push(fs_write(path, data) ? 1 : 0);
+        return true;
+    }
+    if (n == "fs.append" || n == "append_text" || n == "append") {
+        const std::string path = heap_as_string(st, locals_get(call_locals, 0));
+        const std::string data = heap_as_string(st, locals_get(call_locals, 1));
+        push(fs_append(path, data) ? 1 : 0);
+        return true;
+    }
+    if (n == "fs.exists" || n == "file_exists" || n == "exists") {
         push(fs_exists(heap_as_string(st, locals_get(call_locals, 0))) ? 1 : 0);
         return true;
     }
@@ -632,6 +688,24 @@ RunResult run_code(const Module& mod,
         push(alloc(st, std::move(obj)));
         return true;
     }
+    if (n == "mini_ir_run" || n == "mini_ir.run") {
+        const std::string text = heap_as_string(st, locals_get(call_locals, 0));
+        const RunResult nested = run_text(text);
+        HeapObj obj;
+        obj.kind = HeapKind::String;
+        obj.str = encode_result(nested);
+        push(alloc(st, std::move(obj)));
+        return true;
+    }
+    if (n == "mini_ir_run_file" || n == "mini_ir.run_file") {
+        const std::string path = heap_as_string(st, locals_get(call_locals, 0));
+        const RunResult nested = run_file(path);
+        HeapObj obj;
+        obj.kind = HeapKind::String;
+        obj.str = encode_result(nested);
+        push(alloc(st, std::move(obj)));
+        return true;
+    }
     return false;
 }
 
@@ -645,7 +719,7 @@ RunResult run_code(const Module& mod,
     std::vector<std::int64_t> stack;
     int pc = 0;
     std::int64_t guard = 0;
-    constexpr std::int64_t kGuard = 50000000;
+    constexpr std::int64_t kGuard = 5000000000LL;
 
     auto jump_to = [&](int lab) {
         if (lab >= 0 && lab < static_cast<int>(labels.size())) {
@@ -816,6 +890,11 @@ RunResult run_code(const Module& mod,
             }
             const auto it = mod.func_index.find(n);
             if (it == mod.func_index.end()) {
+                if (call_name_must_resolve(n)) {
+                    out.ok = false;
+                    out.error = "unknown call " + n;
+                    return out;
+                }
                 HeapObj obj;
                 obj.kind = HeapKind::Enum;
                 obj.tag_or_fields = dotted_tail(n);

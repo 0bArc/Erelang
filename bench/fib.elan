@@ -1,0 +1,12 @@
+@erelang
+
+public action fib(int n): int {
+    if (n < 2) { return n; }
+    return fib(n - 1) + fib(n - 2);
+}
+
+public action main() {
+    print fib(20);
+}
+
+run main;

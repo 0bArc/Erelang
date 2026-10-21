@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <cctype>
+#include <algorithm>
 #include <cstdlib>
 #include <chrono>
 #include <iomanip>
@@ -931,22 +932,57 @@ static bool check_rate_limit(HttpServer& server, const std::string& ip, const st
     return true;
 }
 
-// Read HTTP request line
-static bool recv_line(SOCKET s, std::string& line) {
-    line.clear();
-    char c;
-    int r;
-    while ((r = recv(s, &c, 1, 0)) > 0) {
-        if (c == '\r') {
-            char n;
-            if (recv(s, &n, 1, MSG_PEEK) > 0 && n == '\n') recv(s, &n, 1, 0);
-            return true;
-        }
-        if (c == '\n') return true;
-        line += c;
+// Buffered reads for the HTTP request head: one recv per 4 KB instead of one per byte.
+// The body is read through the same reader so bytes already buffered are not lost.
+struct SocketReader {
+    explicit SocketReader(SOCKET s) : sock(s) {}
+    SOCKET sock;
+    std::string buf;
+    std::size_t pos{0};
+
+    bool fill() {
+        char tmp[4096];
+        const int n = recv(sock, tmp, static_cast<int>(sizeof(tmp)), 0);
+        if (n <= 0) return false;
+        buf.erase(0, pos);
+        pos = 0;
+        buf.append(tmp, static_cast<std::size_t>(n));
+        return true;
     }
-    return !line.empty();
-}
+
+    // Reads one CRLF/LF-terminated line. Fails on EOF or a line over maxLen (bad/hostile client).
+    bool line(std::string& out, std::size_t maxLen = 8192) {
+        out.clear();
+        for (;;) {
+            const std::size_t nl = buf.find('\n', pos);
+            if (nl != std::string::npos) {
+                std::size_t end = nl;
+                if (end > pos && buf[end - 1] == '\r') --end;
+                out.assign(buf, pos, end - pos);
+                pos = nl + 1;
+                return out.size() <= maxLen;
+            }
+            if (buf.size() - pos > maxLen) return false;
+            if (!fill()) {
+                out.assign(buf, pos, std::string::npos);
+                pos = buf.size();
+                return !out.empty();
+            }
+        }
+    }
+
+    std::size_t read(char* dst, std::size_t want) {
+        std::size_t got = std::min(want, buf.size() - pos);
+        std::memcpy(dst, buf.data() + pos, got);
+        pos += got;
+        while (got < want) {
+            const int n = recv(sock, dst + got, static_cast<int>(want - got), 0);
+            if (n <= 0) break;
+            got += static_cast<std::size_t>(n);
+        }
+        return got;
+    }
+};
 
 // Parse URL query string
 static std::unordered_map<std::string, std::string> parse_query(const std::string& query) {
@@ -990,8 +1026,9 @@ static std::string find_route(HttpServer& server, const std::string& method, con
 // Handle one HTTP request on a client socket
 static void handle_http_client(SOCKET client, std::shared_ptr<HttpServer> server) {
     // Read request line
+    SocketReader reader(client);
     std::string reqLine;
-    if (!recv_line(client, reqLine)) { closesocket(client); return; }
+    if (!reader.line(reqLine)) { closesocket(client); return; }
 
     std::istringstream reqStream(reqLine);
     std::string method, path, version;
@@ -1003,7 +1040,8 @@ static void handle_http_client(SOCKET client, std::shared_ptr<HttpServer> server
     std::unordered_map<std::string, std::string> headers;
     int contentLength = 0;
     std::string line;
-    while (recv_line(client, line) && !line.empty()) {
+    int headerCount = 0;
+    while (reader.line(line) && !line.empty() && ++headerCount <= 200) {
         auto colon = line.find(':');
         if (colon != std::string::npos) {
             std::string key = line.substr(0, colon);
@@ -1013,7 +1051,11 @@ static void handle_http_client(SOCKET client, std::shared_ptr<HttpServer> server
             // Lowercase key
             for (auto& c : key) c = static_cast<char>(std::tolower(c));
             headers[key] = val;
-            if (key == "content-length") contentLength = std::stoi(val);
+            if (key == "content-length") {
+                // strtol, not stoi: a malformed header must not throw in the handler thread.
+                const long parsed = std::strtol(val.c_str(), nullptr, 10);
+                contentLength = parsed > 0 && parsed < 104857600 ? static_cast<int>(parsed) : 0;
+            }
         }
     }
 
@@ -1030,13 +1072,7 @@ static void handle_http_client(SOCKET client, std::shared_ptr<HttpServer> server
     std::string body;
     if (contentLength > 0 && contentLength < 104857600) { // cap 100MB
         body.resize(static_cast<size_t>(contentLength));
-        size_t total = 0;
-        while (total < body.size()) {
-            int n = recv(client, &body[total], static_cast<int>(body.size() - total), 0);
-            if (n <= 0) break;
-            total += static_cast<size_t>(n);
-        }
-        body.resize(total);
+        body.resize(reader.read(body.data(), body.size()));
     }
 
     // Check rate limit

@@ -1,0 +1,16 @@
+@strict
+
+#include "lib/shapes.elan"
+
+// Structs and enums declared in an included file are usable here.
+public action main() {
+    Point p;
+    p.x = 3;
+    print p.x;
+    Mode m = Mode.Fast;
+    print m;
+    print origin_x();
+    print "modules-include-types-ok";
+}
+
+run main;

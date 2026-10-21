@@ -1,0 +1,10 @@
+// expect: fixed size 2
+@strict
+
+public action main() {
+    int n = 2;
+    Array<int> a {n} = [1, 2, 3];
+    print a[0];
+}
+
+run main;

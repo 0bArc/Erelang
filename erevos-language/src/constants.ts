@@ -75,7 +75,7 @@ export const LANGUAGE_KEYWORDS = [
   'break','continue','return','match','try','catch','async','await','namespace',
   'lambda','map','filter','reduce',
   'unsafe','repeat','do','extern',
-  'static_cast','dynamic_cast','reinterpret_cast','bit_cast',
+  'dynamic_cast','reinterpret_cast','bit_cast',
   'sizeof','typeof','decltype','alignof','offsetof','is_base_of',
   'heap','shared','weak','buffer',
   '#include','#if','#elif','#else','#endif','#ifdef','#ifndef','#define',

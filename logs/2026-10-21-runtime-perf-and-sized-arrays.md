@@ -275,8 +275,8 @@ the same check runs at run time.
 - `src/runtime/actions.cpp`: `apply_declared_size` pads, marks the list fixed
   (`g_fixedLists`) or reserves map/set capacity.
 - `erevos-language/src/analysis.ts`, `symbols.ts`: declaration regexes accept `{N}`.
-- Docs: `docs/collections.md` (new "Sized collections" section), `docs/diagnostics.md`,
-  `docs/syntax.md` (replaced the stale `list:T` / `map:K,V` rows).
+- Docs: `docs/modules/collections.md` (new "Sized collections" section), `docs/guide/diagnostics.md`,
+  `docs/guide/syntax.md` (replaced the stale `list:T` / `map:K,V` rows).
 
 ## 12. Bugs fixed
 

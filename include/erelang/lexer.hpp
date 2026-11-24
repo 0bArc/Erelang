@@ -58,6 +58,7 @@ enum class TokenKind {
     Ushr,           // >>>
     Pow,            // **
     PowAssign,      // **=
+    CaretAssign,    // ^=
     DotDot,         // ..
     DotDotLt,       // ..<
     DocComment,     // ///... or /** ... */

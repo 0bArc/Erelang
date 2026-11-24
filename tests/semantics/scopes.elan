@@ -1,0 +1,22 @@
+@strict
+action separate(int value): int {
+    int result = value;
+    if (true) {
+        int branch = 99;
+        if (branch != 99) { fail("inner binding"); }
+    } else {
+        int branch = 2;
+        if (branch != 2) { fail("sibling branch binding"); }
+    }
+    return result;
+}
+action main() {
+    if (separate(7) != 7) { fail("block changed outer binding"); }
+    int counter = 0;
+    any increment = lambda() { counter = counter + 1; return counter; };
+    int first = increment();
+    if (first != 1) { fail("first closure call"); }
+    if (increment() != 2 || counter != 2) { fail("closures must share captured cells"); }
+    print "semantics-scopes-ok";
+}
+run main;

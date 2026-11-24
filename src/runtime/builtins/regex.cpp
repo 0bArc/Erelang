@@ -2,6 +2,7 @@
 // Include <regex> before runtime/windows headers to avoid macro interference.
 #include <regex>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <sstream>
 #include <unordered_map>
@@ -33,6 +34,30 @@ static std::shared_ptr<const std::regex> cached_regex(const std::string& pattern
     return compiled;
 }
 
+// Expect patterns: a readable pattern language that expands to a regex, so common checks need
+// no regex syntax. x = one digit, X = one letter, ? = any one character, * = any run of
+// characters (possibly empty), backslash + c = the literal character c. Everything else is literal.
+static std::string expect_to_regex(const std::string& pattern) {
+    std::string out;
+    out.reserve(pattern.size() * 2);
+    auto literal = [&](char c) {
+        if (std::string_view("\\^$.|?*+()[]{}").find(c) != std::string_view::npos) out += '\\';
+        out += c;
+    };
+    for (std::size_t i = 0; i < pattern.size(); ++i) {
+        const char c = pattern[i];
+        if (c == '\\' && i + 1 < pattern.size()) { literal(pattern[++i]); }
+        else if (c == 'x') out += "[0-9]";
+        else if (c == 'X') out += "[A-Za-z]";
+        else if (c == '?') out += ".";
+        else if (c == '*') out += ".*";
+        else literal(c);
+    }
+    return out;
+}
+
+std::string __erelang_intel_regex(const std::string& sample);
+
 static std::string regex_dispatch(const std::string& name, const std::vector<std::string>& argv) {
     auto argS = [&](size_t i){ return i<argv.size()?argv[i]:std::string(); };
     // API: re.match(text, pattern), re.find(text, pattern), re.replace(text, pattern, repl)
@@ -42,6 +67,21 @@ static std::string regex_dispatch(const std::string& name, const std::vector<std
         // Full match: the pattern must cover the entire input, not a substring.
         try { const auto re = cached_regex(pat); return std::regex_match(text, *re) ? "true" : "false"; }
         catch (...) { return "false"; }
+    }
+    // re.expect(pattern, text): whole-text match using the readable expect pattern language.
+    // Note the argument order is (pattern, text), the reverse of re.match.
+    if (name == "regex_expect" || name == "re.expect") {
+        const std::string pat = argS(0), text = argS(1);
+        try { const auto re = cached_regex(expect_to_regex(pat)); return std::regex_match(text, *re) ? "true" : "false"; }
+        catch (...) { return "false"; }
+    }
+    // re.infer(sample): compact regex that matches texts shaped like the sample.
+    if (name == "regex_infer" || name == "re.infer") {
+        return __erelang_intel_regex(argS(0));
+    }
+    // re.explain(pattern): the regex an expect pattern expands to.
+    if (name == "regex_explain" || name == "re.explain") {
+        return expect_to_regex(argS(0));
     }
     if (name == "regex_find" || name == "re.find") {
         const std::string text = argS(0), pat = argS(1);
@@ -135,3 +175,13 @@ std::string __erelang_builtin_regex_dispatch(const std::string& name, const std:
 }
 
 } // namespace erelang
+
+// Module registration: see include/erelang/module_registry.hpp.
+#include "erelang/module_registry.hpp"
+namespace {
+const bool kModuleRegistered = erelang::modules::register_dispatch("regex",
+    [](erelang::Runtime*, const std::string& name, const std::vector<std::string>& argv) {
+        return erelang::__erelang_builtin_regex_dispatch(name, argv);
+    });
+}  // namespace
+ERELANG_MODULE_ANCHOR(regex)

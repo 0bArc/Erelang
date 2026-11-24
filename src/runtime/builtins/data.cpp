@@ -1,90 +1,160 @@
-// Simple data store / persistence builtins
-#include "erelang/runtime.hpp"
-#include <unordered_map>
-#include <string>
+// builtin/data: small key value stores that can be saved to and loaded from a text file.
+//
+// File format: one `key=value` per line. Backslash escapes `\\`, `\n`, `\r` and `\=` keep keys and
+// values with newlines or equals signs intact; files written by older versions (no escapes) still
+// load the same.
 #include <fstream>
+#include <mutex>
 #include <sstream>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include "erelang/runtime.hpp"
 
 namespace erelang {
 
-struct DataStore { std::unordered_map<std::string,std::string> kv; };
-static std::unordered_map<int, DataStore> g_datastores; static int g_nextStoreId = 1;
+namespace {
 
-// Parse a "data:<id>" handle; returns -1 for malformed handles so callers
-// can bail out instead of throwing std::stoi.
-static int parse_data_handle(const std::string& h) {
-    if (h.rfind("data:", 0) != 0) return -1;
-    try {
-        auto tail = h.substr(5);
-        if (tail.empty()) return -1;
-        std::size_t pos = 0;
-        int v = std::stoi(tail, &pos);
-        if (pos != tail.size()) return -1;
-        return v;
-    } catch (...) {
-        return -1;
+struct DataStore {
+    std::unordered_map<std::string, std::string> kv;
+};
+
+std::mutex g_dataMutex;
+std::unordered_map<int, DataStore> g_datastores;
+int g_nextStoreId = 1;
+
+// "data:<id>" -> id, or -1 for anything else.
+int parse_data_handle(const std::string& h) {
+    if (h.rfind("data:", 0) != 0 || h.size() == 5) return -1;
+    int v = 0;
+    for (std::size_t i = 5; i < h.size(); ++i) {
+        const char c = h[i];
+        if (c < '0' || c > '9' || v > 100000000) return -1;
+        v = v * 10 + (c - '0');
     }
+    return v;
 }
 
-static DataStore* find_store(int id) {
+DataStore* find_store(const std::string& handle) {
+    const int id = parse_data_handle(handle);
+    if (id < 0) return nullptr;
     auto it = g_datastores.find(id);
     return it == g_datastores.end() ? nullptr : &it->second;
 }
 
-static std::string data_dispatch(const std::string& name, const std::vector<std::string>& argv) {
-    auto argS = [&](size_t i){ return i<argv.size()?argv[i]:std::string(); };
-    if (name == "data_new") {
-        int id = g_nextStoreId++; g_datastores[id] = {}; return std::string("data:") + std::to_string(id);
+std::string escape(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (const char c : s) {
+        switch (c) {
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '=': out += "\\="; break;
+            default: out += c;
+        }
     }
+    return out;
+}
+
+std::string unescape(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (std::size_t i = 0; i < s.size(); ++i) {
+        if (s[i] != '\\' || i + 1 >= s.size()) { out += s[i]; continue; }
+        const char e = s[++i];
+        out += e == 'n' ? '\n' : e == 'r' ? '\r' : e;
+    }
+    return out;
+}
+
+// Position of the first `=` not preceded by a backslash escape.
+std::size_t key_split(const std::string& line) {
+    for (std::size_t i = 0; i < line.size(); ++i) {
+        if (line[i] == '\\') { ++i; continue; }
+        if (line[i] == '=') return i;
+    }
+    return std::string::npos;
+}
+
+std::string new_store() {
+    const int id = g_nextStoreId++;
+    g_datastores[id] = {};
+    return "data:" + std::to_string(id);
+}
+
+std::string data_dispatch(const std::string& name, const std::vector<std::string>& argv) {
+    const auto argS = [&](std::size_t i) { return i < argv.size() ? argv[i] : std::string(); };
+    std::lock_guard<std::mutex> lock(g_dataMutex);
+    if (name == "data_new") return new_store();
     if (name == "data_set") {
-        auto h = argS(0); auto k = argS(1); auto v = argS(2);
-        int id = parse_data_handle(h);
-        if (id >= 0) { if (auto* store = find_store(id)) store->kv[k] = v; }
-        return {};
+        DataStore* store = find_store(argS(0));
+        if (!store) return "false";
+        store->kv[argS(1)] = argS(2);
+        return "true";
     }
     if (name == "data_get") {
-        auto h = argS(0); auto k = argS(1);
-        int id = parse_data_handle(h);
-        if (id >= 0) { if (auto* store = find_store(id)) { auto it=store->kv.find(k); if(it!=store->kv.end()) return it->second; } }
-        return {};
+        DataStore* store = find_store(argS(0));
+        if (!store) return {};
+        const auto it = store->kv.find(argS(1));
+        return it == store->kv.end() ? std::string() : it->second;
     }
     if (name == "data_has") {
-        auto h = argS(0); auto k = argS(1);
-        int id = parse_data_handle(h);
-        if (id >= 0) { if (auto* store = find_store(id)) return store->kv.count(k)?"true":"false"; }
-        return "false";
+        DataStore* store = find_store(argS(0));
+        return store && store->kv.count(argS(1)) ? "true" : "false";
     }
     if (name == "data_keys") {
-        auto h = argS(0);
-        int id = parse_data_handle(h);
-        if (id < 0) return {};
-        DataStore* store = find_store(id);
+        DataStore* store = find_store(argS(0));
         if (!store) return {};
-        std::ostringstream ss; bool first=true; for (auto &kv : store->kv){ if(!first) ss<<","; first=false; ss<<kv.first; }
+        std::ostringstream ss;
+        bool first = true;
+        for (const auto& kv : store->kv) {
+            if (!first) ss << ',';
+            first = false;
+            ss << kv.first;
+        }
         return ss.str();
     }
     if (name == "data_save") {
-        auto h = argS(0); auto path = argS(1);
-        int id = parse_data_handle(h);
-        if (id < 0) return {};
-        DataStore* store = find_store(id);
-        if (!store) return {};
-        std::ofstream out(path, std::ios::binary);
+        DataStore* store = find_store(argS(0));
+        if (!store) return "false";
+        std::ofstream out(argS(1), std::ios::binary);
         if (!out) return "false";
-        for (auto &kv : store->kv) { out<<kv.first<<"="<<kv.second<<"\n"; }
+        for (const auto& kv : store->kv) out << escape(kv.first) << '=' << escape(kv.second) << '\n';
         return out.good() ? "true" : "false";
     }
     if (name == "data_load") {
-        auto path = argS(0); std::ifstream in(path, std::ios::binary); if(!in) return {};
-        int id = g_nextStoreId++; g_datastores[id] = {};
-        std::string line; while(std::getline(in,line)){ auto p=line.find('='); if(p!=std::string::npos){ g_datastores[id].kv[line.substr(0,p)]=line.substr(p+1); }}
-        return std::string("data:")+std::to_string(id);
+        std::ifstream in(argS(0), std::ios::binary);
+        if (!in) return {};
+        const std::string handle = new_store();
+        DataStore* store = find_store(handle);
+        std::string line;
+        while (std::getline(in, line)) {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            const std::size_t p = key_split(line);
+            if (p == std::string::npos) continue;
+            store->kv[unescape(line.substr(0, p))] = unescape(line.substr(p + 1));
+        }
+        return handle;
     }
     return {};
 }
+
+}  // namespace
 
 std::string __erelang_builtin_data_dispatch(const std::string& name, const std::vector<std::string>& argv) {
     return data_dispatch(name, argv);
 }
 
-} // namespace erelang
+}  // namespace erelang
+
+// Module registration: see include/erelang/module_registry.hpp.
+#include "erelang/module_registry.hpp"
+namespace {
+const bool kModuleRegistered = erelang::modules::register_dispatch("data",
+    [](erelang::Runtime*, const std::string& name, const std::vector<std::string>& argv) {
+        return erelang::__erelang_builtin_data_dispatch(name, argv);
+    });
+}  // namespace
+ERELANG_MODULE_ANCHOR(data)

@@ -1,0 +1,34 @@
+@erelang
+
+// Lambdas, closures-by-value and higher-order functions.
+// Run: erelang examples/types/functions.elan
+
+public action check(label: string, got: string, want: string) {
+    if (got != want) { fail(label + ": got [" + got + "] want [" + want + "]"); }
+    print "  " + label + " = " + got;
+}
+
+public action apply(f: any, x: int): int {
+    return f(x);
+}
+
+public action fact(n: int): int {
+    if (n <= 1) { return 1; }
+    return n * fact(n - 1);
+}
+
+public action main() {
+    any add1 = lambda(int x) => x + 1;
+    check("lambda", string(add1(41)), "42");
+
+    any sum = lambda(int a, int b) {
+        return a + b;
+    };
+    check("block lambda", string(sum(10, 20)), "30");
+
+    check("higher order", string(apply(add1, 9)), "10");
+    check("recursion", string(fact(10)), "3628800");
+
+    print "functions-ok";
+}
+run main;

@@ -16,6 +16,9 @@ import {
 } from './symbols';
 import { invalidateDefCache } from './semantic-tokens';
 import { invalidateImportCache } from './imports';
+import { refreshFromExecutable } from './manifest';
+import { resolveErelangExe } from './erelangPath';
+import { useCompilerTokens } from './scopeAnalysis';
 
 const KIND_MAP = {
   entity: vscode.SymbolKind.Class,
@@ -95,12 +98,42 @@ export function activate(ctx: vscode.ExtensionContext) {
     // No workspace-wide elan file watcher — disk storms + erelang --check pile-ups freeze Cursor.
     initializationOptions: {
       erelangPath: exePath,
+      projectFiles: true,
     },
     synchronize: { configurationSection: 'erelang' },
   };
   client = new LanguageClient('erelang', 'Erelang Language Server', serverOptions, clientOptions);
   ctx.subscriptions.push({ dispose: () => { void client?.stop(); } });
-  void client.start();
+  void client.start().then(() => {
+    ctx.subscriptions.push(client!.onRequest('erelang/projectFiles', async () => {
+      const files = await vscode.workspace.findFiles('**/*.elan', '**/{build,build-*,build_*,_build_*,node_modules,.git,.cache}/**', 2001);
+      return { uris: files.slice(0, 2000).map(uri => uri.toString()), complete: files.length <= 2000 };
+    }));
+    ctx.subscriptions.push(client!.onNotification('erelang/compilerTokens',
+      (data: { uri: string; version: number; output: string }) => {
+        const doc = vscode.workspace.textDocuments.find(d => d.uri.toString() === data.uri);
+        if (doc && doc.version === data.version && !doc.isClosed) useCompilerTokens(doc.getText(), data.output);
+      }));
+  });
+
+  // Builtins: the bundled manifest is already loaded; refresh it from the installed erelang so a
+  // newer build's modules show up without repackaging the extension.
+  const refreshManifest = () => {
+    const roots = (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath);
+    const configured = vscode.workspace.getConfiguration('erelang').get<string>('executablePath', '');
+    const exe = resolveErelangExe(roots, configured);
+    if (!exe) return;
+    void refreshFromExecutable(exe, ctx.globalStorageUri.fsPath).then(ok => {
+      if (ok) {
+        invalidateImportCache();
+        invalidateDocumentIndex();
+      }
+    });
+  };
+  refreshManifest();
+  ctx.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {
+    if (e.affectsConfiguration('erelang.executablePath')) refreshManifest();
+  }));
 
   ctx.subscriptions.push(vscode.workspace.onDidChangeTextDocument(e => {
     noteDocumentEdit(e);

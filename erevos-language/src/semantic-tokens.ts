@@ -1,8 +1,9 @@
 import * as vscode from 'vscode';
 import {
   ACTION_RE, TYPED_FUNC_RE, ENTITY_RE, STRUCT_RE, ENUM_RE, TYPE_ALIAS_RE,
-  FIELD_RE, LET_RE, GLOBAL_RE, BUILT_INS, LANGUAGE_KEYWORDS,
+  FIELD_RE, LET_RE, GLOBAL_RE,
 } from './constants';
+import { isBuiltinWord, isKeyword, isTypeWord } from './manifest';
 import { collect, isInStringLiteral, scanWords } from './symbols';
 
 const TOKEN_TYPES = [
@@ -49,8 +50,8 @@ const MAX_SEMANTIC_LINES = 8_000;
 const MAX_LINE_LENGTH = 4_000;
 const MAX_TOKENS = 12_000;
 
-const KEYWORD_SET = new Set(LANGUAGE_KEYWORDS);
-const BUILTIN_SET = new Set(BUILT_INS.map(n => n.includes('.') ? n.slice(n.lastIndexOf('.') + 1) : n));
+const KEYWORD_SET = { has: (w: string) => isKeyword(w) || isTypeWord(w) };
+const BUILTIN_SET = { has: (w: string) => isBuiltinWord(w) };
 const CONTROL_CALLS = new Set([
   'if', 'while', 'for', 'switch', 'match', 'catch', 'sizeof', 'typeof',
   'decltype', 'alignof', 'offsetof', 'lambda', 'action', 'new',

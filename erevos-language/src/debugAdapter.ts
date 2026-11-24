@@ -57,7 +57,7 @@ class ErelangDebugSession extends LoggingDebugSession {
     const cwd = args.cwd || path.dirname(this.programPath);
     const exe = resolveErelangExe([cwd, path.resolve(cwd, '..'), path.resolve(cwd, '../..')], args.erelangPath);
     if (!exe) {
-      this.sendErrorResponse(response, 2001, 'erelang.exe not found (set erelang.executablePath)');
+      this.sendErrorResponse(response, 2001, 'erelang executable not found (set erelang.executablePath)');
       return;
     }
     try {

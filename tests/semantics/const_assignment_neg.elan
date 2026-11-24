@@ -1,0 +1,7 @@
+// expect: TC051
+@strict
+action main() {
+    const value = 1;
+    value = 2;
+}
+run main;

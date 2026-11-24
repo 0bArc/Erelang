@@ -1,0 +1,14 @@
+@strict
+action main() {
+    any integer = 1;
+    any decimal = 1.0;
+    if (!(integer == decimal)) { fail("numeric equality promotes integers"); }
+    if (integer === decimal) { fail("strict equality distinguishes runtime kinds"); }
+    any text = "1";
+    any truth = true;
+    if (!(integer == text) || integer === text) { fail("mixed-kind equality fallback"); }
+    if (!(truth == integer) || truth === integer) { fail("boolean numeric equality"); }
+    if (!("007" === "007") || "007" === "7") { fail("string equality preserves content"); }
+    print "semantics-equality-ok";
+}
+run main;

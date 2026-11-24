@@ -5,15 +5,16 @@ const path = require('node:path');
 const test = require('node:test');
 
 function findErelang() {
+  if (process.env.ERELANG_TEST_EXE) return process.env.ERELANG_TEST_EXE;
   const roots = [
     path.resolve(__dirname, '..', '..'),
     path.resolve(__dirname, '..'),
   ];
   for (const root of roots) {
+    const binary = process.platform === 'win32' ? 'erelang.exe' : 'erelang';
     for (const rel of [
-      path.join('build', 'bin', 'Debug', 'erelang.exe'),
-      path.join('build', 'bin', 'erelang.exe'),
-      path.join('build', 'Debug', 'erelang.exe'),
+      path.join('build', 'debug', 'bin', 'Debug', binary),
+      path.join('build', 'release', 'bin', 'Release', binary),
     ]) {
       const p = path.join(root, rel);
       if (fs.existsSync(p)) return p;
@@ -25,10 +26,10 @@ function findErelang() {
 test('DAP line protocol: breakpoint stop then continue', async (t) => {
   const exe = findErelang();
   if (!exe) {
-    t.skip('erelang.exe not built');
+    t.skip('erelang not built');
     return;
   }
-  const script = path.resolve(__dirname, '..', '..', 'examples', 'debug_smoke.elan');
+  const script = path.resolve(__dirname, '..', '..', 'examples', 'random', 'debug_smoke.elan');
   assert.ok(fs.existsSync(script), 'debug_smoke.elan missing');
 
   const child = spawn(exe, [script, '--dap'], {

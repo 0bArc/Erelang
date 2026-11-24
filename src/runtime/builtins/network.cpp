@@ -23,24 +23,29 @@
 #include <cstring>
 #include <cstdint>
 #include "erelang/runtime.hpp"
+#include "net_platform.hpp"
 #ifdef _WIN32
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
 #include <winhttp.h>
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#include <bcrypt.h>
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "ws2_32.lib")
-#pragma comment(lib, "bcrypt.lib")
+#else
+#include <curl/curl.h>
+#include <spawn.h>
+#include <sys/wait.h>
+#include <csignal>
+extern char** environ;
 #endif
 
 namespace erelang {
+
+// Cap the amount of body read from a server to avoid unbounded memory growth.
+static constexpr std::size_t kMaxResponseBytes = 64 * 1024 * 1024;
+
+struct HttpReply {
+    bool ok = false;       // a response arrived and its body was read completely
+    long status = 0;
+    std::string body;
+};
 
 #ifdef _WIN32
 
@@ -51,15 +56,6 @@ static std::wstring widen_utf8(const std::string& text) {
     std::wstring wide(static_cast<std::size_t>(required - 1), L'\0');
     MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, wide.data(), required);
     return wide;
-}
-
-static std::string narrow_utf8(const std::wstring& text) {
-    if (text.empty()) return {};
-    const int required = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
-    if (required <= 0) return {};
-    std::string narrow(static_cast<std::size_t>(required), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), narrow.data(), required, nullptr, nullptr);
-    return narrow;
 }
 
 static bool send_request_with_headers(HINTERNET request, const std::string& extraHeaders, const std::string& body, const std::string& contentType) {
@@ -73,9 +69,10 @@ static bool send_request_with_headers(HINTERNET request, const std::string& extr
         fullHeaders += L"Content-Type: " + widen_utf8(contentType);
     }
 
-    DWORD bodyLen = 0;
+    // WinHttpSendRequest's length fields are DWORD; reject oversized bodies
+    // instead of silently truncating.
     if (body.size() > static_cast<std::size_t>(std::numeric_limits<DWORD>::max())) return false;
-    bodyLen = static_cast<DWORD>(body.size());
+    const DWORD bodyLen = static_cast<DWORD>(body.size());
 
     LPCWSTR hdrPtr = fullHeaders.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : fullHeaders.c_str();
     DWORD hdrLen = fullHeaders.empty() ? 0 : static_cast<DWORD>(fullHeaders.size());
@@ -133,120 +130,205 @@ static bool winhttp_open(WinHttpSession& s, const std::string& url, const wchar_
     return s.request != nullptr;
 }
 
-// Cap the amount of body read from a server to avoid unbounded memory growth.
-static constexpr std::size_t kMaxResponseBytes = 64 * 1024 * 1024;
+// Sends one request. `headers` holds extra "Name: value" lines separated by CRLF.
+// With `sink` set, the body is streamed there and exceeding kMaxResponseBytes fails the
+// request; otherwise the body is collected in the reply and truncated at the cap.
+static HttpReply http_request(const char* method, const std::string& url, const std::string& headers,
+                              const std::string& body, const std::string& contentType, std::ostream* sink = nullptr) {
+    HttpReply reply;
+    WinHttpSession s;
+    if (!winhttp_open(s, url, widen_utf8(method).c_str())) return reply;
+    if (!send_request_with_headers(s.request, headers, body, contentType)) return reply;
+    if (!WinHttpReceiveResponse(s.request, nullptr)) return reply;
 
-static std::string winhttp_read_response(HINTERNET request) {
-    std::string out;
-    DWORD avail = 0;
-    while (WinHttpQueryDataAvailable(request, &avail) && avail > 0) {
-        std::string buf(avail, '\0');
-        DWORD read = 0;
-        if (!WinHttpReadData(request, buf.data(), avail, &read) || read == 0) break;
-        if (out.size() + read > kMaxResponseBytes) break;
-        out.append(buf.data(), read);
+    DWORD statusCode = 0;
+    DWORD statusSize = sizeof(statusCode);
+    WinHttpQueryHeaders(s.request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                        WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &statusSize, WINHTTP_NO_HEADER_INDEX);
+    reply.status = static_cast<long>(statusCode);
+
+    if (std::strcmp(method, "HEAD") != 0) {
+        std::size_t total = 0;
+        DWORD avail = 0;
+        while (WinHttpQueryDataAvailable(s.request, &avail) && avail > 0) {
+            std::string buf(avail, '\0');
+            DWORD read = 0;
+            if (!WinHttpReadData(s.request, buf.data(), avail, &read) || read == 0) {
+                if (sink) return reply;
+                break;
+            }
+            if (total + read > kMaxResponseBytes) {
+                if (sink) return reply;
+                break;
+            }
+            total += read;
+            if (sink) sink->write(buf.data(), static_cast<std::streamsize>(read));
+            else reply.body.append(buf.data(), read);
+        }
     }
-    return out;
+    reply.ok = true;
+    return reply;
 }
 
+#else
+
+struct CurlSink {
+    std::string* body = nullptr;
+    std::ostream* out = nullptr;
+    std::size_t total = 0;
+    bool overflow = false;
+};
+
+static size_t curl_write(char* data, size_t size, size_t count, void* userData) {
+    auto* sink = static_cast<CurlSink*>(userData);
+    const std::size_t len = size * count;
+    if (sink->total + len > kMaxResponseBytes) {
+        sink->overflow = true;
+        if (sink->out) return 0;  // abort the transfer: a download must not be truncated
+        const std::size_t room = kMaxResponseBytes - sink->total;
+        sink->body->append(data, room);
+        sink->total = kMaxResponseBytes;
+        return len;
+    }
+    sink->total += len;
+    if (sink->out) sink->out->write(data, static_cast<std::streamsize>(len));
+    else sink->body->append(data, len);
+    return len;
+}
+
+// Same contract as the WinHTTP version: one request, extra CRLF-separated headers,
+// optional streaming sink, 64 MiB cap.
+static HttpReply http_request(const char* method, const std::string& url, const std::string& headers,
+                              const std::string& body, const std::string& contentType, std::ostream* sink = nullptr) {
+    HttpReply reply;
+    net::ensure_init();
+    static const bool curlReady = curl_global_init(CURL_GLOBAL_DEFAULT) == CURLE_OK;
+    if (!curlReady) return reply;
+
+    std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> h(curl_easy_init(), curl_easy_cleanup);
+    if (!h) return reply;
+
+    curl_slist* rawList = nullptr;
+    std::istringstream lines(headers);
+    std::string line;
+    while (std::getline(lines, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (!line.empty()) rawList = curl_slist_append(rawList, line.c_str());
+    }
+    if (!contentType.empty()) rawList = curl_slist_append(rawList, ("Content-Type: " + contentType).c_str());
+    // curl sends "Expect: 100-continue" before large bodies; WinHTTP does not, and some servers stall on it.
+    rawList = curl_slist_append(rawList, "Expect:");
+    std::unique_ptr<curl_slist, decltype(&curl_slist_free_all)> headerList(rawList, curl_slist_free_all);
+
+    CurlSink state;
+    state.body = &reply.body;
+    state.out = sink;
+
+    CURL* c = h.get();
+    curl_easy_setopt(c, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(c, CURLOPT_USERAGENT, "erelang/1.0");
+    curl_easy_setopt(c, CURLOPT_HTTPHEADER, headerList.get());
+    curl_easy_setopt(c, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(c, CURLOPT_MAXREDIRS, 10L);
+    // Match the WinHTTP timeouts: 10 s to connect, give up after 30 s without data.
+    curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT_MS, 10000L);
+    curl_easy_setopt(c, CURLOPT_LOW_SPEED_LIMIT, 1L);
+    curl_easy_setopt(c, CURLOPT_LOW_SPEED_TIME, 30L);
+    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, curl_write);
+    curl_easy_setopt(c, CURLOPT_WRITEDATA, &state);
+
+    const std::string verb = method;
+    if (verb == "HEAD") {
+        curl_easy_setopt(c, CURLOPT_NOBODY, 1L);
+    } else if (verb == "GET" && body.empty()) {
+        curl_easy_setopt(c, CURLOPT_HTTPGET, 1L);
+    } else {
+        if (verb != "POST") curl_easy_setopt(c, CURLOPT_CUSTOMREQUEST, method);
+        if (verb == "POST" || !body.empty()) {
+            curl_easy_setopt(c, CURLOPT_POSTFIELDS, body.data());
+            curl_easy_setopt(c, CURLOPT_POSTFIELDSIZE_LARGE, static_cast<curl_off_t>(body.size()));
+        }
+    }
+
+    if (curl_easy_perform(c) != CURLE_OK) return reply;
+    long status = 0;
+    curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &status);
+    reply.status = status;
+    reply.ok = !(sink && state.overflow);
+    return reply;
+}
+
+#endif
+
 static std::string http_get_impl(const std::string& url) {
-    WinHttpSession s;
-    if (!winhttp_open(s, url, L"GET")) return {};
-    if (!WinHttpSendRequest(s.request, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) return {};
-    if (!WinHttpReceiveResponse(s.request, nullptr)) return {};
-    return winhttp_read_response(s.request);
+    return http_request("GET", url, "", "", "").body;
 }
 
 static std::string http_post_impl(const std::string& url, const std::string& body, const std::string& contentType) {
-    WinHttpSession s;
-    if (!winhttp_open(s, url, L"POST")) return {};
-
-    // WinHttpSendRequest's length fields are DWORD; reject oversized bodies
-    // instead of silently truncating.
-    if (body.size() > std::numeric_limits<DWORD>::max()) return {};
-
     const std::string effectiveCT = contentType.empty() ? "application/x-www-form-urlencoded" : contentType;
-    if (!send_request_with_headers(s.request, "", body, effectiveCT)) return {};
-    if (!WinHttpReceiveResponse(s.request, nullptr)) return {};
-    return winhttp_read_response(s.request);
+    return http_request("POST", url, "", body, effectiveCT).body;
 }
 
 static std::string http_get_auth_impl(const std::string& url, const std::string& authHeader) {
-    WinHttpSession s;
-    if (!winhttp_open(s, url, L"GET")) return {};
-    if (!send_request_with_headers(s.request, authHeader, "", "")) return {};
-    if (!WinHttpReceiveResponse(s.request, nullptr)) return {};
-    return winhttp_read_response(s.request);
+    return http_request("GET", url, authHeader, "", "").body;
 }
 
 static std::string http_post_auth_impl(const std::string& url, const std::string& body, const std::string& contentType, const std::string& authHeader) {
-    WinHttpSession s;
-    if (!winhttp_open(s, url, L"POST")) return {};
-    if (body.size() > std::numeric_limits<DWORD>::max()) return {};
     const std::string effectiveCT = contentType.empty() ? "application/json" : contentType;
-    if (!send_request_with_headers(s.request, authHeader, body, effectiveCT)) return {};
-    if (!WinHttpReceiveResponse(s.request, nullptr)) return {};
-    return winhttp_read_response(s.request);
+    return http_request("POST", url, authHeader, body, effectiveCT).body;
 }
 
-static std::string http_method_auth_impl(const wchar_t* method, const std::string& url, const std::string& body, const std::string& contentType, const std::string& authHeader) {
-    WinHttpSession s;
-    if (!winhttp_open(s, url, method)) return {};
-    if (body.size() > std::numeric_limits<DWORD>::max()) return {};
+static std::string http_method_auth_impl(const char* method, const std::string& url, const std::string& body, const std::string& contentType, const std::string& authHeader) {
     const std::string effectiveCT = contentType.empty() ? "application/json" : contentType;
-    if (!send_request_with_headers(s.request, authHeader, body, body.empty() ? "" : effectiveCT)) return {};
-    if (!WinHttpReceiveResponse(s.request, nullptr)) return {};
-    return winhttp_read_response(s.request);
+    return http_request(method, url, authHeader, body, body.empty() ? "" : effectiveCT).body;
 }
 
 static std::string http_put_auth_impl(const std::string& url, const std::string& body, const std::string& contentType, const std::string& authHeader) {
-    return http_method_auth_impl(L"PUT", url, body, contentType, authHeader);
+    return http_method_auth_impl("PUT", url, body, contentType, authHeader);
 }
 
 static std::string http_patch_auth_impl(const std::string& url, const std::string& body, const std::string& contentType, const std::string& authHeader) {
-    return http_method_auth_impl(L"PATCH", url, body, contentType, authHeader);
+    return http_method_auth_impl("PATCH", url, body, contentType, authHeader);
 }
 
 static std::string http_delete_auth_impl(const std::string& url, const std::string& authHeader) {
-    return http_method_auth_impl(L"DELETE", url, "", "", authHeader);
+    return http_method_auth_impl("DELETE", url, "", "", authHeader);
 }
 
-static bool http_download_impl(const std::string& url, const std::filesystem::path& outPath) {
-    WinHttpSession s;
-    if (!winhttp_open(s, url, L"GET")) return false;
-    if (!WinHttpSendRequest(s.request, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) return false;
-    if (!WinHttpReceiveResponse(s.request, nullptr)) return false;
+// ── HTTP client: bare put/delete/head (no auth required) ─
+static std::string http_put_impl(const std::string& url, const std::string& body, const std::string& contentType) {
+    const std::string effectiveCT = contentType.empty() ? "application/json" : contentType;
+    return http_request("PUT", url, "", body, effectiveCT).body;
+}
 
-    std::error_code ec;
-    std::filesystem::create_directories(outPath.parent_path(), ec);
-    std::ofstream out(outPath, std::ios::binary);
-    if (!out) return false;
+static std::string http_delete_impl(const std::string& url) {
+    return http_request("DELETE", url, "", "", "").body;
+}
 
-    DWORD avail = 0;
-    std::size_t total = 0;
-    while (WinHttpQueryDataAvailable(s.request, &avail) && avail > 0) {
-        std::string buf(avail, '\0');
-        DWORD read = 0;
-        if (!WinHttpReadData(s.request, buf.data(), avail, &read) || read == 0) return false;
-        if (total + read > kMaxResponseBytes) return false;
-        total += read;
-        out.write(buf.data(), static_cast<std::streamsize>(read));
-    }
-    return static_cast<bool>(out);
+static std::string http_head_impl(const std::string& url) {
+    const HttpReply reply = http_request("HEAD", url, "", "", "");
+    if (!reply.ok) return {};
+    return std::to_string(reply.status);
 }
 
 static std::string http_get_status_impl(const std::string& url) {
-    WinHttpSession s;
-    if (!winhttp_open(s, url, L"HEAD")) return {};
-    if (!WinHttpSendRequest(s.request, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) return {};
-    if (!WinHttpReceiveResponse(s.request, nullptr)) return {};
-    DWORD statusCode = 0;
-    DWORD statusSize = sizeof(statusCode);
-    if (!WinHttpQueryHeaders(s.request,
-                             WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-                             WINHTTP_HEADER_NAME_BY_INDEX,
-                             &statusCode, &statusSize, WINHTTP_NO_HEADER_INDEX)) return {};
-    return std::to_string(static_cast<unsigned long>(statusCode));
+    const HttpReply reply = http_request("HEAD", url, "", "", "");
+    if (!reply.ok || reply.status == 0) return {};
+    return std::to_string(reply.status);
+}
+
+static bool http_download_impl(const std::string& url, const std::filesystem::path& outPath) {
+    std::error_code ec;
+    std::filesystem::create_directories(outPath.parent_path(), ec);
+    bool ok = false;
+    {
+        std::ofstream out(outPath, std::ios::binary);
+        if (!out) return false;
+        ok = http_request("GET", url, "", "", "", &out).ok && static_cast<bool>(out);
+    }
+    if (!ok) std::filesystem::remove(outPath, ec);
+    return ok;
 }
 
 // HLS helpers
@@ -296,7 +378,7 @@ static std::vector<std::string> parse_media_m3u8_segments(const std::string& tex
     std::istringstream in(text);
     std::string line;
     while (std::getline(in, line)) {
-        if (line.rfind("#EXT-X-KEY:", 0) == 0) return {}; // encrypted — unsupported
+        if (line.rfind("#EXT-X-KEY:", 0) == 0) return {}; // encrypted: unsupported
         if (!line.empty() && line[0] != '#') segs.push_back(resolve_url(base, line));
     }
     return segs;
@@ -338,6 +420,8 @@ struct ExecResult {
     unsigned long exitCode = 0;
     std::string output;
 };
+
+#ifdef _WIN32
 
 struct UniqueHandle {
     UniqueHandle() = default;
@@ -431,10 +515,76 @@ static ExecResult execute_cmd(const std::vector<std::string>& args) {
     return {exitCode == 0, exitCode, output};
 }
 
-static ExecResult execute_ipconfig(const std::vector<std::string>& extraArgs) {
-    std::vector<std::string> args{"ipconfig"};
-    args.insert(args.end(), extraArgs.begin(), extraArgs.end());
+#else
+
+// Runs a program found on PATH with stdout and stderr captured together.
+static ExecResult execute_cmd(const std::vector<std::string>& args) {
+    if (args.empty()) return {false, 1, "no program specified"};
+    int fds[2];
+    if (pipe(fds) != 0) return {false, 1, "pipe failed"};
+
+    posix_spawn_file_actions_t actions;
+    posix_spawn_file_actions_init(&actions);
+    posix_spawn_file_actions_adddup2(&actions, fds[1], STDOUT_FILENO);
+    posix_spawn_file_actions_adddup2(&actions, fds[1], STDERR_FILENO);
+    posix_spawn_file_actions_addclose(&actions, fds[0]);
+    posix_spawn_file_actions_addclose(&actions, fds[1]);
+
+    std::vector<char*> argv;
+    argv.reserve(args.size() + 1);
+    for (const auto& a : args) argv.push_back(const_cast<char*>(a.c_str()));
+    argv.push_back(nullptr);
+
+    pid_t pid = 0;
+    const int rc = posix_spawnp(&pid, argv[0], &actions, nullptr, argv.data(), environ);
+    posix_spawn_file_actions_destroy(&actions);
+    close(fds[1]);
+    if (rc != 0) {
+        close(fds[0]);
+        return {false, 127, args[0] + ": " + std::strerror(rc)};
+    }
+
+    std::string output;
+    std::array<char, 4096> buf{};
+    for (;;) {
+        const ssize_t n = read(fds[0], buf.data(), buf.size());
+        if (n > 0) { output.append(buf.data(), static_cast<std::size_t>(n)); continue; }
+        if (n < 0 && errno == EINTR) continue;
+        break;
+    }
+    close(fds[0]);
+
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+    const unsigned long code = WIFEXITED(status) ? static_cast<unsigned long>(WEXITSTATUS(status)) : 1ul;
+    return {code == 0, code, output};
+}
+
+#endif
+
+// network.ip.* map onto the platform's DNS-cache and DHCP tools.
+// `op` is one of flush, release, renew, registerdns.
+static ExecResult execute_ip_command(const std::string& op, const std::string& iface) {
+#if defined(_WIN32)
+    std::vector<std::string> args{"ipconfig", "/" + (op == "flush" ? std::string("flushdns") : op)};
+    if (!iface.empty() && (op == "release" || op == "renew")) args.push_back(iface);
     return execute_cmd(args);
+#elif defined(__APPLE__)
+    if (op == "flush") return execute_cmd({"dscacheutil", "-flushcache"});
+    const std::string dev = iface.empty() ? "en0" : iface;
+    if (op == "release") return execute_cmd({"ipconfig", "set", dev, "NONE"});
+    if (op == "renew") return execute_cmd({"ipconfig", "set", dev, "DHCP"});
+    return {false, 1, "network.ip." + op + ": not supported on macOS"};
+#else
+    if (op == "flush") return execute_cmd({"resolvectl", "flush-caches"});
+    if (op == "release" || op == "renew") {
+        std::vector<std::string> args{"dhclient"};
+        if (op == "release") args.push_back("-r");
+        if (!iface.empty()) args.push_back(iface);
+        return execute_cmd(args);
+    }
+    return {false, 1, "network.ip." + op + ": not supported on Linux"};
+#endif
 }
 
 static std::string format_exec_result(const ExecResult& r) {
@@ -444,29 +594,6 @@ static std::string format_exec_result(const ExecResult& r) {
         << "\noutput=" << (r.output.empty() ? "<empty>" : r.output);
     return oss.str();
 }
-
-#else
-
-static std::string http_get_impl(const std::string&) { return {}; }
-static std::string http_post_impl(const std::string&, const std::string&, const std::string&) { return {}; }
-static std::string http_get_auth_impl(const std::string&, const std::string&) { return {}; }
-static std::string http_post_auth_impl(const std::string&, const std::string&, const std::string&, const std::string&) { return {}; }
-static std::string http_put_auth_impl(const std::string&, const std::string&, const std::string&, const std::string&) { return {}; }
-static std::string http_patch_auth_impl(const std::string&, const std::string&, const std::string&, const std::string&) { return {}; }
-static std::string http_delete_auth_impl(const std::string&, const std::string&) { return {}; }
-static bool http_download_impl(const std::string&, const std::filesystem::path&) { return false; }
-static std::string http_get_status_impl(const std::string&) { return {}; }
-static bool hls_download_best_impl(const std::string&, const std::filesystem::path&) { return false; }
-
-struct ExecResult { bool success = false; unsigned long exitCode = 0; std::string output; };
-static std::string format_exec_result(const ExecResult& r) {
-    return std::string("success=false\nexit_code=1\noutput=unsupported platform");
-}
-static ExecResult execute_ipconfig(const std::vector<std::string>&) {
-    return {false, 1, "unsupported platform"};
-}
-
-#endif
 
 static std::string url_encode_impl(const std::string& s) {
     std::ostringstream o;
@@ -503,49 +630,12 @@ static std::string json_decode_impl(const std::string& s) {
     return s;
 }
 
-// ── HTTP client — bare put/delete/head (no auth required) ─
-static std::string http_put_impl(const std::string& url, const std::string& body, const std::string& contentType) {
-    WinHttpSession s;
-    if (!winhttp_open(s, url, L"PUT")) return {};
-    if (body.size() > std::numeric_limits<DWORD>::max()) return {};
-    const std::string effectiveCT = contentType.empty() ? "application/json" : contentType;
-    if (!send_request_with_headers(s.request, "", body, effectiveCT)) return {};
-    if (!WinHttpReceiveResponse(s.request, nullptr)) return {};
-    return winhttp_read_response(s.request);
-}
-
-static std::string http_delete_impl(const std::string& url) {
-    WinHttpSession s;
-    if (!winhttp_open(s, url, L"DELETE")) return {};
-    if (!WinHttpSendRequest(s.request, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) return {};
-    if (!WinHttpReceiveResponse(s.request, nullptr)) return {};
-    return winhttp_read_response(s.request);
-}
-
-static std::string http_head_impl(const std::string& url) {
-    WinHttpSession s;
-    if (!winhttp_open(s, url, L"HEAD")) return {};
-    if (!WinHttpSendRequest(s.request, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) return {};
-    if (!WinHttpReceiveResponse(s.request, nullptr)) return {};
-    DWORD statusCode = 0;
-    DWORD statusSize = sizeof(statusCode);
-    WinHttpQueryHeaders(s.request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-                        WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &statusSize, WINHTTP_NO_HEADER_INDEX);
-    return std::to_string(static_cast<unsigned long>(statusCode));
-}
 
 // ============================================================
 // HTTP Server Infrastructure
 // ============================================================
 
-static std::atomic<bool> g_wsaReady{false};
-static void ensure_wsa() {
-    if (g_wsaReady.load()) return;
-    WSADATA wsaData;
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) == 0) {
-        g_wsaReady.store(true);
-    }
-}
+static void ensure_wsa() { net::ensure_init(); }
 
 // Request record stored per handler invocation
 struct HttpRequestRecord {
@@ -660,50 +750,8 @@ static std::atomic<int> g_wsServerNextId{1000000};
 static std::deque<WsServerEvent> g_wsServerEvents;
 static std::mutex g_wsServerEventMutex;
 
-static std::string base64_encode(const unsigned char* data, size_t len) {
-    static const char* kTable = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    std::string out;
-    out.reserve(((len + 2) / 3) * 4);
-    for (size_t i = 0; i < len; i += 3) {
-        unsigned int n = static_cast<unsigned int>(data[i]) << 16;
-        if (i + 1 < len) n |= static_cast<unsigned int>(data[i + 1]) << 8;
-        if (i + 2 < len) n |= static_cast<unsigned int>(data[i + 2]);
-        out.push_back(kTable[(n >> 18) & 63]);
-        out.push_back(kTable[(n >> 12) & 63]);
-        out.push_back((i + 1 < len) ? kTable[(n >> 6) & 63] : '=');
-        out.push_back((i + 2 < len) ? kTable[n & 63] : '=');
-    }
-    return out;
-}
-
-static std::string ws_accept_key(const std::string& clientKey) {
-    const std::string material = clientKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-    BCRYPT_ALG_HANDLE alg = nullptr;
-    BCRYPT_HASH_HANDLE hash = nullptr;
-    DWORD hashLen = 0;
-    DWORD cb = 0;
-    std::string empty;
-    if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA1_ALGORITHM, nullptr, 0) != 0) return empty;
-    if (BCryptGetProperty(alg, BCRYPT_HASH_LENGTH, reinterpret_cast<PUCHAR>(&hashLen), sizeof(hashLen), &cb, 0) != 0) {
-        BCryptCloseAlgorithmProvider(alg, 0);
-        return empty;
-    }
-    std::vector<unsigned char> digest(hashLen);
-    if (BCryptCreateHash(alg, &hash, nullptr, 0, nullptr, 0, 0) != 0) {
-        BCryptCloseAlgorithmProvider(alg, 0);
-        return empty;
-    }
-    if (BCryptHashData(hash, reinterpret_cast<PUCHAR>(const_cast<char*>(material.data())),
-                       static_cast<ULONG>(material.size()), 0) != 0 ||
-        BCryptFinishHash(hash, digest.data(), hashLen, 0) != 0) {
-        BCryptDestroyHash(hash);
-        BCryptCloseAlgorithmProvider(alg, 0);
-        return empty;
-    }
-    BCryptDestroyHash(hash);
-    BCryptCloseAlgorithmProvider(alg, 0);
-    return base64_encode(digest.data(), digest.size());
-}
+using net::base64_encode;
+using net::ws_accept_key;
 
 static bool recv_exact(SOCKET s, char* dest, int n) {
     int got = 0;
@@ -891,7 +939,11 @@ static std::string http_date() {
     char buf[128];
     time_t now = time(nullptr);
     struct tm tm_gmt;
+#ifdef _WIN32
     gmtime_s(&tm_gmt, &now);
+#else
+    gmtime_r(&now, &tm_gmt);
+#endif
     strftime(buf, sizeof(buf), "%a, %d %b %Y %H:%M:%S GMT", &tm_gmt);
     return buf;
 }
@@ -1169,7 +1221,7 @@ static void handle_http_client(SOCKET client, std::shared_ptr<HttpServer> server
     // Find route and generate response inline
     std::string actionName = find_route(*server, method, uriPath);
     
-    // Handle SSE upgrade — send headers and keep connection open
+    // Handle SSE upgrade: send headers and keep connection open
     if (!actionName.empty()) {
         // Check if this matches an SSE route
         for (const auto& [m, p, a] : server->routes) {
@@ -1189,7 +1241,7 @@ static void handle_http_client(SOCKET client, std::shared_ptr<HttpServer> server
                     g_sseConnections[sid] = SseConnection{client, true};
                 }
                 fprintf(stderr, "  <- 200 (SSE upgrade, sse:%d)\n", sid);
-                // Don't close client — keep-alive for SSE stream
+                // Don't close client: keep-alive for SSE stream
                 return;
             }
         }
@@ -1272,6 +1324,7 @@ static std::vector<std::weak_ptr<HttpServer>> g_activeServers;
 static std::mutex g_activeServersMutex;
 static bool g_consoleHandlerInstalled = false;
 
+#ifdef _WIN32
 static BOOL WINAPI erelang_http_ctrl_handler(DWORD ctrlType) {
     if (ctrlType != CTRL_C_EVENT && ctrlType != CTRL_BREAK_EVENT)
         return FALSE;
@@ -1287,20 +1340,40 @@ static BOOL WINAPI erelang_http_ctrl_handler(DWORD ctrlType) {
     }
     return TRUE; // handled
 }
+#else
+// A signal handler may only touch lock-free atomics; accept_loop polls this flag every 100 ms.
+// SA_RESETHAND restores the default action, so a second Ctrl+C still terminates the process.
+static std::atomic<bool> g_sigintReceived{false};
+static void erelang_http_sigint_handler(int) { g_sigintReceived.store(true); }
+#endif
 
-// Accept loop — uses select() with 100ms timeout so Ctrl+C is responsive
+// Accept loop: uses select() with 100ms timeout so Ctrl+C is responsive
 static void accept_loop(std::shared_ptr<HttpServer> server, Runtime* rt) {
     // Register for graceful Ctrl+C shutdown
     {
         std::lock_guard<std::mutex> lock(g_activeServersMutex);
         g_activeServers.push_back(server);
         if (!g_consoleHandlerInstalled) {
+#ifdef _WIN32
             SetConsoleCtrlHandler(erelang_http_ctrl_handler, TRUE);
+#else
+            struct sigaction sa {};
+            sa.sa_handler = erelang_http_sigint_handler;
+            sa.sa_flags = SA_RESETHAND;
+            sigemptyset(&sa.sa_mask);
+            sigaction(SIGINT, &sa, nullptr);
+#endif
             g_consoleHandlerInstalled = true;
         }
     }
 
     while (server->running.load()) {
+#ifndef _WIN32
+        if (g_sigintReceived.load()) {
+            server->running.store(false);
+            break;
+        }
+#endif
         drain_ws_server_events(rt);
 
         fd_set readSet;
@@ -1308,7 +1381,7 @@ static void accept_loop(std::shared_ptr<HttpServer> server, Runtime* rt) {
         FD_SET(server->listenSocket, &readSet);
 
         timeval tv = {0, 100000}; // 100 ms timeout
-        int rc = select(0, &readSet, nullptr, nullptr, &tv);
+        int rc = select(static_cast<int>(server->listenSocket) + 1, &readSet, nullptr, nullptr, &tv);
 
         if (rc == SOCKET_ERROR) {
             if (!server->running.load()) break;
@@ -1324,8 +1397,7 @@ static void accept_loop(std::shared_ptr<HttpServer> server, Runtime* rt) {
         }
         // Prevent slowloris: 5-second recv timeout per byte
         {
-            int timeoutMs = 5000;
-            setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeoutMs, sizeof(timeoutMs));
+            net::set_socket_timeout(client, SO_RCVTIMEO, 5000);
         }
         // Log the connection to the terminal
         ++server->requestCount;
@@ -1695,8 +1767,8 @@ static std::string tcp_connect_impl(const std::string& host, int port) {
     if (sock->sock == INVALID_SOCKET) return "null";
 
     int timeoutMs = 10000;
-    setsockopt(sock->sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeoutMs, sizeof(timeoutMs));
-    setsockopt(sock->sock, SOL_SOCKET, SO_SNDTIMEO, (const char*)&timeoutMs, sizeof(timeoutMs));
+    net::set_socket_timeout(sock->sock, SO_RCVTIMEO, timeoutMs);
+    net::set_socket_timeout(sock->sock, SO_SNDTIMEO, timeoutMs);
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
@@ -1758,7 +1830,7 @@ std::string __erelang_tcp_handle_method(int id, const std::string& method, const
     if (method == "recv_timeout") {
         int timeoutMs = 5000;
         try { timeoutMs = std::stoi(argS(0)); } catch (...) {}
-        setsockopt(sock->sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeoutMs, sizeof(timeoutMs));
+        net::set_socket_timeout(sock->sock, SO_RCVTIMEO, timeoutMs);
         char buf[65536];
         int n = recv(sock->sock, buf, sizeof(buf) - 1, 0);
         return (n > 0) ? std::string(buf, static_cast<size_t>(n)) : "";
@@ -1795,7 +1867,7 @@ static std::string udp_bind_impl(const std::string& host, int port) {
     sock->sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (sock->sock == INVALID_SOCKET) return "null";
 
-    BOOL reuse = TRUE;
+    int reuse = 1;
     setsockopt(sock->sock, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse, sizeof(reuse));
 
     sockaddr_in addr{};
@@ -1825,7 +1897,7 @@ static std::string udp_bind_impl(const std::string& host, int port) {
     }
 
     sockaddr_in bound{};
-    int boundLen = sizeof(bound);
+    socklen_t boundLen = sizeof(bound);
     if (getsockname(sock->sock, (sockaddr*)&bound, &boundLen) == 0) {
         sock->port = ntohs(bound.sin_port);
     }
@@ -1855,7 +1927,7 @@ std::string __erelang_udp_handle_method(int id, const std::string& method, const
     if (!sock || !sock->open.load()) return "";
 
     if (method == "send") {
-        // send(host, port, data) or send(data) to last peer — require host/port/data
+        // send(host, port, data) or send(data) to last peer: require host/port/data
         if (args.size() < 3) return "0";
         const std::string& host = argS(0);
         int port = 0;
@@ -1889,7 +1961,7 @@ std::string __erelang_udp_handle_method(int id, const std::string& method, const
         }
         std::vector<char> buf(static_cast<std::size_t>(maxLen));
         sockaddr_in from{};
-        int fromLen = sizeof(from);
+        socklen_t fromLen = sizeof(from);
         int n = recvfrom(sock->sock, buf.data(), maxLen, 0, (sockaddr*)&from, &fromLen);
         if (n <= 0) return "";
         // Encode as "host:port\ndata" so caller can split if needed; simple path returns payload only.
@@ -1935,7 +2007,7 @@ std::string __erelang_resp_handle_method(int id, const std::string& method, cons
         return hi != r.headers.end() ? hi->second : "";
     }
     if (method == "json") {
-        return r.body; // raw body — caller can parse
+        return r.body; // raw body: caller can parse
     }
     return "";
 }
@@ -1953,6 +2025,7 @@ static std::string net_dispatch(const std::string& name, const std::vector<std::
     if (name == "http_post_auth") return http_post_auth_impl(argS(0), argS(1), argS(2), argS(3));
     if (name == "http_put_auth") return http_put_auth_impl(argS(0), argS(1), argS(2), argS(3));
     if (name == "http_patch_auth") return http_patch_auth_impl(argS(0), argS(1), argS(2), argS(3));
+    if (name == "http_patch") return http_patch_auth_impl(argS(0), argS(1), argS(2), argS(3));
     if (name == "http_delete_auth") return http_delete_auth_impl(argS(0), argS(1));
     if (name == "http_status") return http_get_status_impl(argS(0));
     if (name == "http_download") {
@@ -2017,40 +2090,22 @@ static std::string net_dispatch(const std::string& name, const std::vector<std::
     }
     if (name == "http_get_resp") {
         // GET returning a resp: handle instead of raw body
-        std::string url = argS(0);
-        WinHttpSession s;
-        if (!winhttp_open(s, url, L"GET")) return "null";
-        if (!WinHttpSendRequest(s.request, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) return "null";
-        if (!WinHttpReceiveResponse(s.request, nullptr)) return "null";
-        DWORD statusCode = 0;
-        DWORD statusSize = sizeof(statusCode);
-        WinHttpQueryHeaders(s.request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-                            WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &statusSize, WINHTTP_NO_HEADER_INDEX);
-        std::string body = winhttp_read_response(s.request);
+        const HttpReply reply = http_request("GET", argS(0), "", "", "");
+        if (!reply.ok) return "null";
+        const int statusCode = static_cast<int>(reply.status);
+        const std::string& body = reply.body;
         int id = g_httpRespNextId.fetch_add(1);
         {
             std::lock_guard<std::mutex> lock(g_httpRespMutex);
-            g_httpResponses[id] = HttpResponse{static_cast<int>(statusCode), body, {}};
+            g_httpResponses[id] = HttpResponse{statusCode, body, {}};
         }
         return std::string("resp:") + std::to_string(id);
     }
 
-    if (name == "network.ip.flush") {
-        return format_exec_result(execute_ipconfig({"/flushdns"}));
-    }
-    if (name == "network.ip.release") {
-        std::vector<std::string> args{"/release"};
-        if (!argS(0).empty()) args.push_back(argS(0));
-        return format_exec_result(execute_ipconfig(args));
-    }
-    if (name == "network.ip.renew") {
-        std::vector<std::string> args{"/renew"};
-        if (!argS(0).empty()) args.push_back(argS(0));
-        return format_exec_result(execute_ipconfig(args));
-    }
-    if (name == "network.ip.registerdns") {
-        return format_exec_result(execute_ipconfig({"/registerdns"}));
-    }
+    if (name == "network.ip.flush") return format_exec_result(execute_ip_command("flush", ""));
+    if (name == "network.ip.release") return format_exec_result(execute_ip_command("release", argS(0)));
+    if (name == "network.ip.renew") return format_exec_result(execute_ip_command("renew", argS(0)));
+    if (name == "network.ip.registerdns") return format_exec_result(execute_ip_command("registerdns", ""));
 
     return {};
 }
@@ -2060,7 +2115,6 @@ std::string __erelang_builtin_network_dispatch(const std::string& name, const st
 }
 
 bool __erelang_ws_server_try_method(int id, const std::string& method, const std::vector<std::string>& args, std::string& out) {
-#ifdef _WIN32
     auto argS = [&](size_t i) -> const std::string& {
         static const std::string empty;
         return i < args.size() ? args[i] : empty;
@@ -2100,10 +2154,58 @@ bool __erelang_ws_server_try_method(int id, const std::string& method, const std
     }
     out = "";
     return true;
-#else
-    (void)id; (void)method; (void)args; (void)out;
-    return false;
-#endif
 }
 
 } // namespace erelang
+
+// Module registration: see include/erelang/module_registry.hpp.
+#include "erelang/module_registry.hpp"
+namespace {
+using erelang::Runtime;
+using Args = std::vector<std::string>;
+const bool kModuleRegistered = erelang::modules::register_dispatch("net",
+    [](Runtime*, const std::string& name, const Args& argv) {
+        return erelang::__erelang_builtin_network_dispatch(name, argv);
+    });
+// Server side WebSocket connections live here; client sockets are handled by websocket.cpp.
+const bool kWsServer = erelang::modules::register_handle("ws",
+    [](Runtime*, int id, const std::string& m, const Args& a, std::string& out) {
+        return erelang::__erelang_ws_server_try_method(id, m, a, out);
+    }, 0);
+const bool kHttp = erelang::modules::register_handle("http",
+    [](Runtime* rt, int id, const std::string& m, const Args& a, std::string& out) {
+        out = erelang::__erelang_http_handle_method(rt, id, m, a);
+        return true;
+    });
+const bool kReq = erelang::modules::register_handle("req",
+    [](Runtime*, int id, const std::string& m, const Args& a, std::string& out) {
+        out = erelang::__erelang_req_handle_method(id, m, a);
+        return true;
+    });
+const bool kRes = erelang::modules::register_handle("res",
+    [](Runtime*, int id, const std::string& m, const Args& a, std::string& out) {
+        out = erelang::__erelang_res_handle_method(id, m, a);
+        return true;
+    });
+const bool kResp = erelang::modules::register_handle("resp",
+    [](Runtime*, int id, const std::string& m, const Args& a, std::string& out) {
+        out = erelang::__erelang_resp_handle_method(id, m, a);
+        return true;
+    });
+const bool kSse = erelang::modules::register_handle("sse",
+    [](Runtime*, int id, const std::string& m, const Args& a, std::string& out) {
+        out = erelang::__erelang_sse_handle_method(id, m, a);
+        return true;
+    });
+const bool kTcp = erelang::modules::register_handle("tcp",
+    [](Runtime*, int id, const std::string& m, const Args& a, std::string& out) {
+        out = erelang::__erelang_tcp_handle_method(id, m, a);
+        return true;
+    });
+const bool kUdp = erelang::modules::register_handle("udp",
+    [](Runtime*, int id, const std::string& m, const Args& a, std::string& out) {
+        out = erelang::__erelang_udp_handle_method(id, m, a);
+        return true;
+    });
+}  // namespace
+ERELANG_MODULE_ANCHOR(net)

@@ -1,14 +1,20 @@
 # Erelang conformance suite runner
 # Usage (repo root): .\tests\run.ps1
 
+# -Exe defaults to the debug preset build for this OS.
 param(
-    [string]$Exe = "build\bin\Debug\erelang.exe"
+    [string]$Exe
 )
 
 $ErrorActionPreference = "Continue"
 $root = Split-Path -Parent $PSScriptRoot
 if (-not $root) { $root = (Get-Location).Path }
 Set-Location $root
+
+if (-not $Exe) {
+    $name = if ($env:OS -eq 'Windows_NT') { 'erelang.exe' } else { 'erelang' }
+    $Exe = Join-Path $root "build/debug/bin/Debug/$name"
+}
 
 if (-not (Test-Path $Exe)) {
     Write-Error "Missing runner: $Exe - build target erelang_runner first."
@@ -30,8 +36,8 @@ $files = Get-ChildItem -Path (Join-Path $root "tests") -Recurse -Filter *.elan |
     } |
     Sort-Object FullName
 
-$registry = Join-Path $root "tests\packages\registry"
-$appDir = Join-Path $root "tests\packages\app"
+$registry = Join-Path $root "tests/packages/registry"
+$appDir = Join-Path $root "tests/packages/app"
 if (Test-Path (Join-Path $appDir "package.elan")) {
     & $Exe --lock (Join-Path $appDir "package.elan") --registry $registry 2>&1 | Out-Null
     & $Exe --fetch (Join-Path $appDir "package.elan") --registry $registry 2>&1 | Out-Null

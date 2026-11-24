@@ -1,0 +1,18 @@
+<plugin>
+    <erelang_manifest>
+        <id>docker</id>
+        <name>Docker Plugin</name>
+        <version>1.0.0</version>
+        <author>erelang</author>
+        <target>erelang>=0.1</target>
+        <description>Drive the docker CLI: containers, images, logs, exec, inspect, compose</description>
+    </erelang_manifest>
+    <dependencies>
+    </dependencies>
+    <content>
+        <include>docker.elan</include>
+    </content>
+    <hooks>
+        <onLoad>docker_init</onLoad>
+    </hooks>
+</plugin>

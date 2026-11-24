@@ -1,0 +1,53 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  unix:
+    name: build and test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      ERELANG: build/debug/bin/Debug/erelang
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install libraries (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev libssl-dev
+
+      - name: Install libraries (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: brew list openssl@3 >/dev/null 2>&1 || brew install openssl@3
+
+      - name: Configure
+        run: cmake --preset unix-debug
+
+      - name: Build
+        run: cmake --build --preset unix-debug -j 4
+
+      - name: Run example
+        run: |
+          & $env:ERELANG examples/program.elan
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Conformance tests
+        run: ./tests/run.ps1 -Exe $env:ERELANG
+
+      - name: Discord plugin tests
+        run: ./plugins/discord/tests/run.ps1 -Exe $env:ERELANG
+
+      - name: Docker plugin tests
+        run: |
+          chmod +x plugins/docker/tests/fake/docker
+          ./plugins/docker/tests/run.ps1 -Exe $env:ERELANG

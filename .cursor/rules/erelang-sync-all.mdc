@@ -85,18 +85,18 @@ Leaving the extension stale is treated the same as leaving the typechecker stale
 
 1. Configure if needed:
    ```bash
-   cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+   cmake --preset debug
    ```
 2. Full clean build of the runner (and any other targets you touched):
    ```bash
-   cmake --build build --target erelang_runner -j 8
+   cmake --build --preset debug --target erelang_runner -j 8
    ```
    Zero errors, zero new warnings that are your fault.
 3. Run the regression corpus (at minimum):
    ```bash
-   ./build/bin/Debug/erelang.exe examples/language_kitchen_sink.elan
-   ./build/bin/Debug/erelang.exe examples/feature_pass_v2.elan
-   ./build/bin/Debug/erelang.exe examples/program.elan
+   ./build/debug/bin/Debug/erelang.exe examples/language_kitchen_sink.elan
+   ./build/debug/bin/Debug/erelang.exe examples/feature_pass_v2.elan
+   ./build/debug/bin/Debug/erelang.exe examples/program.elan
    ```
    Plus any new example you added that exercises the change.
 4. If the change is experimental, also verify the experimental flag path still works.

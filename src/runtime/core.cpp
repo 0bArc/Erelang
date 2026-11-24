@@ -190,7 +190,8 @@ int Runtime::run(const Program& program) const {
     for (const auto& g : program.globals) globalNames_.insert(g.name);
     for (const auto& g : program.globals) {
         if (g.value) globalVars_[g.name] = eval_string(*g.value, rootEnv);
-        rootEnv.vars[g.name] = globalVars_[g.name];
+        else (void)globalVars_[g.name];
+        // No copy into rootEnv.vars: a local copy would shadow later updates made by callees.
     }
     for (const auto& en : program.enums) {
         for (const auto& variant : en.variants) {
@@ -416,14 +417,11 @@ int Runtime::run_single_action(const Program& program, std::string_view actionNa
         }
     }
     bind_builtin_module_aliases(program, globalVars_);
-    for (const auto& kv : globalVars_) env.vars[kv.first] = kv.second;
     seed_plugin_aliases(program, env);
     bind_builtin_module_aliases(program, env.vars);
     prepare_action_slots(env, *a);
     exec_block(a->body, program, ctx, env);
     for (auto& th : ctx.threads) if (th.joinable()) th.join();
-    // Persist mutated globals
-    for (auto& kv : env.vars) if (globalNames_.count(kv.first)) globalVars_[kv.first] = kv.second;
     currentProgram_ = nullptr;
     return 0;
 }
@@ -563,7 +561,6 @@ std::string Runtime::call_action_by_name(std::string_view actionName, const std:
         return {};
     }
     Env calleeEnv;
-    for (const auto& kv : globalVars_) calleeEnv.vars[kv.first] = kv.second;
     for (const auto& kv : inject) calleeEnv.vars[kv.first] = kv.second;
     for (size_t i = 0; i < a->params.size() && i < args.size(); ++i) {
         calleeEnv.vars[a->params[i].name] = args[i];
@@ -573,9 +570,6 @@ std::string Runtime::call_action_by_name(std::string_view actionName, const std:
     exec_block(a->body, *currentProgram_, calleeCtx, calleeEnv);
     for (auto& th : calleeCtx.threads) {
         if (th.joinable()) th.join();
-    }
-    for (auto& kv : calleeEnv.vars) {
-        if (globalNames_.count(kv.first)) globalVars_[kv.first] = kv.second;
     }
     if (!calleeCtx.returned) return {};
     return calleeCtx.returnValue;

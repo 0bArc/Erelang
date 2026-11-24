@@ -4,6 +4,8 @@
 #include "erelang/runtime.hpp"
 #include "erelang/runtime_helpers.hpp"
 #include "erelang/runtime_builtins.hpp"
+#include "erelang/module_registry.hpp"
+#include "erelang/builtin_registry.hpp"
 #include "erelang/bytecode.hpp"
 #include "erelang/lexer.hpp"
 #include "erelang/parser.hpp"
@@ -422,6 +424,10 @@ Value Runtime::eval_value(const Expr& e, const Env& env) const {
                    v.kind == ValueKind::Bool || v.kind == ValueKind::Null;
         };
         Value left = eval_value(*binary.left, env);
+        // Control operators evaluate their RHS only when its value is needed.
+        if (binary.op == BinOp::And && !is_truthy(left)) return Value::from_bool(false);
+        if (binary.op == BinOp::Or && is_truthy(left)) return Value::from_bool(true);
+        if (binary.op == BinOp::Coalesce && left.kind != ValueKind::Null) return left;
         // Plain numbers/bools: no pointer, unit, or struct-operator semantics apply.
         if (is_scalar(left)) {
             Value right = eval_value(*binary.right, env);
@@ -985,7 +991,11 @@ Value Runtime::eval_value_rest(const Expr& e, const Env& env) const {
         const auto& literal = std::get<ListLiteralExpr>(e.node);
         std::vector<Value> items;
         items.reserve(literal.elements.size());
-        for (const auto& el : literal.elements) items.push_back(eval_arg(*el, env));
+        // A string literal stays a string: "007" and "3.14" must not turn into numbers.
+        for (const auto& el : literal.elements) {
+            if (std::holds_alternative<ExprString>(el->node)) items.push_back(Value::from_string(eval_string(*el, env)));
+            else items.push_back(eval_arg(*el, env));
+        }
         const int id = g_nextListId++;
         g_lists[id] = std::move(items);
         return make_handle_value(HandleKind::List, static_cast<uint32_t>(id));
@@ -1113,7 +1123,12 @@ Value Runtime::eval_value_rest(const Expr& e, const Env& env) const {
 // keep that path ({x} interpolation, "5" -> int); everything else keeps its typed value
 // instead of a display-string round trip.
 Value Runtime::eval_arg(const Expr& e, const Env& env) const {
-    if (std::holds_alternative<ExprString>(e.node)) return value_from_legacy_string(eval_string(e, env));
+    if (const auto* lit = std::get_if<ExprString>(&e.node)) {
+        // A string literal written in the source stays a string ("007" is not the int 7). Runtime
+        // built arguments (raw) carry display text of any value and still re-parse.
+        if (!lit->raw) return Value::from_string(eval_string(e, env));
+        return value_from_legacy_string(eval_string(e, env));
+    }
     return eval_value(e, env);
 }
 
@@ -1132,6 +1147,16 @@ std::string Runtime::eval_string(const Expr& e, const Env& env) const {
             if (close != std::string::npos) {
                 const std::string raw = input.substr(i + 1, close - i - 1);
                 const std::string key = trim_copy(raw);
+                // {4}, {2,5} and {2,} are regex quantifiers, never interpolation.
+                const bool quantifier = !raw.empty() && std::isdigit(static_cast<unsigned char>(raw[0])) &&
+                    raw.find_first_not_of("0123456789,") == std::string::npos;
+                if (quantifier) {
+                    out += '{';
+                    out += raw;
+                    out += '}';
+                    i = close + 1;
+                    continue;
+                }
                 const bool found =
                     (env.useSlots && env.slotIndex.count(key)) ||
                     env.vars.count(key) || globalVars_.count(key);
@@ -1494,10 +1519,29 @@ std::optional<Value> Runtime::dispatch_value_method(const Value& recv, std::stri
         }
     }
 
+    // Network handles: the statement form (`sock.send(x);`) always dispatched these; the
+    // expression form (`string m = sock.recv_timeout(500);`) fell through and returned "".
+    // Module handles (ws:, tcp:, proc:, ...): whichever module registered the prefix owns them.
+    if (const auto colon = handle.find(':'); colon != std::string::npos && colon > 0 && colon + 1 < handle.size() &&
+        handle.find_first_not_of("0123456789", colon + 1) == std::string::npos) {
+        const std::string_view prefix = std::string_view(handle).substr(0, colon);
+        if (modules::has_handle_prefix(prefix)) {
+            const int id = static_cast<int>(to_int(handle.substr(colon + 1)));
+            std::vector<std::string> sargs;
+            sargs.reserve(args.size());
+            for (const auto& a : args) sargs.push_back(to_display_string(a));
+            std::string result;
+            if (modules::dispatch_handle(const_cast<Runtime*>(this), prefix, id, methodName, sargs, result)) {
+                return value_from_legacy_string(std::move(result));
+            }
+        }
+    }
+
     if (recv.kind == ValueKind::String) {
         static const std::unordered_set<std::string> kStringMethods = {
             "lower", "upper", "strip", "lstrip", "rstrip", "find", "substr",
-            "starts_with", "ends_with", "replace", "split", "len", "length"
+            "starts_with", "ends_with", "replace", "split", "len", "length",
+            "contains", "repeat", "reverse"
         };
         if (kStringMethods.count(methodName)) {
             auto makeArg = [](const Value& v) {
@@ -1508,7 +1552,11 @@ std::optional<Value> Runtime::dispatch_value_method(const Value& recv, std::stri
             for (const auto& a : args) callArgs.push_back(makeArg(a));
             Env empty;
             std::string builtin = "string." + (methodName == "length" ? "len" : methodName);
-            return value_from_legacy_string(eval_builtin_call(builtin, callArgs, empty, true));
+            std::string result = eval_builtin_call(builtin, callArgs, empty, true);
+            // A string result stays a string: "007".upper() must not become the int 7.
+            const registry::TypeMember* tm = registry::type_member("string", methodName);
+            if (tm && std::string_view(tm->returns) == "string") return Value::from_string(std::move(result));
+            return value_from_legacy_string(std::move(result));
         }
     }
 

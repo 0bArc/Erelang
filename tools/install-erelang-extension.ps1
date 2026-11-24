@@ -9,12 +9,12 @@ $script = Join-Path $PSScriptRoot 'install-erelang-extension.elan'
 $erelang = $null
 if (Get-Command erelang -ErrorAction SilentlyContinue) {
   $erelang = (Get-Command erelang).Source
-} elseif (Test-Path (Join-Path $root 'build\bin\Debug\erelang.exe')) {
-  $erelang = Join-Path $root 'build\bin\Debug\erelang.exe'
-} elseif (Test-Path (Join-Path $root 'build\bin\Release\erelang.exe')) {
-  $erelang = Join-Path $root 'build\bin\Release\erelang.exe'
+} elseif (Test-Path (Join-Path $root 'build\debug\bin\Debug\erelang.exe')) {
+  $erelang = Join-Path $root 'build\debug\bin\Debug\erelang.exe'
+} elseif (Test-Path (Join-Path $root 'build\release\bin\Release\erelang.exe')) {
+  $erelang = Join-Path $root 'build\release\bin\Release\erelang.exe'
 } else {
-  throw "erelang not found on PATH and not built under build/bin"
+  throw "erelang not found on PATH and not built under build/debug or build/release"
 }
 
 $env:ERELANG_REPO_ROOT = $root

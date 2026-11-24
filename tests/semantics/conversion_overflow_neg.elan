@@ -1,0 +1,6 @@
+// expect: does not fit in an int
+@strict
+action main() {
+    print int("9223372036854775808.0");
+}
+run main;

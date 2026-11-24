@@ -154,7 +154,7 @@ std::optional<PackageLock> load_package_lock(const fs::path& lockPath) {
 bool write_package_lock(const fs::path& lockPath, const PackageLock& lock) {
     std::ofstream out(lockPath, std::ios::binary | std::ios::trunc);
     if (!out) return false;
-    out << "# erelang.lock — exact version + content hash\n";
+    out << "# erelang.lock: exact version + content hash\n";
     for (const auto& e : lock.entries) {
         out << e.name << ' ' << e.version << ' ' << e.hash;
         if (!e.path.empty()) out << ' ' << e.path.generic_string();

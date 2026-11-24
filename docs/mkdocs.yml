@@ -1,0 +1,125 @@
+site_name: Erelang
+site_description: Erelang language and runtime documentation
+docs_dir: pages
+site_dir: site
+use_directory_urls: true
+
+theme:
+  name: material
+  palette:
+    scheme: slate
+    primary: deep purple
+    accent: purple
+  font:
+    text: Inter
+    code: JetBrains Mono
+  features:
+    - navigation.instant
+    - navigation.tabs
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - content.tooltips
+    - toc.follow
+
+hooks:
+  - hooks/erelang_lexer.py
+
+plugins:
+  - search
+  - tags
+  - minify:
+      minify_html: true
+  - git-revision-date-localized:
+      enable_creation_date: false
+      fallback_to_build_date: true
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.betterem
+  - pymdownx.caret
+  - pymdownx.mark
+  - pymdownx.tilde
+  - pymdownx.keys
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets:
+      base_path: [".."]
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+nav:
+  - Home: index.md
+  - Guide:
+      - Getting started: guide/getting-started.md
+      - Language: guide/language.md
+      - Core semantics: guide/semantics.md
+      - Syntax reference: guide/syntax.md
+      - Imports: guide/imports.md
+      - Diagnostics: guide/diagnostics.md
+      - Toolchain: guide/toolchain.md
+      - Packages: guide/packages.md
+      - Self-hosting: guide/selfhost.md
+      - Conformance: guide/conformance.md
+  - Standard modules:
+      - Core builtins: modules/core-builtins.md
+      - Collections: modules/collections.md
+      - Strings: modules/strings.md
+      - Math: modules/math.md
+      - Data: modules/data.md
+      - Regex: modules/regex.md
+      - AI: modules/ai.md
+      - Binary: modules/binary.md
+      - Crypto: modules/crypto.md
+      - Filesystem: modules/filesystem.md
+      - Process: modules/process.md
+      - Network: modules/network.md
+      - Threads: modules/threads.md
+      - Monitor: modules/monitor.md
+      - Permissions: modules/permissions.md
+  - Examples:
+      - Overview: examples/index.md
+      - Primitives: examples/primitives.md
+      - Collections: examples/collections.md
+      - Structs and enums: examples/structs_enums.md
+      - Generics and traits: examples/generics_traits.md
+      - Functions: examples/functions.md
+      - Operators: examples/operators.md
+      - Math library: examples/math.md
+      - Benchmarks: examples/bench.md
+  - Advanced:
+      - Memory: advanced/memory.md
+      - Low level: advanced/low-level.md
+      - Automation: advanced/automation.md
+      - Builtins inventory: advanced/builtins-inventory.md
+  - Editor:
+      - VS Code extension: editor/vscode.md

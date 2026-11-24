@@ -420,3 +420,13 @@ std::string __erelang_builtin_threads_dispatch(Runtime* rt, const std::string& n
 }
 
 } // namespace erelang
+
+// Module registration: see include/erelang/module_registry.hpp.
+#include "erelang/module_registry.hpp"
+namespace {
+const bool kModuleRegistered = erelang::modules::register_dispatch("threads",
+    [](erelang::Runtime* rt, const std::string& name, const std::vector<std::string>& argv) {
+        return erelang::__erelang_builtin_threads_dispatch(rt, name, argv);
+    });
+}  // namespace
+ERELANG_MODULE_ANCHOR(threads)

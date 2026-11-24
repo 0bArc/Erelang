@@ -1,0 +1,8 @@
+// expect: TC030
+@strict
+action main() {
+    int duplicate = 1;
+    int duplicate = 2;
+    print duplicate;
+}
+run main;

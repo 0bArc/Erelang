@@ -9,7 +9,7 @@ Run from repo root with Debug runner:
 Or manually:
 
 ```powershell
-$exe = "build\bin\Debug\erelang.exe"
+$exe = "build\debug\bin\Debug\erelang.exe"
 Get-ChildItem tests -Recurse -Filter *.elan | ForEach-Object {
   & $exe $_.FullName
   Write-Host "$($_.FullName) => $LASTEXITCODE"

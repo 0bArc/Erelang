@@ -1,0 +1,47 @@
+@erelang
+
+// End to end check against tests/mock_discord.py. Run through tests/run.ps1.
+
+global int seen_messages = 0;
+global int seen_commands = 0;
+global int got_ready = 0;
+
+public action on_ready(user_id: string, user_name: string) {
+    got_ready = 1;
+    print "ready " + user_id + " " + user_name;
+}
+
+public action on_message(channel_id: string, author_id: string, author_name: string, content: string, message_id: string) {
+    seen_messages = seen_messages + 1;
+    print "message " + author_name + ": " + content;
+    if (content == "!ping") {
+        string r = discord_send_message(channel_id, "pong \"quoted\"");
+        print "send -> " + r;
+    }
+    if (content == "!after-resume") {
+        print "resumed ok";
+        discord_stop();
+    }
+}
+
+public action on_command(name: string, options_json: string, interaction_id: string, interaction_token: string, user_id: string) {
+    seen_commands = seen_commands + 1;
+    string text = discord_option(options_json, "message");
+    print "command " + name + " from " + user_id + " text=" + text;
+    string r = discord_respond(interaction_id, interaction_token, "echo: " + text);
+    print "respond -> " + r;
+}
+
+public action main() {
+    discord_api_base = "http://127.0.0.1:18110/api/v10";
+    discord_login("TESTTOKEN");
+    discord_set_client_id("app1");
+    string reg = slash_register_echo();
+    print "register -> " + reg;
+    discord_on_ready("on_ready");
+    discord_on_message("on_message");
+    discord_on_command("on_command");
+    int rc = discord_run();
+    print "run rc=" + string(rc) + " messages=" + string(seen_messages) + " commands=" + string(seen_commands);
+}
+run main;

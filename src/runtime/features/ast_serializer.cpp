@@ -22,6 +22,8 @@ constexpr uint8_t TAG_ENUM      = 10;
 constexpr uint8_t TAG_TYPEALIAS = 11;
 
 // Expr variant tags
+template <typename> inline constexpr bool kAlwaysFalse = false;
+
 constexpr uint8_t EX_STRING   = 0;
 constexpr uint8_t EX_NUMBER   = 1;
 constexpr uint8_t EX_BOOL     = 2;
@@ -43,6 +45,7 @@ constexpr uint8_t EX_COMPOUND = 17;
 constexpr uint8_t EX_TUPLELIT = 18;
 constexpr uint8_t EX_TRY      = 19;
 constexpr uint8_t EX_RANGE    = 20;
+constexpr uint8_t EX_AWAIT    = 21;
 
 // Stmt variant tags
 constexpr uint8_t ST_PRINT    = 0;
@@ -242,7 +245,7 @@ void writeExpr(Writer& w, const Expr* e) {
     if (!e) { w.u8(EX_NULL); return; }
     std::visit([&](auto&& v) {
         using T = std::decay_t<decltype(v)>;
-        if constexpr (std::is_same_v<T, ExprString>)   { w.u8(EX_STRING); w.str(v.v); }
+        if constexpr (std::is_same_v<T, ExprString>)   { w.u8(EX_STRING); w.str(v.v); w.u8(v.raw ? 1 : 0); }
         else if constexpr (std::is_same_v<T, ExprNull>) { w.u8(EX_NULL); }
         else if constexpr (std::is_same_v<T, ExprNumber>) { w.u8(EX_NUMBER); w.i64(v.v); w.u8(v.isFloatLiteral ? 1 : 0); w.str(v.raw); }
         else if constexpr (std::is_same_v<T, ExprBool>)   { w.u8(EX_BOOL); w.u8(v.v ? 1 : 0); }
@@ -280,6 +283,9 @@ void writeExpr(Writer& w, const Expr* e) {
         else if constexpr (std::is_same_v<T, TryExpr>) {
             w.u8(EX_TRY); writeExpr(w, v.inner.get());
         }
+        else if constexpr (std::is_same_v<T, AwaitExpr>) {
+            w.u8(EX_AWAIT); writeExpr(w, v.inner.get());
+        }
         else if constexpr (std::is_same_v<T, LambdaExpr>) {
             w.u8(EX_LAMBDA);
             w.u32(static_cast<uint32_t>(v.params.size()));
@@ -297,6 +303,7 @@ void writeExpr(Writer& w, const Expr* e) {
         else if constexpr (std::is_same_v<T, PostfixExpr>) { w.u8(EX_POSTFIX); w.u8(v.isInc ? 1 : 0); writeExpr(w, v.operand.get()); }
         else if constexpr (std::is_same_v<T, PrefixExpr>)  { w.u8(EX_PREFIX); w.u8(v.isInc ? 1 : 0); writeExpr(w, v.operand.get()); }
         else if constexpr (std::is_same_v<T, CompoundAssignExpr>) { w.u8(EX_COMPOUND); w.u8(static_cast<uint8_t>(v.op)); writeExpr(w, v.left.get()); writeExpr(w, v.right.get()); }
+        else static_assert(kAlwaysFalse<T>, "ast_serializer: an expression node is not serialized");
     }, e->node);
 }
 
@@ -304,7 +311,7 @@ ExprPtr readExpr(Reader& r) {
     uint8_t tag = r.u8();
     switch (tag) {
         case EX_NULL:    return std::make_shared<Expr>(Expr{ExprNull{}});
-        case EX_STRING:  return std::make_shared<Expr>(Expr{ExprString{r.str()}});
+        case EX_STRING:  { auto text = r.str(); const bool raw = r.u8() != 0; return std::make_shared<Expr>(Expr{ExprString{std::move(text), raw}}); }
         case EX_NUMBER:  { auto v = r.i64(); auto fl = r.u8() != 0; auto raw = r.str(); return std::make_shared<Expr>(Expr{ExprNumber{v, fl, raw}}); }
         case EX_BOOL:    return std::make_shared<Expr>(Expr{ExprBool{r.u8() != 0}});
         case EX_IDENT:   return std::make_shared<Expr>(Expr{ExprIdent{r.str()}});
@@ -347,6 +354,9 @@ ExprPtr readExpr(Reader& r) {
         }
         case EX_TRY: {
             return std::make_shared<Expr>(Expr{TryExpr{readExpr(r)}});
+        }
+        case EX_AWAIT: {
+            return std::make_shared<Expr>(Expr{AwaitExpr{readExpr(r)}});
         }
         case EX_LAMBDA: {
             LambdaExpr lambda;
@@ -408,6 +418,8 @@ void writeStmt(Writer& w, const Statement& s) {
             w.u8(ST_LET); w.u8(v.isConst ? 1 : 0); w.str(v.name); w.str(v.declaredType);
             writePattern(w, v.pattern.get());
             writeExpr(w, v.value.get());
+            writeExpr(w, v.sizeExpr.get());
+            w.u8(v.defaultInit ? 1 : 0);
         }
         else if constexpr (std::is_same_v<T, ReturnStmt>) {
             w.u8(ST_RETURN);
@@ -498,6 +510,7 @@ void writeStmt(Writer& w, const Statement& s) {
         else if constexpr (std::is_same_v<T, PauseStmt>)      { w.u8(ST_PAUSE); }
         else if constexpr (std::is_same_v<T, ImportStmt>)      { w.u8(ST_IMPORT); }
         else if constexpr (std::is_same_v<T, ExprStmt>)        { w.u8(ST_EXPR); writeExpr(w, v.expr.get()); }
+        else static_assert(kAlwaysFalse<T>, "ast_serializer: a statement node is not serialized");
     }, s);
 }
 
@@ -520,7 +533,12 @@ Statement readStmt(Reader& r) {
             auto dt = r.str();
             auto pat = readPattern(r);
             auto v = readExpr(r);
-            return LetStmt{isC, name, v, dt, pat};
+            auto size = readExpr(r);
+            if (size && std::holds_alternative<ExprNull>(size->node)) size = nullptr;
+            LetStmt let{isC, name, v, dt, pat};
+            let.sizeExpr = std::move(size);
+            let.defaultInit = r.u8() != 0;
+            return let;
         }
         case ST_RETURN: { if (r.u8()) { auto v = readExpr(r); return ReturnStmt{v}; } return ReturnStmt{}; }
         case ST_SET: { auto isM = r.u8() != 0; auto vf = r.str(); auto on = r.str(); auto val = readExpr(r); return SetStmt{isM, vf, on, val}; }
@@ -831,7 +849,7 @@ std::vector<uint8_t> serialize_program(const Program& prog) {
 
     // Magic + version
     out.insert(out.end(), {'E','R','A','S'}); // "ERAS" = ERelang AST Serialized
-    w.u32(4); // format version
+    w.u32(5); // format version
 
     w.u8(prog.strict ? 1 : 0);
     w.u8(prog.debug ? 1 : 0);
@@ -896,7 +914,7 @@ std::optional<Program> deserialize_program(const uint8_t* data, size_t size) {
 
         // Magic
         if (r.u8() != 'E' || r.u8() != 'R' || r.u8() != 'A' || r.u8() != 'S') return std::nullopt;
-        if (r.u32() != 4) return std::nullopt; // version
+        if (r.u32() != 5) return std::nullopt; // version
 
         Program prog;
         prog.strict = r.u8() != 0;

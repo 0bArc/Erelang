@@ -62,5 +62,14 @@ compiler/.mini_ir_*.tmp
 
 dev/
 dev/*
-.github/
+# Local agent files stay out of git; CI workflows are shared.
+.github/*
+!.github/workflows/
 vscode/
+docs/site/
+
+# Test output written to the working directory
+tests_tmp_*
+
+# Local agent settings
+.claude/settings.local.json

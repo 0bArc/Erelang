@@ -21,8 +21,18 @@ export interface EntityMembers {
   fields:  Map<string, Set<string>>;
 }
 
+/** A typed declaration: `Array<int> xs`, `string s = ...`, a parameter `n: int`, a loop variable. */
+export interface Declaration {
+  type: string;
+  line: number;
+  /** Right-hand side text when there is one, used to spot handle-returning calls. */
+  init?: string;
+}
+
 export interface DocumentIndex {
   version: number;
+  /** Declarations by variable name, in source order. */
+  declarations: Map<string, Declaration[]>;
   symbols: CollectedSymbols;
   entityInstances: Map<string, string>;
   entityMembers: EntityMembers;
@@ -37,6 +47,8 @@ export interface OutlineSymbol {
 
 export interface ImportedSymbols {
   aliasToActions: Map<string, Set<string>>;
+  /** Alias of a builtin module include -> normalized module path (builtin/regex). */
+  aliasToModule:  Map<string, string>;
   allActions:     Set<string>;
 }
 

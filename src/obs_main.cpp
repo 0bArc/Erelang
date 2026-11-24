@@ -19,6 +19,12 @@
 #include <string_view>
 #ifdef _WIN32
 #include <windows.h>
+#else
+#include <pthread.h>
+#include <cstring>
+#endif
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
 #endif
 // Static runner: include full compiler/runtime stack
 #ifdef ERELANG_STATIC_RUNNER
@@ -32,6 +38,8 @@
 #include "erelang/packages.hpp"
 #include "erelang/version.hpp"
 #include "erelang/plugins.hpp"
+#include "erelang/builtin_registry.hpp"
+#include "erelang/module_registry.hpp"
 #include "erelang/features/ast_serializer.hpp"
 #include "erelang/ir.hpp"
 #include "erelang/codegen_x64.hpp"
@@ -41,6 +49,12 @@
 #endif
 
 namespace fs = std::filesystem;
+
+#ifdef _WIN32
+static constexpr const char* kExeSuffix = ".exe";
+#else
+static constexpr const char* kExeSuffix = "";
+#endif
 
 static fs::path resolve_executable_path(const char* argv0) {
 #ifdef _WIN32
@@ -56,6 +70,24 @@ static fs::path resolve_executable_path(const char* argv0) {
             }
             size *= 2;
         }
+    }
+#elif defined(__APPLE__)
+    {
+        uint32_t size = 0;
+        _NSGetExecutablePath(nullptr, &size);
+        std::string buffer(size, '\0');
+        if (size > 0 && _NSGetExecutablePath(buffer.data(), &size) == 0) {
+            buffer.resize(std::strlen(buffer.c_str()));
+            std::error_code ec;
+            const fs::path canonical = fs::canonical(buffer, ec);
+            if (!ec) return canonical;
+        }
+    }
+#else
+    {
+        std::error_code ec;
+        const fs::path self = fs::read_symlink("/proc/self/exe", ec);
+        if (!ec && !self.empty()) return self;
     }
 #endif
     if (argv0 && argv0[0] != '\0') {
@@ -101,7 +133,9 @@ static void print_help() {
                  "  erelang --about\n"
                  "  erelang --bootstrap  (force show bootstrap manifest UI even if args given)\n"
                  "  erelang <path\\to\\file.(elan|ere)> [--debug] [--dap] [--auto]\n"
+                 "  erelang --dump-builtins [--json]  (modules, builtins and type members, for tools)\n"
                  "  erelang --check <path\\to\\file.(elan|ere)>\n"
+                 "  erelang --check-stdin <file>  (check stdin using file's import directory)\n"
                  "  erelang --compile <path\\to\\file.(elan|ere)> [--output <path\\to\\out.exe>] [--static|--dynamic] [--bundle-runtime] [--manifest] [--lto] [--strip] [--minify] [--gc-sections]\n"
                  "  erelang --emit-ir <path\\to\\file.(elan|ere)> [--out <path\\to\\out.eir>]\n"
                  "  erelang --emit-asm <path\\to\\file.(elan|ere)> [--out <path\\to\\out.s>]\n"
@@ -116,7 +150,7 @@ static void print_help() {
                  "  Run a .elan/.ere script directly or compile it to a standalone .exe.\n"
                  "  --compile builds a standalone Windows .exe for the given erelang file.\n"
                  "  Imports are resolved at compile-time and embedded into the executable.\n"
-                 "  Builtin modules (builtin/*) are handled by the runtime — the compiled exe\n"
+                 "  Builtin modules (builtin/*) are handled by the runtime: the compiled exe\n"
                  "  works standalone with erelang installed.\n"
                  "  Use --manifest to generate manifest.erelang next to the output.\n"
                  "  By default, --compile emits a self-contained executable (no erelang.dll required).\n"
@@ -383,12 +417,13 @@ static std::string load_file_local(const std::string& abspath,
 
 static void load_program_recursive(const std::string& file,
                                    std::unordered_set<std::string>& visited,
-                                   std::vector<erelang::Program>& ordered) {
+                                   std::vector<erelang::Program>& ordered,
+                                   const std::unordered_map<std::string, std::string>* overlays = nullptr) {
     fs::path p = fs::absolute(file);
     std::string key = p.string();
     if (visited.count(key)) return;
     visited.insert(key);
-    std::string source = preprocess_source(load_file_local(key));
+    std::string source = preprocess_source(load_file_local(key, overlays));
     erelang::LexerOptions lxopts; lxopts.enableDurations = true; lxopts.enableUnits = true; lxopts.enablePolyIdentifiers = true; lxopts.emitDocComments = true; lxopts.emitComments = false;
     erelang::Lexer lx(std::move(source), lxopts);
     auto tokens = lx.lex();
@@ -401,7 +436,7 @@ static void load_program_recursive(const std::string& file,
     for (const auto& imp : prog.imports) {
         if (imp.pluginGlob) continue;
         auto next = resolve_import_local(key, imp.path);
-        if (next) load_program_recursive(*next, visited, ordered);
+        if (next) load_program_recursive(*next, visited, ordered, overlays);
     }
     ordered.push_back(std::move(prog));
 }
@@ -561,7 +596,7 @@ static std::string generate_bootstrap_source(const fs::path& mainFile,
                                 if (end != std::string::npos) {
                                     std::string inc = t.substr(pos+1, end-(pos+1));
                                     for (auto& ch : inc) if (ch=='\\') ch='/';
-                                    // Skip builtin includes — they are compiled into the runtime library
+                                    // Skip builtin includes: they are compiled into the runtime library
                                     if (inc.rfind("builtin/", 0) == 0 || inc.rfind("builtin:", 0) == 0) continue;
                                     fs::path ip = inc; if (ip.is_relative()) ip = p.parent_path()/ip; load_prog(ip.string());
                                 }
@@ -1017,7 +1052,15 @@ struct BuildLayout {
         layout.buildRoot = layout.binDir;
     }
 
-    if (!layout.buildRoot.empty()) {
+    // Presets nest build folders (build/debug), so walk up to the folder holding CMakeLists.txt.
+    for (fs::path p = layout.buildRoot.parent_path(); !p.empty(); p = p.parent_path()) {
+        if (fs::exists(p / "CMakeLists.txt")) {
+            layout.projectRoot = p;
+            break;
+        }
+        if (p == p.parent_path()) break;
+    }
+    if (layout.projectRoot.empty() && !layout.buildRoot.empty()) {
         layout.projectRoot = layout.buildRoot.parent_path();
     }
     if (layout.projectRoot.empty()) {
@@ -1432,12 +1475,13 @@ erelang::Program merge_loaded_programs(std::vector<erelang::Program>& ordered) {
 static bool load_merged_program_for_script(const fs::path& script,
                                            const std::vector<erelang::PluginManifest>& plugins,
                                            erelang::Program& outProgram,
-                                           std::string& error) {
+                                           std::string& error,
+                                           const std::unordered_map<std::string, std::string>* overlays = nullptr) {
     try {
         std::unordered_set<std::string> visited;
         std::vector<erelang::Program> ordered;
         load_plugins_into_programs(plugins, visited, ordered);
-        load_program_recursive(fs::absolute(script).string(), visited, ordered);
+        load_program_recursive(fs::absolute(script).string(), visited, ordered, overlays);
         if (ordered.empty()) {
             error = "No program loaded";
             return false;
@@ -1488,66 +1532,12 @@ static int run_system_command_in_dir(const std::string& command, const fs::path&
 
 // ─── Fast bootstrap: embed pre-compiled serialized Program ───────────────────
 
-static std::string generate_bootstrap_source_fast(const std::vector<uint8_t>& blob) {
-    std::ostringstream cpp;
-    cpp << R"CPP(#include <string>
-#include <vector>
-#include <iostream>
-#include <filesystem>
-#include <cstdlib>
-#include <functional>
-#include "erelang/runtime.hpp"
-#include "erelang/features/ast_serializer.hpp"
-
-namespace fs = std::filesystem;
-
-static const uint8_t kProgramBlob[] = {
-)CPP";
-
-    // Write blob as hex bytes, 16 per line
-    for (size_t i = 0; i < blob.size(); ++i) {
-        if (i % 16 == 0) cpp << "    ";
-        cpp << "0x";
-        uint8_t b = blob[i];
-        cpp << "0123456789ABCDEF"[(b >> 4) & 0xF];
-        cpp << "0123456789ABCDEF"[b & 0xF];
-        cpp << ",";
-        if (i % 16 == 15 || i == blob.size() - 1) cpp << "\n";
-    }
-
-    cpp << R"CPP(};
-static const size_t kProgramBlobSize = sizeof(kProgramBlob);
-
-int main(int argc, char** argv) {
-    try {
-        using namespace erelang;
-        auto prog = features::deserialize_program(kProgramBlob, kProgramBlobSize);
-        if (!prog) {
-            std::cerr << "Error: Failed to deserialize embedded program\n";
-            return 1;
-        }
-
-        // Pass CLI args through to runtime for args_count/args_get built-ins
-        std::vector<std::string> cliArgs;
-        for (int i = 1; i < argc; ++i) cliArgs.emplace_back(argv[i]);
-        Runtime::set_cli_args(cliArgs);
-
-        Runtime rt;
-        return rt.run(*prog);
-    } catch (const std::exception& ex) {
-        std::cerr << "Error: " << ex.what() << "\n";
-        return 1;
-    }
-}
-)CPP";
-    return cpp.str();
-}
-
 } // namespace erelang
 
 // ─── Fast bootstrap: embed pre-compiled serialized Program ───────────────────
 
-static std::string generate_bootstrap_source_fast(const std::vector<uint8_t>& blob) {
+static std::string generate_bootstrap_source_fast(const std::vector<uint8_t>& blob,
+                                                  const std::vector<std::string>& moduleAnchors) {
     std::ostringstream cpp;
     cpp << R"CPP(#include <string>
 #include <vector>
@@ -1557,9 +1547,11 @@ static std::string generate_bootstrap_source_fast(const std::vector<uint8_t>& bl
 #include <functional>
 #include "erelang/runtime.hpp"
 #include "erelang/features/ast_serializer.hpp"
-
-static const uint8_t kProgramBlob[] = {
 )CPP";
+    // Only the builtin modules this program includes get linked: reference just their anchors.
+    cpp << "extern \"C\" {\n";
+    for (const auto& a : moduleAnchors) cpp << "void erelang_module_anchor_" << a << "();\n";
+    cpp << "}\n\nstatic const uint8_t kProgramBlob[] = {\n";
 
     // Write blob as hex bytes, 16 per line
     for (size_t i = 0; i < blob.size(); ++i) {
@@ -1576,7 +1568,9 @@ static const uint8_t kProgramBlob[] = {
 static const size_t kProgramBlobSize = sizeof(kProgramBlob);
 
 int main(int argc, char** argv) {
-    try {
+)CPP";
+    for (const auto& a : moduleAnchors) cpp << "    erelang_module_anchor_" << a << "();\n";
+    cpp << R"CPP(    try {
         using namespace erelang;
         auto prog = features::deserialize_program(kProgramBlob, kProgramBlobSize);
         if (!prog) {
@@ -1694,8 +1688,9 @@ static std::string docgen_markdown(const erelang::Program& program) {
     return out.str();
 }
 
-int main(int argc, char** argv) {
+static int runner_main(int argc, char** argv) {
     // If no args, just show banner (no GUI)
+    erelang::modules::link_all_modules();
     if (argc <= 1) { print_banner(); return 0; }
     // Collect raw args first for detection
     bool bootstrapRequested = false; // now only via --about or legacy --bootstrap
@@ -1726,6 +1721,13 @@ int main(int argc, char** argv) {
     erelang::Runtime::set_cli_args(args);
     // Before plugin discovery: --help needs no plugins (discovery scans/creates plugin dirs).
     if (args.size() == 1 && (args[0] == "--help" || args[0] == "-h")) { print_help(); return 0; }
+    // Builtin manifest for tools (VS Code extension, docs). No plugins or scripts are loaded.
+    if (!args.empty() && args[0] == "--dump-builtins") {
+        const bool json = args.size() > 1 && args[1] == "--json";
+        std::cout << (json ? erelang::registry::manifest_json() : erelang::registry::manifest_text());
+        if (json) std::cout << '\n';
+        return 0;
+    }
     erelang::ExecutionContext ctx = erelang::build_execution_context(argc > 0 ? argv[0] : nullptr);
     [[maybe_unused]] auto& pluginManifests = ctx.pluginManifests;
 #ifdef ERELANG_STATIC_RUNNER
@@ -1861,9 +1863,13 @@ int main(int argc, char** argv) {
         }
 
         if (mode == "--build-native") {
+#ifndef _WIN32
+            std::cerr << "--build-native emits Windows x64 code and only runs on Windows. Use --compile on this platform.\n";
+            return 1;
+#endif
             if (output.empty()) {
                 output = input;
-                output.replace_extension(".exe");
+                output.replace_extension(kExeSuffix);
             }
             fs::path asmOut = output;
             asmOut.replace_extension(".s");
@@ -1953,20 +1959,40 @@ int main(int argc, char** argv) {
         }
     }
 
-    if (!args.empty() && args[0] == "--check") {
+    if (!args.empty() && (args[0] == "--check" || args[0] == "--check-stdin")) {
         if (args.size() < 2) {
             std::cerr << "--check requires a source file\n";
             return 1;
         }
         fs::path input = args[1];
-        if (!fs::exists(input)) {
+        const bool fromStdin = args[0] == "--check-stdin";
+        if (!fromStdin && !fs::exists(input)) {
             std::cerr << "Input not found: " << input << "\n";
             return 1;
         }
 #ifdef ERELANG_STATIC_RUNNER
         erelang::Program mergedProgram;
         std::string loadError;
-        if (!erelang::load_merged_program_for_script(input, ctx.pluginManifests, mergedProgram, loadError)) {
+        std::unordered_map<std::string, std::string> overlays;
+        if (fromStdin) {
+            std::ostringstream source;
+            source << std::cin.rdbuf();
+            overlays.emplace(fs::absolute(input).string(), source.str());
+            // Tooling protocol: compiler token positions, never quoted strings/comments.
+            // Text is an identifier or punctuation, so tab-delimited fields are unambiguous.
+            try {
+                erelang::Lexer lexer(source.str());
+                for (const auto& token : lexer.lex()) {
+                    using K = erelang::TokenKind;
+                    if (token.kind == K::String || token.kind == K::Char || token.kind == K::RawString
+                        || token.kind == K::Newline || token.kind == K::End || token.kind == K::DocComment) continue;
+                    if (token.text.find_first_of("\r\n\t") != std::string::npos) continue;
+                    std::cout << "!token\t" << token.line << '\t' << token.column << '\t' << token.text << '\n';
+                }
+            } catch (const std::exception&) { /* parser below supplies the diagnostic */ }
+        }
+        if (!erelang::load_merged_program_for_script(input, ctx.pluginManifests, mergedProgram, loadError,
+                                                   fromStdin ? &overlays : nullptr)) {
             std::cerr << "Check error: " << loadError << "\n";
             return 1;
         }
@@ -2075,7 +2101,7 @@ int main(int argc, char** argv) {
         if (!preferStatic && !preferDynamic) preferStatic = true;
         if (output.empty()) {
             output = input;
-            output.replace_extension(".exe");
+            output.replace_extension(kExeSuffix);
         }
 
         // Collect files and contents (static runner does this locally; dynamic uses DLL)
@@ -2383,6 +2409,7 @@ int main(int argc, char** argv) {
 
         // ─── Pre-compile pipeline: lex + parse + merge + typecheck + optimize + serialize ─────
         std::vector<uint8_t> programBlob;
+        std::vector<std::string> moduleAnchors;
         {
             using namespace erelang;
 
@@ -2406,7 +2433,7 @@ int main(int argc, char** argv) {
                     std::ostringstream ss; ss << in.rdbuf(); source = ss.str();
                 }
 
-                // Preprocess #include — collect transitive dependencies
+                // Preprocess #include: collect transitive dependencies
                 {
                     std::istringstream iss(source); std::string line;
                     while (std::getline(iss, line)) {
@@ -2522,11 +2549,20 @@ int main(int argc, char** argv) {
                 for (auto& d : tcRes.diagnostics) {
                     std::cerr << format_diagnostic(d) << "\n";
                 }
-                std::cerr << "[erelang] Type checking failed — cannot produce compiled binary.\n";
+                std::cerr << "[erelang] Type checking failed: cannot produce compiled binary.\n";
                 return 1;
             }
 
             optimize_program(mainProg);
+
+            // Modules to link: one anchor per implementation module the program includes.
+            for (const auto& imp : mainProg.imports) {
+                const registry::Module* m = registry::module_for_path(imp.path);
+                const char* impl = m ? modules::implementation_of(m->id) : nullptr;
+                if (impl && std::find(moduleAnchors.begin(), moduleAnchors.end(), impl) == moduleAnchors.end()) {
+                    moduleAnchors.emplace_back(impl);
+                }
+            }
 
             // Serialize
             try {
@@ -2538,7 +2574,7 @@ int main(int argc, char** argv) {
         }
 
         const std::string generatedMain = useDynamic ? generate_dynamic_bootstrap_source(input, orderedFiles)
-                                                     : generate_bootstrap_source_fast(programBlob);
+                                                     : generate_bootstrap_source_fast(programBlob, moduleAnchors);
         write_if_changed(tempProj / "main.cpp", generatedMain);
 
     const std::string libLoc = libPath.generic_string();
@@ -2552,14 +2588,14 @@ int main(int argc, char** argv) {
         "endif()\n"
         "if(MINGW)\n"
         "  add_compile_options(-Os -ffunction-sections -fdata-sections)\n"
-        "  add_link_options(-s -Wl,--gc-sections)\n"
+        "  add_link_options(-s -Wl,--gc-sections -static -static-libgcc -static-libstdc++)\n"
         "endif()\n"
     "add_executable(app main.cpp)\n";
     if (useDynamic) {
         if (fs::exists(importLibA)) {
             cmakeContent << "# MinGW: link directly to import library\n"
                         "target_include_directories(app PRIVATE \"" << incLoc << "\")\n"
-                        "target_link_libraries(app PRIVATE \"" << (importLibA.generic_string()) << "\" advapi32 user32 gdi32 comctl32 rpcrt4 winhttp)\n";
+                        "target_link_libraries(app PRIVATE \"" << (importLibA.generic_string()) << "\" advapi32 user32 gdi32 comctl32 rpcrt4 winhttp shell32 ws2_32 bcrypt)\n";
         } else {
             const std::string dllLoc = dllPath.generic_string();
             const std::string implibLoc = importLibMSVC.generic_string();
@@ -2568,14 +2604,21 @@ int main(int argc, char** argv) {
                         "set_target_properties(erelang PROPERTIES IMPORTED_LOCATION \"" << dllLoc << "\")\n"
                         "set_target_properties(erelang PROPERTIES IMPORTED_IMPLIB \"" << implibLoc << "\")\n"
                         "target_include_directories(erelang INTERFACE \"" << incLoc << "\")\n"
-                        "target_link_libraries(app PRIVATE erelang advapi32 user32 gdi32 comctl32 rpcrt4 winhttp)\n";
+                        "target_link_libraries(app PRIVATE erelang advapi32 user32 gdi32 comctl32 rpcrt4 winhttp shell32 ws2_32 bcrypt)\n";
         }
     } else {
     cmakeContent << "add_library(erelang STATIC IMPORTED)\n"
             "set_target_properties(erelang PROPERTIES IMPORTED_LOCATION \"" << libLoc << "\")\n"
             "target_include_directories(erelang INTERFACE \"" << incLoc << "\")\n"
             "target_include_directories(app PRIVATE \"" << incLoc << "\")\n"
-            "target_link_libraries(app PRIVATE erelang advapi32 user32 gdi32 comctl32 rpcrt4 winhttp)\n";
+            "if(WIN32)\n"
+            "  target_link_libraries(app PRIVATE erelang advapi32 user32 gdi32 comctl32 rpcrt4 winhttp shell32 ws2_32 bcrypt)\n"
+            "else()\n"
+            "  find_package(CURL REQUIRED)\n"
+            "  find_package(OpenSSL REQUIRED)\n"
+            "  find_package(Threads REQUIRED)\n"
+            "  target_link_libraries(app PRIVATE erelang CURL::libcurl OpenSSL::SSL OpenSSL::Crypto Threads::Threads ${CMAKE_DL_LIBS})\n"
+            "endif()\n";
     }
         write_if_changed(tempProj / "CMakeLists.txt", cmakeContent.str());
 
@@ -2590,14 +2633,20 @@ int main(int argc, char** argv) {
         generator = "NMake Makefiles";
     } else {
         // Check if ninja is available (ignore output, check exit code only)
+#ifdef _WIN32
         int ninjaRc = run_command("ninja --version >nul 2>&1", tempProj);
+        const char* fallbackGenerator = "MinGW Makefiles";
+#else
+        int ninjaRc = run_command("ninja --version >/dev/null 2>&1", tempProj);
+        const char* fallbackGenerator = "Unix Makefiles";
+#endif
         if (ninjaRc == 0) {
             generator = "Ninja";
         } else {
-            generator = "MinGW Makefiles";
+            generator = fallbackGenerator;
         }
     }
-    fs::path produced = tempBuild / "app.exe";
+    fs::path produced = tempBuild / ("app" + std::string(kExeSuffix));
     const fs::path ninjaOrMakeStamp = tempBuild / "CMakeCache.txt";
     bool needConfigure = !fs::exists(ninjaOrMakeStamp);
     bool needBuild = !fs::exists(produced);
@@ -2791,3 +2840,28 @@ int main(int argc, char** argv) {
     print_banner();
     return 0;
 }
+
+#ifdef _WIN32
+int main(int argc, char** argv) { return runner_main(argc, argv); }
+#else
+// The Windows build links a 64 MiB main-thread stack (deep recursion in the mini compiler).
+// Linux and macOS have no portable link option for that, so the interpreter runs on a
+// thread created with the same stack size.
+int main(int argc, char** argv) {
+    struct Call { int argc; char** argv; int rc; } call{argc, argv, 0};
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 64u * 1024u * 1024u);
+    pthread_t thread;
+    auto entry = [](void* p) -> void* {
+        auto* c = static_cast<Call*>(p);
+        c->rc = runner_main(c->argc, c->argv);
+        return nullptr;
+    };
+    const int rc = pthread_create(&thread, &attr, entry, &call);
+    pthread_attr_destroy(&attr);
+    if (rc != 0) return runner_main(argc, argv);
+    pthread_join(thread, nullptr);
+    return call.rc;
+}
+#endif

@@ -239,3 +239,11 @@ test('large documents skip full symbol index', () => {
   const symbols = collect(doc);
   assert.equal(symbols.actions.size, 0);
 });
+
+test('minified lines and dense generated files skip regex indexing', () => {
+  const { getDocumentIndex, MAX_INDEX_LINE_CHARS, MAX_INDEX_CHARS } = require('../out/symbols');
+  const longLine = document(['action first() {}', 'x'.repeat(MAX_INDEX_LINE_CHARS + 1)]);
+  assert.equal(getDocumentIndex(longLine).outline.length, 0);
+  const dense = document(new Array(Math.ceil(MAX_INDEX_CHARS / 1000) + 1).fill('x'.repeat(1000)));
+  assert.equal(getDocumentIndex(dense).symbols.locals.size, 0);
+});

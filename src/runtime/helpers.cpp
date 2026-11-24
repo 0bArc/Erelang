@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Shared runtime helpers and global container state.
 
+#include <charconv>
+#include <system_error>
 #include "erelang/runtime_helpers.hpp"
 #include "erelang/parser.hpp"
 
@@ -314,12 +316,16 @@ std::pair<std::string, std::string> split_core_query(const std::string& query) {
     return {left, right};
 }
 
+// Leading integer of `s` like std::stoll (whitespace and sign allowed, trailing text ignored), but
+// without exceptions: handle ids and counters go through here on hot paths.
 int64_t to_int(const std::string& s) {
-    try {
-        return std::stoll(s);
-    } catch (...) {
-        return 0;
-    }
+    const char* p = s.data();
+    const char* end = p + s.size();
+    while (p < end && std::isspace(static_cast<unsigned char>(*p))) ++p;
+    if (p < end && *p == '+') ++p;
+    int64_t v = 0;
+    const auto r = std::from_chars(p, end, v);
+    return r.ec == std::errc() ? v : 0;
 }
 
 std::string format_pointer_handle(int id) {
@@ -390,11 +396,13 @@ std::filesystem::path resolve_filesystem_path(
 }
 
 double to_double(const std::string& s) {
-    try {
-        return std::stod(s);
-    } catch (...) {
-        return 0.0;
-    }
+    const char* p = s.data();
+    const char* end = p + s.size();
+    while (p < end && std::isspace(static_cast<unsigned char>(*p))) ++p;
+    if (p < end && *p == '+') ++p;
+    double v = 0.0;
+    const auto r = std::from_chars(p, end, v);
+    return r.ec == std::errc() ? v : 0.0;
 }
 
 bool is_float_string(const std::string& s) {
@@ -409,13 +417,10 @@ bool is_float_string(const std::string& s) {
         if (!(std::isdigit(static_cast<unsigned char>(c)) || c == '.' || c == '+' || c == '-' || c == 'e' || c == 'E')) return false;
     }
     if (!hasPoint && !hasExp) return false;
-    try {
-        std::size_t idx;
-        std::stod(s, &idx);
-        return idx == s.size();
-    } catch (...) {
-        return false;
-    }
+    const char* b = s.data() + (s[0] == '+' ? 1 : 0);
+    double v = 0.0;
+    const auto r = std::from_chars(b, s.data() + s.size(), v);
+    return r.ec == std::errc() && r.ptr == s.data() + s.size();
 }
 
 std::string normalize_runtime_type_name(std::string typeName) {

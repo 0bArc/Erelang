@@ -1,8 +1,9 @@
 import * as vscode from 'vscode';
 import * as fs     from 'fs';
 import * as path   from 'path';
-import { INCLUDE_ALIAS_RE, IMPORT_ALIAS_RE, MODULE_METHODS, ACTION_RE } from './constants';
+import { INCLUDE_ALIAS_RE, IMPORT_ALIAS_RE, ACTION_RE } from './constants';
 import { ImportedSymbols } from './types';
+import { moduleForPath, visibleMembers } from './manifest';
 
 const _importCache = new Map<string, { version: number; value: Promise<ImportedSymbols> }>();
 const _actionCache = new Map<string, { mtimeMs: number; names: Set<string> }>();
@@ -28,8 +29,10 @@ export function normalizeSpec(spec: string): string {
   return t.toLowerCase();
 }
 
+// Same rule as the parser: last path segment without its extension.
 export function defaultAlias(spec: string): string {
-  return normalizeSpec(spec).split('/').pop()!.replace(/[^A-Za-z0-9_]/g, '_');
+  const last = normalizeSpec(spec).split('/').pop()!;
+  return last.replace(/\.[^.]*$/, '').replace(/[^A-Za-z0-9_]/g, '_');
 }
 
 function getPluginRoots(): string[] {
@@ -150,6 +153,7 @@ export function collectImports(doc: vscode.TextDocument): Promise<ImportedSymbol
 
   const value = (async () => {
     const aliasToActions = new Map<string, Set<string>>();
+    const aliasToModule = new Map<string, string>();
     const allActions = new Set<string>();
     const scanLines = Math.min(doc.lineCount, 2_000);
     for (let i = 0; i < scanLines; i++) {
@@ -171,9 +175,10 @@ export function collectImports(doc: vscode.TextDocument): Promise<ImportedSymbol
       }
       if (!spec || !alias) continue;
 
-      const builtinMethods = MODULE_METHODS[normalizeSpec(spec)];
-      if (builtinMethods) {
-        aliasToActions.set(alias, new Set(builtinMethods));
+      const builtinModule = moduleForPath(spec);
+      if (builtinModule) {
+        aliasToModule.set(alias, normalizeSpec(spec));
+        aliasToActions.set(alias, new Set(visibleMembers(builtinModule).map(m => m.name)));
         continue;
       }
 
@@ -184,7 +189,7 @@ export function collectImports(doc: vscode.TextDocument): Promise<ImportedSymbol
       aliasToActions.set(alias, actions);
       for (const action of actions) allActions.add(action);
     }
-    return { aliasToActions, allActions };
+    return { aliasToActions, aliasToModule, allActions };
   })();
 
   _importCache.set(docUri, { version: doc.version, value });

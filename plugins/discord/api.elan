@@ -1,98 +1,208 @@
-// Discord REST API for erelang
-// Authenticated HTTP + WebSocket gateway
+// Discord REST client for Erelang.
+//
+// Public surface: discord_login, discord_request, discord_get/post/patch/put/delete,
+// discord_send_message, discord_send_embed, discord_edit_message, discord_delete_message,
+// discord_create_command, discord_respond, discord_respond_ephemeral.
+// Every helper returns the raw response body (JSON text). Use discord_failed(body) to test it.
 
 #include <builtin/network> as net
-#include <builtin/websocket> as ws
 
 global string discord_token = "";
 global string discord_auth = "";
 global string discord_api_base = "https://discord.com/api/v10";
 global string discord_client_id = "";
 global string discord_guild_id = "";
+global int discord_max_retries = 3;
 
-// ── Initialization ─────────────────────────────────────────────────────────
+// ---- JSON helpers -----------------------------------------------------------
 
-action discord_login(string token) {
+// Quote and escape text as a JSON string literal.
+public action discord_q(text: string): string {
+    return net.json_encode(text);
+}
+
+// Split a JSON array of objects into its top level items (raw JSON text each).
+public action discord_json_items(raw: string): Array<string> {
+    Array<string> items;
+    int n = string.len(raw);
+    int depth = 0;
+    int start = -1;
+    int inStr = 0;
+    int i = 0;
+    while (i < n) {
+        string ch = string.substr(raw, i, 1);
+        if (inStr == 1) {
+            if (ch == "\\") {
+                i = i + 1;
+            } else if (ch == "\"") {
+                inStr = 0;
+            }
+        } else if (ch == "\"") {
+            inStr = 1;
+        } else if (ch == "{" || ch == "[") {
+            if (depth == 1 && start < 0) { start = i; }
+            depth = depth + 1;
+        } else if (ch == "}" || ch == "]") {
+            depth = depth - 1;
+            if (depth == 1 && start >= 0) {
+                items.push(string.substr(raw, start, i - start + 1));
+                start = -1;
+            }
+        }
+        i = i + 1;
+    }
+    return items;
+}
+
+// True when a response body is empty or an API error (has both "code" and "message").
+public action discord_failed(body: string): bool {
+    if (body == "") { return true; }
+    if (string.find(body, "\"code\"") >= 0 && string.find(body, "\"message\"") >= 0) { return true; }
+    return false;
+}
+
+// "1.5" -> 1500, "0.2" -> 200, "2" -> 2000. Used for retry_after.
+public action discord_seconds_to_ms(text: string): int {
+    int dot = string.find(text, ".");
+    if (dot < 0) { return int(text) * 1000; }
+    int whole = 0;
+    if (dot > 0) { whole = int(string.substr(text, 0, dot)); }
+    string frac = string.substr(text, dot + 1, 3);
+    while (string.len(frac) < 3) { frac = frac + "0"; }
+    return whole * 1000 + int(frac);
+}
+
+// Wait for a runtime-chosen number of milliseconds (sleep only takes literals).
+public action discord_wait(ms: int) {
+    int until = now_ms() + ms;
+    while (now_ms() < until) {
+        sleep 20ms;
+    }
+}
+
+// ---- Setup ------------------------------------------------------------------
+
+// Set the bot token. Never hard code it; read it from env("DISCORD_TOKEN").
+public action discord_login(token: string) {
     discord_token = token;
-    string firstChars = string.substr(token, 0, 3);
-    int isKnownFormat = 0;
-    if (firstChars == "MTM" || firstChars == "MTI" || firstChars == "MTA" || firstChars == "OTM" || firstChars == "MTQ") {
-        isKnownFormat = 1;
-    }
-    if (isKnownFormat != 0) {
-        discord_auth = "Authorization: Bot " + token;
-    } else {
-        discord_auth = "Authorization: " + token;
-    }
-    print "Discord: logged in";
+    discord_auth = "Authorization: Bot " + token;
 }
 
-action discord_set_client_id(string id) {
-    discord_client_id = id;
-}
+public action discord_set_client_id(id: string) { discord_client_id = id; }
+public action discord_set_guild_id(id: string) { discord_guild_id = id; }
 
-action discord_set_guild_id(string id) {
-    discord_guild_id = id;
-}
+// ---- REST core --------------------------------------------------------------
 
-// ── REST helpers ───────────────────────────────────────────────────────────
-
-action discord_get(string endpoint) -> string {
+// Perform one request, retrying when Discord answers 429 with a retry_after.
+public action discord_request(method: string, endpoint: string, body: string): string {
     string url = discord_api_base + endpoint;
-    return net.http_get_auth(url, discord_auth);
-}
-
-action discord_post(string endpoint, string body) -> string {
-    string url = discord_api_base + endpoint;
-    return net.http_post_auth(url, body, "application/json", discord_auth);
-}
-
-action discord_patch(string endpoint, string body) -> string {
-    string url = discord_api_base + endpoint;
-    return net.http_post_auth(url, body, "application/json", discord_auth);
-}
-
-// ── Message sending ────────────────────────────────────────────────────────
-
-action discord_send_message(string channel_id, string content) -> string {
-    string body = "{\"content\":\"" + content + "\"}";
-    return discord_post("/channels/" + channel_id + "/messages", body);
-}
-
-action discord_send_embed(string channel_id, string title, string desc, string color) -> string {
-    string c = color;
-    if (c == "") { c = "16711680"; }
-    string body = "{\"embeds\":[{\"title\":\"" + title + "\",\"description\":\"" + desc + "\",\"color\":" + c + "}]}";
-    return discord_post("/channels/" + channel_id + "/messages", body);
-}
-
-// ── Slash command registration ─────────────────────────────────────────────
-
-action discord_create_command(string name, string description, string options_json) -> string {
-    string body = "{\"name\":\"" + name + "\",\"description\":\"" + description + "\",\"type\":1";
-    if (options_json != "") {
-        body = body + ",\"options\":" + options_json;
+    int attempt = 0;
+    string resp = "";
+    while (attempt <= discord_max_retries) {
+        if (method == "GET") {
+            resp = net.get_auth(url, discord_auth);
+        } else if (method == "POST") {
+            resp = net.post_auth(url, body, "application/json", discord_auth);
+        } else if (method == "PATCH") {
+            resp = net.patch_auth(url, body, "application/json", discord_auth);
+        } else if (method == "PUT") {
+            resp = net.put_auth(url, body, "application/json", discord_auth);
+        } else if (method == "DELETE") {
+            resp = net.delete_auth(url, discord_auth);
+        } else {
+            fail("discord_request: unsupported method " + method);
+        }
+        if (string.find(resp, "\"retry_after\"") < 0) { return resp; }
+        Map<string, string> info = from_json(resp);
+        int waitMs = discord_seconds_to_ms(info["retry_after"]);
+        print "discord: rate limited, waiting " + string(waitMs) + "ms";
+        discord_wait(waitMs + 50);
+        attempt = attempt + 1;
     }
+    return resp;
+}
+
+public action discord_get(endpoint: string): string { return discord_request("GET", endpoint, ""); }
+public action discord_post(endpoint: string, body: string): string { return discord_request("POST", endpoint, body); }
+public action discord_patch(endpoint: string, body: string): string { return discord_request("PATCH", endpoint, body); }
+public action discord_put(endpoint: string, body: string): string { return discord_request("PUT", endpoint, body); }
+public action discord_delete(endpoint: string): string { return discord_request("DELETE", endpoint, ""); }
+
+// ---- Messages ---------------------------------------------------------------
+
+public action discord_send_message(channel_id: string, content: string): string {
+    return discord_post("/channels/" + channel_id + "/messages", "{\"content\":" + discord_q(content) + "}");
+}
+
+// color is a 24 bit RGB integer, for example 5793266.
+public action discord_send_embed(channel_id: string, title: string, description: string, color: int): string {
+    string embed = "{\"title\":" + discord_q(title) + ",\"description\":" + discord_q(description) + ",\"color\":" + string(color) + "}";
+    return discord_post("/channels/" + channel_id + "/messages", "{\"embeds\":[" + embed + "]}");
+}
+
+public action discord_edit_message(channel_id: string, message_id: string, content: string): string {
+    return discord_patch("/channels/" + channel_id + "/messages/" + message_id, "{\"content\":" + discord_q(content) + "}");
+}
+
+public action discord_delete_message(channel_id: string, message_id: string): string {
+    return discord_delete("/channels/" + channel_id + "/messages/" + message_id);
+}
+
+// ---- Slash commands and interactions ---------------------------------------
+
+// Register a command. Guild scope when a guild id is set (instant), global otherwise (slow to propagate).
+// options_json is a JSON array text such as the result of discord_options(...), or "" for none.
+public action discord_create_command(name: string, description: string, options_json: string): string {
+    string body = "{\"name\":" + discord_q(name) + ",\"description\":" + discord_q(description) + ",\"type\":1";
+    if (options_json != "") { body = body + ",\"options\":" + options_json; }
     body = body + "}";
-    return discord_post("/applications/" + discord_client_id + "/commands", body);
+    string path = "/applications/" + discord_client_id + "/commands";
+    if (discord_guild_id != "") {
+        path = "/applications/" + discord_client_id + "/guilds/" + discord_guild_id + "/commands";
+    }
+    return discord_post(path, body);
 }
 
-// ── Interaction response ───────────────────────────────────────────────────
-
-action discord_respond(string interaction_id, string interaction_token, string content) -> string {
-    string body = "{\"type\":4,\"data\":{\"content\":\"" + content + "\"}}";
+public action discord_interaction_reply(interaction_id: string, interaction_token: string, content: string, flags: int): string {
+    string data = "{\"content\":" + discord_q(content);
+    if (flags != 0) { data = data + ",\"flags\":" + string(flags); }
+    data = data + "}";
+    string body = "{\"type\":4,\"data\":" + data + "}";
     return discord_post("/interactions/" + interaction_id + "/" + interaction_token + "/callback", body);
 }
 
-// ── Gateway ────────────────────────────────────────────────────────────────
+public action discord_respond(interaction_id: string, interaction_token: string, content: string): string {
+    return discord_interaction_reply(interaction_id, interaction_token, content, 0);
+}
 
-action discord_get_gateway_url() -> string {
-    string result = discord_get("/gateway");
-    int urlStart = string.find(result, "\"url\":\"");
-    if (urlStart < 0) { return ""; }
-    int urlBegin = urlStart + 7;
-    string afterUrl = string.substr(result, urlBegin, 200);
-    int urlEnd = string.find(afterUrl, "\"");
-    if (urlEnd < 0) { return ""; }
-    return string.substr(afterUrl, 0, urlEnd);
+// Only the invoking user sees the reply (flag 64).
+public action discord_respond_ephemeral(interaction_id: string, interaction_token: string, content: string): string {
+    return discord_interaction_reply(interaction_id, interaction_token, content, 64);
+}
+
+public action discord_get_gateway_url(): string {
+    string resp = discord_get("/gateway/bot");
+    if (discord_failed(resp)) { resp = discord_get("/gateway"); }
+    if (discord_failed(resp)) { return ""; }
+    Map<string, string> info = from_json(resp);
+    return info["url"];
+}
+
+// ---- Plugin hooks -----------------------------------------------------------
+
+// onLoad hook: pick up DISCORD_TOKEN, DISCORD_CLIENT_ID and DISCORD_GUILD_ID from the environment
+// so scripts do not have to carry secrets. Scripts can still call discord_login themselves.
+public action discord_init() {
+    string token = env("DISCORD_TOKEN");
+    if (token != "") { discord_login(token); }
+    string client = env("DISCORD_CLIENT_ID");
+    if (client != "") { discord_client_id = client; }
+    string guild = env("DISCORD_GUILD_ID");
+    if (guild != "") { discord_guild_id = guild; }
+}
+
+// onUnload hook: forget the credentials.
+public action discord_shutdown() {
+    discord_token = "";
+    discord_auth = "";
 }

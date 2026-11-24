@@ -87,6 +87,8 @@ struct LetStmt {
     PatternPtr pattern;
     // `Array<T> a {N}`: fixed length N (zero-filled). Map/Set: capacity hint. Null if absent.
     ExprPtr sizeExpr;
+    // True when the source had no `= value` and `value` is a synthesized empty/default initializer.
+    bool defaultInit{false};
 };
 struct ReturnStmt { std::optional<ExprPtr> value; };
 struct SetStmt { bool isMember{false}; std::string varOrField; std::string objectName; ExprPtr value; };
@@ -208,7 +210,7 @@ struct LambdaExpr {
     std::vector<std::string> capturedVars; // free variable names from enclosing scope
 };
 
-// Now all expression structs are complete — define Expr
+// Now all expression structs are complete: define Expr
 struct Expr {
     std::variant<ExprString, ExprNull, ExprNumber, ExprBool, ExprIdent, BinaryExpr, RangeExpr, TernaryExpr, UnaryExpr, NewExpr, MemberExpr, IndexExpr, FunctionCallExpr, LambdaExpr, ListLiteralExpr, DictLiteralExpr, TupleLiteralExpr, TryExpr, AwaitExpr, PostfixExpr, PrefixExpr, CompoundAssignExpr> node;
 };

@@ -1,0 +1,87 @@
+@erelang
+
+// Every operator, with the result it must produce.
+// Run: erelang examples/types/operators.elan
+
+public action check(label: string, got: string, want: string) {
+    if (got != want) { fail(label + ": got [" + got + "] want [" + want + "]"); }
+    print "  " + label + " = " + got;
+}
+
+public action main() {
+    print "arithmetic";
+    check("+", string(7 + 2), "9");
+    check("-", string(7 - 2), "5");
+    check("*", string(7 * 2), "14");
+    check("/", string(7 / 2), "3");
+    check("%", string(7 % 4), "3");
+    check("**", string(2 ** 10), "1024");
+
+    print "comparison";
+    check("==", string(3 == 3), "true");
+    check("!=", string(3 != 3), "false");
+    check("<", string(2 < 3), "true");
+    check("<=", string(3 <= 3), "true");
+    check(">", string(2 > 3), "false");
+    check(">=", string(3 >= 4), "false");
+    check("=== same type", string(3 === 3), "true");
+    check("!== different value", string(3 !== 4), "true");
+
+    print "logic truth table";
+    check("true && false", string(true && false), "false");
+    check("true || false", string(true || false), "true");
+    check("false || false", string(false || false), "false");
+    check("!true", string(!true), "false");
+
+    print "bitwise";
+    check("&", string(12 & 10), "8");
+    check("|", string(12 | 10), "14");
+    check("^", string(12 ^ 10), "6");
+    check("~", string(~0), "-1");
+    check("<<", string(1 << 4), "16");
+    check(">>", string(256 >> 4), "16");
+
+    print "ternary";
+    int n = 5;
+    check("ternary", n > 3 ? "big" : "small", "big");
+
+    print "increment and compound assignment";
+    int i = 1;
+    i++;
+    check("++", string(i), "2");
+    i--;
+    check("--", string(i), "1");
+    i += 9;
+    check("+=", string(i), "10");
+    i -= 4;
+    check("-=", string(i), "6");
+    i *= 3;
+    check("*=", string(i), "18");
+    i /= 2;
+    check("/=", string(i), "9");
+    i %= 4;
+    check("%=", string(i), "1");
+    int bits = 6;
+    bits &= 3;
+    check("&=", string(bits), "2");
+    bits |= 8;
+    check("|=", string(bits), "10");
+    bits ^= 1;
+    check("^=", string(bits), "11");
+    bits <<= 2;
+    check("<<=", string(bits), "44");
+    bits >>= 1;
+    check(">>=", string(bits), "22");
+
+    print "ranges";
+    int total = 0;
+    for (int k in 1..4) { total = total + k; }
+    check("1..4 inclusive", string(total), "10");
+
+    print "precedence";
+    check("* before +", string(2 + 3 * 4), "14");
+    check("parentheses", string((2 + 3) * 4), "20");
+
+    print "operators-ok";
+}
+run main;

@@ -139,6 +139,10 @@ public:
         return t.name == "bool" || t.name == "unknown";
     }
     static bool is_int(const TypeInfo& t) { return t.name == "int"; }
+    static bool is_double(const TypeInfo& t) { return t.name == "double" || t.name == "float"; }
+    static bool is_number(const TypeInfo& t) { return is_int(t) || is_double(t); }
+    // Types the checker cannot see through: values are checked at run time.
+    static bool is_open(const TypeInfo& t) { return t.name == "any" || t.name == "unknown"; }
     static bool is_string(const TypeInfo& t) { return t.name == "string"; }
     bool types_equal(const TypeInfo& a, const TypeInfo& b) const;
     bool is_assignable(const TypeInfo& from, const TypeInfo& to) const;

@@ -2,6 +2,8 @@
 // Split from runtime.cpp
 
 #include "erelang/runtime_builtins.hpp"
+#include "erelang/builtin_registry.hpp"
+#include "erelang/module_registry.hpp"
 #include "erelang/runtime_helpers.hpp"
 #include "erelang/runtime_imports.hpp"
 #include "erelang/parser.hpp"
@@ -31,21 +33,25 @@
 #include <windows.h>
 #include <shellapi.h>
 #include <rpc.h>
+#else
+#include <sys/wait.h>
 #endif
 
 namespace erelang {
 
-std::string __erelang_builtin_math_dispatch(const std::string& name, const std::vector<std::string>& argv);
-std::string __erelang_builtin_system_dispatch(const std::string& name, const std::vector<std::string>& argv);
-std::string __erelang_builtin_data_dispatch(const std::string& name, const std::vector<std::string>& argv);
-std::string __erelang_builtin_perm_dispatch(const std::string& name, const std::vector<std::string>& argv);
-std::string __erelang_builtin_network_dispatch(const std::string& name, const std::vector<std::string>& argv);
-std::string __erelang_builtin_crypto_dispatch(const std::string& name, const std::vector<std::string>& argv);
-std::string __erelang_builtin_regex_dispatch(const std::string& name, const std::vector<std::string>& argv);
-std::string __erelang_builtin_binary_dispatch(const std::string& name, const std::vector<std::string>& argv);
-std::string __erelang_builtin_performance_dispatch(const std::string& name, const std::vector<std::string>& argv);
-std::string __erelang_builtin_threads_dispatch(Runtime* rt, const std::string& name, const std::vector<std::string>& argv);
-std::string __erelang_builtin_monitor_dispatch(Runtime* rt, const std::string& name, const std::vector<std::string>& argv);
+#ifndef _WIN32
+// Single-quotes an argument for /bin/sh.
+static std::string shell_quote(const std::string& arg) {
+    std::string out = "'";
+    for (char c : arg) {
+        if (c == '\'') out += "'\\''";
+        else out.push_back(c);
+    }
+    out.push_back('\'');
+    return out;
+}
+#endif
+
 
 std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<ExprPtr>& args, const Runtime::Env& env, bool /*allowCollectionHelpers*/) const {
     // Local owning string for APIs expecting std::string
@@ -156,8 +162,6 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
             }
             prepare_action_slots(calleeEnv, *sa);
             exec_block(sa->body, *currentProgram_, actCtx, calleeEnv);
-            // propagate any changed globals back
-            for (const auto& kv : calleeEnv.vars) if (globalNames_.count(kv.first)) globalVars_[kv.first] = kv.second;
             return actCtx.returned ? actCtx.returnValue : std::string();
         }
     }
@@ -462,15 +466,25 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         return std::string("Windows-first CLI runtime. No GUI. Most I/O is import-gated.\n");
     }
     // Conversion and type-check helpers
-    if (nv == "toint" || nv == "int") {
-        return std::to_string((long long)to_int(argS(0)));
-    }
-    if (nv == "toInt") {
-        return std::to_string((long long)to_int(argS(0)));
+    if (nv == "toint" || nv == "int" || nv == "toInt") {
+        // int(true) is 1, int("9.99") and int(9.99) truncate to 9.
+        const std::string text = argS(0);
+        if (text == "true") return std::string("1");
+        if (text == "false") return std::string("0");
+        if (text.find_first_of(".eE") != std::string::npos && is_float_string(text)) {
+            const double d = to_double(text);
+            if (d != d || d >= 9.2233720368547758e18 || d < -9.2233720368547758e18) {
+                throw std::runtime_error("int(): " + text + " does not fit in an int");
+            }
+            return std::to_string(static_cast<long long>(d));
+        }
+        return std::to_string((long long)to_int(text));
     }
     if (nv == "tofloat" || nv == "float") {
-        double v = to_double(argS(0));
-        std::ostringstream ss; ss << v; return ss.str();
+        const std::string text = argS(0);
+        if (text == "true") return std::string("1.0");
+        if (text == "false") return std::string("0.0");
+        return format_float(to_double(text));
     }
     if (nv == "tostr" || nv == "toString" || nv == "string") {
         return argS(0);
@@ -896,9 +910,69 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
     }
     if (nv == "from_json" || nv == "json.decode") {
         if (args.empty()) return {};
-        return features::from_json_object_to_dict_handle(argS(0));
+        const std::string text = argS(0);
+        const auto first = text.find_first_not_of(" \t\r\n");
+        if (first != std::string::npos && text[first] == '[') return features::from_json_array_to_list_handle(text);
+        return features::from_json_object_to_dict_handle(text);
     }
-    if (nv == "string.lstrip") {
+    if (nv == "string.contains") {
+        return argS(0).find(argS(1)) != std::string::npos ? "true" : "false";
+    }
+    if (nv == "string.repeat") {
+        const std::string text = argS(0);
+        long long n = 0;
+        try { n = std::stoll(argS(1)); } catch (...) { n = 0; }
+        if (n <= 0 || text.empty()) return {};
+        if (static_cast<unsigned long long>(n) * text.size() > (64ull << 20)) {
+            throw std::runtime_error("string.repeat: result larger than 64 MB");
+        }
+        std::string out;
+        out.reserve(text.size() * static_cast<std::size_t>(n));
+        for (long long i = 0; i < n; ++i) out += text;
+        return out;
+    }
+    if (nv == "string.reverse") {
+        std::string text = argS(0);
+        std::reverse(text.begin(), text.end());
+        return text;
+    }
+    if (nv == "string.replace") {
+        // string.replace(text, from, to): every non-overlapping occurrence, left to right.
+        const std::string text = argS(0), from = argS(1), to = argS(2);
+        if (from.empty()) return text;
+        std::string out;
+        out.reserve(text.size());
+        std::size_t at = 0;
+        for (;;) {
+            const std::size_t hit = text.find(from, at);
+            if (hit == std::string::npos) break;
+            out.append(text, at, hit - at);
+            out += to;
+            at = hit + from.size();
+        }
+        out.append(text, at, std::string::npos);
+        return out;
+    }
+    if (nv == "string.split") {
+        // string.split(text, sep) -> list handle. An empty sep splits into single characters.
+        const std::string text = argS(0), sep = argS(1);
+        std::vector<Value> parts;
+        if (sep.empty()) {
+            for (char ch : text) parts.push_back(Value::from_string(std::string(1, ch)));
+        } else {
+            std::size_t at = 0;
+            for (;;) {
+                const std::size_t hit = text.find(sep, at);
+                if (hit == std::string::npos) break;
+                parts.push_back(value_from_legacy_string(text.substr(at, hit - at)));
+                at = hit + sep.size();
+            }
+            parts.push_back(value_from_legacy_string(text.substr(at)));
+        }
+        const int id = g_nextListId++;
+        g_lists[id] = std::move(parts);
+        return std::string("list:") + std::to_string(id);
+    }    if (nv == "string.lstrip") {
         std::string s = argS(0);
         size_t i = 0;
         while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i])) != 0) ++i;
@@ -1004,6 +1078,10 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
     std::string full = cmd;
 #endif
     std::cout.flush(); int code = std::system(full.c_str());
+#ifndef _WIN32
+    // std::system returns a wait status on POSIX; scripts expect the exit code.
+    if (code != -1 && WIFEXITED(code)) code = WEXITSTATUS(code);
+#endif
     return std::to_string(code);
     }
         if (nv == "os.exec") {
@@ -1087,15 +1165,22 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
     std::string fp = argS(0);
 #ifdef _WIN32
     std::wstring w(fp.begin(), fp.end()); ShellExecuteW(nullptr, L"open", w.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+#elif defined(__APPLE__)
+    std::system(("open " + shell_quote(fp) + " >/dev/null 2>&1").c_str());
+#else
+    std::system(("xdg-open " + shell_quote(fp) + " >/dev/null 2>&1 &").c_str());
 #endif
     return {};
     }
     if (nv == "run_bat") {
+    // Runs a batch file on Windows and a shell script elsewhere.
     std::string bat = argS(0);
 #ifdef _WIN32
     std::string full = std::string("cmd /c \"") + bat + "\"";
-    std::cout.flush(); std::system(full.c_str());
+#else
+    std::string full = "sh " + shell_quote(bat);
 #endif
+    std::cout.flush(); std::system(full.c_str());
     return {};
     }
     if (nv == "read_line" || nv == "io.read_line") {
@@ -2040,12 +2125,19 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
         }
         return {};
 #else
-        // Fallback: pseudo UUID
-        static std::mt19937 rng{std::random_device{}()};
-        std::uniform_int_distribution<int> d(0, 15);
-        const char* hex = "0123456789abcdef"; std::string r(36, '-');
-        int idxs[] = {8,13,18,23}; int p = 0;
-        for (int i=0;i<36;++i) { if (p < 4 && i == idxs[p]) { ++p; continue; } r[i] = hex[d(rng)]; }
+        // Random (version 4) UUID, lowercase like UuidToStringA.
+        std::random_device rd;
+        unsigned char bytes[16];
+        for (auto& b : bytes) b = static_cast<unsigned char>(rd() & 0xFF);
+        bytes[6] = static_cast<unsigned char>((bytes[6] & 0x0F) | 0x40);
+        bytes[8] = static_cast<unsigned char>((bytes[8] & 0x3F) | 0x80);
+        const char* hex = "0123456789abcdef";
+        std::string r;
+        for (int i = 0; i < 16; ++i) {
+            if (i == 4 || i == 6 || i == 8 || i == 10) r.push_back('-');
+            r.push_back(hex[bytes[i] >> 4]);
+            r.push_back(hex[bytes[i] & 0x0F]);
+        }
         return r;
 #endif
     }
@@ -2593,20 +2685,6 @@ std::string Runtime::eval_builtin_call(std::string_view name, const std::vector<
             const_cast<Runtime*>(this), currentProgram_, n, argv)) {
         return *imported;
     }
-    if (currentProgram_) {
-        if (program_imports_module(currentProgram_, "builtin/math")) {
-            if (auto r = __erelang_builtin_math_dispatch(n, argv); !r.empty()) return r;
-        }
-        if (program_imports_module(currentProgram_, "builtin/system")) {
-            if (auto r = __erelang_builtin_system_dispatch(n, argv); !r.empty()) return r;
-        }
-        if (program_imports_module(currentProgram_, "builtin/data")) {
-            if (auto r = __erelang_builtin_data_dispatch(n, argv); !r.empty()) return r;
-        }
-        if (program_imports_module(currentProgram_, "builtin/perm")) {
-            if (auto r = __erelang_builtin_perm_dispatch(n, argv); !r.empty()) return r;
-        }
-    }
     return {};
 }
 
@@ -2618,48 +2696,20 @@ std::optional<std::string> dispatch_imported_builtin_modules(
     if (!program) {
         return std::nullopt;
     }
-
-    if (program_imports_module(program, "builtin/network") || program_imports_module(program, "builtin/net")) {
-        if (auto r = __erelang_builtin_network_dispatch(name, argv); !r.empty()) {
-            return r;
-        }
+    // Implementation modules of the program's imports, in import order, without repeats.
+    std::vector<std::string> ids;
+    for (const auto& importDecl : program->imports) {
+        if (importDecl.path.empty()) continue;
+        const registry::Module* m = registry::module_for_path(importDecl.path);
+        if (!m) continue;
+        const char* impl = modules::implementation_of(m->id);
+        if (!impl) continue;
+        if (std::find(ids.begin(), ids.end(), impl) == ids.end()) ids.emplace_back(impl);
     }
-    if (program_imports_module(program, "builtin/regex")) {
-        if (auto r = __erelang_builtin_regex_dispatch(name, argv); !r.empty()) {
-            return r;
-        }
-    }
-    if (program_imports_module(program, "builtin/crypto")) {
-        if (auto r = __erelang_builtin_crypto_dispatch(name, argv); !r.empty()) {
-            return r;
-        }
-    }
-    if (program_imports_module(program, "builtin/performance") || program_imports_module(program, "builtin/perf")) {
-        if (auto r = __erelang_builtin_performance_dispatch(name, argv); !r.empty()) {
-            return r;
-        }
-    }
-    if (program_imports_module(program, "builtin/binary")) {
-        if (auto r = __erelang_builtin_binary_dispatch(name, argv); !r.empty()) {
-            return r;
-        }
-    }
-    if (program_imports_module(program, "builtin/websocket") || program_imports_module(program, "builtin/ws")) {
-        if (auto r = __erelang_builtin_websocket_dispatch(name, argv); !r.empty()) {
-            return r;
-        }
-    }
-    if (program_imports_module(program, "builtin/threads")) {
-        if (auto r = __erelang_builtin_threads_dispatch(runtime, name, argv); !r.empty()) {
-            return r;
-        }
-    }
-    if (program_imports_module(program, "builtin/monitor")) {
-        if (auto r = __erelang_builtin_monitor_dispatch(runtime, name, argv); !r.empty()) {
-            return r;
-        }
-    }
-    return std::nullopt;
+    if (ids.empty()) return std::nullopt;
+    std::string r = modules::dispatch(runtime, ids, name, argv);
+    if (r.empty()) return std::nullopt;
+    return r;
 }
 
 } // namespace erelang

@@ -1,19 +1,21 @@
 import * as vscode from 'vscode';
 import * as path   from 'path';
-import {
-  LANGUAGE_KEYWORDS, BUILT_INS, DEPRECATED_BUILT_INS,
-  ARRAY_METHODS, DICTIONARY_METHODS, CHAIN_METHODS,
-} from './constants';
-import { PrintStringContext } from './types';
-import { getDocumentIndex, MAX_INDEX_LINES } from './symbols';
+import { PrintStringContext, DocumentIndex } from './types';
+import { getDocumentIndex, declarationAt, MAX_INDEX_LINES, MAX_INDEX_LINE_CHARS, MAX_INDEX_CHARS } from './symbols';
 import { collectImports, listDirectoryCached } from './imports';
+import {
+  ManifestMember, allModulePaths, coreBuiltins, keywords, typeWords, moduleForPath, signature,
+  typeKindFor, typeSpec, visibleMembers,
+} from './manifest';
+import { moduleSnippets } from './moduleSnippets';
+import { visibleBindings } from './scopeAnalysis';
 
 let _debugChannel: vscode.OutputChannel | undefined;
 export function setDebugChannel(ch: vscode.OutputChannel): void { _debugChannel = ch; }
 
 const BULK_EDIT_WINDOW_MS = 400;
 const BULK_EDIT_MIN_CHARS = 400;
-let _bulkEditUntil = 0;
+const _bulkEditUntil = new WeakMap<vscode.TextDocument, number>();
 
 export function noteDocumentEdit(e: vscode.TextDocumentChangeEvent): void {
   if (e.document.languageId !== 'erelang') return;
@@ -22,16 +24,16 @@ export function noteDocumentEdit(e: vscode.TextDocumentChangeEvent): void {
     size += c.text.length + (c.rangeLength ?? 0);
   }
   if (size >= BULK_EDIT_MIN_CHARS || e.contentChanges.length > 20) {
-    _bulkEditUntil = Date.now() + BULK_EDIT_WINDOW_MS;
+    _bulkEditUntil.set(e.document, Date.now() + BULK_EDIT_WINDOW_MS);
   }
 }
 
-export function isDocumentBulkEditing(): boolean {
-  return Date.now() < _bulkEditUntil;
+export function isDocumentBulkEditing(doc: vscode.TextDocument): boolean {
+  return Date.now() < (_bulkEditUntil.get(doc) ?? 0);
 }
 
 function shouldSkipHeavyCompletion(doc: vscode.TextDocument): boolean {
-  return doc.lineCount > MAX_INDEX_LINES || isDocumentBulkEditing();
+  return doc.lineCount > MAX_INDEX_LINES || isDocumentBulkEditing(doc) || doc.getText().length > MAX_INDEX_CHARS;
 }
 
 function dbg(msg: string): void {
@@ -43,17 +45,48 @@ function dbgCompletion(branch: string, pos: vscode.Position, prefix: string, det
   dbg(`[completion] ${branch} @ ${pos.line + 1}:${pos.character + 1}  prefix="${prefix}"${detail ? '  ' + detail : ''}`);
 }
 
-const MEMBER_FALLBACK = [...new Set([...ARRAY_METHODS, ...DICTIONARY_METHODS, ...CHAIN_METHODS])];
+// Calls whose result is a handle with its own methods (string handles like "ws:3").
+const HANDLE_RESULTS: Record<string, string> = {
+  ws_connect: 'ws', tcp_connect: 'tcp', udp_bind: 'udp', http_get_resp: 'resp', file_open: 'file',
+  chan_new: 'chan', proc_start: 'proc',
+};
 
-const BUILTIN_MODULES = [
-  'builtin/fs','builtin/erefs','builtin/path','builtin/erepath',
-  'builtin/regex','builtin/crypto','builtin/network','builtin/net',
-  'builtin/websocket','builtin/ws',
-  'builtin/math','builtin/binary','builtin/threads','builtin/monitor',
-  'builtin/data','builtin/perm','builtin/system',
-  'builtin/process','builtin/proc',
-  'builtin/performance','builtin/perf',
-];
+function memberItem(m: ManifestMember, detailPrefix: string): vscode.CompletionItem {
+  const ci = new vscode.CompletionItem(m.name, vscode.CompletionItemKind.Method);
+  ci.detail = signature(m, detailPrefix);
+  ci.documentation = m.doc;
+  return ci;
+}
+
+/**
+ * Member type kind of the receiver `obj` at `line`, or undefined when the variable is unknown.
+ * Typed declarations win; an untyped `x = ws.connect(...)` or a string holding a handle is resolved
+ * through the call that produced it.
+ */
+async function receiverKind(doc: vscode.TextDocument, index: DocumentIndex, obj: string, line: number): Promise<string | undefined> {
+  const binding = visibleBindings(doc.getText(), { line, character: doc.lineAt(line).text.length })
+    .find(b => b.token.text === obj && b.kind !== 'action');
+  if (!binding) return undefined;
+  const decl = (index.declarations.get(obj) ?? []).find(d => d.line === binding.token.line);
+  if (!decl && binding.detail) return typeKindFor(binding.detail);
+  if (!decl) return undefined;
+  if (decl.init) {
+    const call = /^([A-Za-z_]\w*)\s*\.\s*([A-Za-z_][\w.]*)\s*\(/.exec(decl.init) ?? /^([A-Za-z_]\w*)\s*\(/.exec(decl.init);
+    if (call) {
+      if (call.length === 3) {
+        const imported = await collectImports(doc);
+        const spec = imported.aliasToModule.get(call[1]);
+        const mod = spec ? moduleForPath(spec) : undefined;
+        const member = mod?.members.find(m => m.name === call[2]);
+        const kind = member?.builtin ? HANDLE_RESULTS[member.builtin] : undefined;
+        if (kind) return kind;
+      } else if (HANDLE_RESULTS[call[1]]) {
+        return HANDLE_RESULTS[call[1]];
+      }
+    }
+  }
+  return typeKindFor(decl.type);
+}
 
 function parsePrintStringContext(line: string, cursor: number): PrintStringContext | null {
   const pm = /\bprint\b/.exec(line);
@@ -102,7 +135,7 @@ async function includePathCompletions(
   const partialLower = partial.toLowerCase();
 
   const out: vscode.CompletionItem[] = [];
-  for (const mod of BUILTIN_MODULES) {
+  for (const mod of allModulePaths()) {
     if (!mod.toLowerCase().startsWith(partialLower)) continue;
     const insert = mode === 'bare'
       ? `<${mod}>;`
@@ -199,6 +232,28 @@ async function memberCompletions(
   const dot = /([A-Za-z_]\w*)\.([A-Za-z_]\w*)?$/.exec(prefix);
   if (!dot) return null;
 
+  // Grouped module members: `ai.regex.` lists generate, explain, optimize, ...
+  const group = /([A-Za-z_]\w*)\.([A-Za-z_]\w*)\.([A-Za-z_]\w*)?$/.exec(prefix);
+  if (group) {
+    const imported = await collectImports(doc);
+    const spec = imported.aliasToModule.get(group[1]);
+    const mod = spec ? moduleForPath(spec) : undefined;
+    if (mod) {
+      const head = `${group[2]}.`;
+      const items: vscode.CompletionItem[] = [];
+      for (const m of visibleMembers(mod)) {
+        if (!m.name.startsWith(head)) continue;
+        const rest = m.name.slice(head.length);
+        if (group[3] && !rest.startsWith(group[3])) continue;
+        const ci = memberItem(m, `${group[1]}.`);
+        ci.label = rest;
+        ci.insertText = rest;
+        items.push(ci);
+      }
+      if (items.length > 0) return items;
+    }
+  }
+
   const obj     = dot[1];
   const partial = dot[2] ?? '';
   dbgCompletion('member-access', pos, prefix, `obj=${obj}`);
@@ -249,24 +304,53 @@ async function memberCompletions(
   if (token.isCancellationRequested) return [];
   const imported = await collectImports(doc);
   if (token.isCancellationRequested) return [];
-  const modMethods = imported.aliasToActions.get(obj);
-  if (modMethods && modMethods.size > 0) {
-    return [...modMethods]
+
+  // A builtin module alias: its members, including grouped names (ai.regex.generate).
+  const spec = imported.aliasToModule.get(obj);
+  const mod = spec ? moduleForPath(spec) : undefined;
+  if (mod) {
+    const items: vscode.CompletionItem[] = [];
+    for (const m of visibleMembers(mod)) {
+      if (partial.length > 0 && !m.name.startsWith(partial)) continue;
+      items.push(memberItem(m, `${obj}.`));
+    }
+    return items;
+  }
+
+  // A script include alias: the actions of that file.
+  const scriptActions = imported.aliasToActions.get(obj);
+  if (scriptActions && scriptActions.size > 0) {
+    return [...scriptActions]
       .filter(m => partial.length === 0 || m.startsWith(partial))
       .map(m => {
         const ci  = new vscode.CompletionItem(m, vscode.CompletionItemKind.Method);
-        ci.detail = `${obj} module`;
+        ci.detail = `${obj} action`;
         return ci;
       });
   }
 
-  return MEMBER_FALLBACK
-    .filter(m => partial.length === 0 || m.startsWith(partial))
-    .map(m => {
-      const ci = new vscode.CompletionItem(m, vscode.CompletionItemKind.Method);
-      ci.detail = 'member';
-      return ci;
-    });
+  // A struct instance: its fields.
+  const decl = declarationAt(index, obj, pos.line);
+  if (decl) {
+    const fields = index.symbols.structFields.get(decl.type.replace(/<.*$/, ''));
+    if (fields && fields.size > 0) {
+      return [...fields]
+        .filter(f => partial.length === 0 || f.startsWith(partial))
+        .map(f => {
+          const ci = new vscode.CompletionItem(f, vscode.CompletionItemKind.Field);
+          ci.detail = `${decl.type} field`;
+          return ci;
+        });
+    }
+  }
+
+  // A typed variable: the members of its type. Unknown or undeclared: nothing, never a guess.
+  const kind = await receiverKind(doc, index, obj, pos.line);
+  const t = kind ? typeSpec(kind) : undefined;
+  if (!t) return [];
+  return t.members
+    .filter(m => partial.length === 0 || m.name.startsWith(partial))
+    .map(m => memberItem(m, `${kind}.`));
 }
 
 const MEANINGFUL_TRIGGERS = new Set(['#', '.', ':', '"', '<', '/', '\\']);
@@ -297,10 +381,11 @@ export class ErelangCompletionProvider implements vscode.CompletionItemProvider 
 
     const startVersion = doc.version;
     const stale = () =>
-      token.isCancellationRequested || doc.version !== startVersion || isDocumentBulkEditing();
+      token.isCancellationRequested || doc.isClosed || doc.version !== startVersion || isDocumentBulkEditing(doc);
 
-    const prefix   = doc.lineAt(pos.line).text.slice(0, pos.character);
     const fullLine = doc.lineAt(pos.line).text;
+    if (fullLine.length > MAX_INDEX_LINE_CHARS) return [];
+    const prefix = fullLine.slice(0, pos.character);
 
     if (context?.triggerCharacter === ' ') {
       const incl = await includePathCompletions(doc, pos, prefix, token);
@@ -408,14 +493,17 @@ export class ErelangCompletionProvider implements vscode.CompletionItemProvider 
       }
     };
 
-    add(col.locals,      vscode.CompletionItemKind.Variable,       'local variable', 'a');
+    const visible = visibleBindings(doc.getText(), pos);
+    add(visible.filter(b => b.kind !== 'action').map(b => b.token.text),
+      vscode.CompletionItemKind.Variable, 'local variable', 'a');
     add(col.globals,     vscode.CompletionItemKind.Variable,       'global',         'a');
     add(col.namespaces,  vscode.CompletionItemKind.Module,         'namespace',      'b');
     add(col.entities,    vscode.CompletionItemKind.Class,           undefined,        'b');
     add(col.structs,     vscode.CompletionItemKind.Struct,         'struct',         'b');
     add(col.enums,       vscode.CompletionItemKind.Enum,           'enum',           'b');
     add(col.typeAliases, vscode.CompletionItemKind.TypeParameter,  'type alias',     'b');
-    add(col.actions,     vscode.CompletionItemKind.Function,        undefined,        'c');
+    add(visible.filter(b => b.kind === 'action').map(b => b.token.text),
+      vscode.CompletionItemKind.Function, undefined, 'c');
     add(col.fields,      vscode.CompletionItemKind.Field,           undefined,        'c');
     add(col.hooks,       vscode.CompletionItemKind.Event,           undefined,        'c');
 
@@ -433,7 +521,7 @@ export class ErelangCompletionProvider implements vscode.CompletionItemProvider 
       }
     }
 
-    for (const kw of LANGUAGE_KEYWORDS) {
+    for (const kw of [...keywords(), ...typeWords()]) {
       if (!matchesPartial(kw) || seen.has(kw)) continue;
       seen.add(kw);
       const ci  = new vscode.CompletionItem(kw, vscode.CompletionItemKind.Keyword);
@@ -458,30 +546,52 @@ export class ErelangCompletionProvider implements vscode.CompletionItemProvider 
 
     if (stale()) return items;
 
-    for (const b of BUILT_INS) {
-      if (DEPRECATED_BUILT_INS.has(b) || !matchesPartial(b) || seen.has(b)) continue;
-      seen.add(b);
-      const ci  = new vscode.CompletionItem(b, vscode.CompletionItemKind.Function);
-      ci.detail   = 'builtin';
-      ci.sortText = `z_${b}`;
+    // Core builtins only: module members appear after their alias, and only when imported.
+    for (const b of coreBuiltins()) {
+      const n = b.name;
+      if (!matchesPartial(n) || seen.has(n)) continue;
+      seen.add(n);
+      const ci  = new vscode.CompletionItem(n, vscode.CompletionItemKind.Function);
+      ci.detail   = signature(b);
+      ci.documentation = b.doc;
+      ci.sortText = `z_${n}`;
       if (replaceRange) ci.range = replaceRange;
-      if (b.toLowerCase() === 'print' && partial.toLowerCase().startsWith('p')) ci.preselect = true;
+      if (n === 'print' && partial.toLowerCase().startsWith('p')) ci.preselect = true;
       items.push(ci);
     }
 
-    const wantImports = manual || triggered || partial.length >= 2;
+    const wantImports = manual || triggered || partial.length >= 1;
     if (wantImports) {
       const imported = await collectImports(doc);
       if (stale()) return items;
 
-      for (const alias of imported.aliasToActions.keys()) {
+      const aliases = new Set<string>([...imported.aliasToModule.keys(), ...imported.aliasToActions.keys()]);
+      for (const alias of aliases) {
         if (!matchesPartial(alias) || seen.has(alias)) continue;
         seen.add(alias);
+        const spec = imported.aliasToModule.get(alias);
+        const mod = spec ? moduleForPath(spec) : undefined;
         const ci  = new vscode.CompletionItem(alias, vscode.CompletionItemKind.Module);
-        ci.detail   = 'module alias';
+        ci.detail   = mod ? `${spec} (${mod.summary})` : 'module alias';
         ci.sortText = `b_${alias}`;
         if (replaceRange) ci.range = replaceRange;
         items.push(ci);
+      }
+
+      // Snippets that only make sense with a module imported (re.expect, ai.regex.generate, ...).
+      for (const [alias, spec] of imported.aliasToModule) {
+        const mod = moduleForPath(spec);
+        if (!mod) continue;
+        for (const sn of moduleSnippets(mod.id, alias)) {
+          if (!matchesPartial(sn.prefix) || seen.has(`snippet:${sn.prefix}`)) continue;
+          seen.add(`snippet:${sn.prefix}`);
+          const ci = new vscode.CompletionItem(sn.prefix, vscode.CompletionItemKind.Snippet);
+          ci.insertText = new vscode.SnippetString(sn.body);
+          ci.detail = sn.description;
+          ci.sortText = `c_${sn.prefix}`;
+          if (replaceRange) ci.range = replaceRange;
+          items.push(ci);
+        }
       }
 
       for (const n of imported.allActions) {

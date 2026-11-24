@@ -1,17 +1,29 @@
 import * as vscode from 'vscode';
 import {
   ENTITY_RE, ACTION_RE, TYPED_FUNC_RE, FIELD_RE, STRUCT_RE, ENUM_RE,
-  TYPE_ALIAS_RE, TRAIT_RE, HOOK_RE, LET_RE, GLOBAL_RE, LANGUAGE_KEYWORDS,
+  TYPE_ALIAS_RE, TRAIT_RE, HOOK_RE, LET_RE, GLOBAL_RE,
   NAMESPACE_RE,
 } from './constants';
 import {
-  CollectedSymbols, DocumentIndex, EntityMembers, OutlineSymbol, WordToken, RangeToken,
+  CollectedSymbols, Declaration, DocumentIndex, EntityMembers, OutlineSymbol, WordToken, RangeToken,
 } from './types';
+import { isKeyword, isTypeWord } from './manifest';
 
-const KEYWORD_SET = new Set<string>(LANGUAGE_KEYWORDS);
+const KEYWORD_SET = { has: (w: string) => isKeyword(w) && !isTypeWord(w) };
+
+// `Type name`, `Type<...> name {N}`, optionally after a modifier, followed by = ; or end of line.
+const TYPED_DECL_RE = /^\s*(?:(?:public|private|export|global|const|static|constexpr|let)\s+)*([A-Za-z_]\w*(?:\s*<[^;=\n]{0,80}>)?)\s+([A-Za-z_]\w*)\s*(?:\{[^}\n]{0,40}\}\s*)?(?:=\s*(.*?))?\s*;?\s*$/;
+// `let name: Type = ...`
+const LET_TYPED_RE = /^\s*(?:let|const|global)\s+([A-Za-z_]\w*)\s*:\s*([A-Za-z_][\w<>, ]*)\s*(?:=\s*(.*?))?\s*;?\s*$/;
+// Parameters inside an action header.
+const ACTION_PARAMS_RE = /\baction\s+[A-Za-z_]\w*\s*(?:<[^>]*>)?\s*\(([^)]*)\)/;
+// `for (Type name : xs)` and `for (Type k, Type v : m)`
+const FOREACH_TYPED_RE = /\bfor\s*\(([^:)]*?)(?::| in )/;
 
 /** Above this, skip full-file symbol scan — keeps AI bulk edits from freezing the host. */
 export const MAX_INDEX_LINES = 8_000;
+export const MAX_INDEX_CHARS = 500_000;
+export const MAX_INDEX_LINE_CHARS = 20_000;
 
 const _indexCache = new Map<string, DocumentIndex>();
 
@@ -29,6 +41,7 @@ function emptySymbols(): CollectedSymbols {
 function emptyIndex(version: number): DocumentIndex {
   return {
     version,
+    declarations: new Map(),
     symbols: emptySymbols(),
     entityInstances: new Map(),
     entityMembers: { actions: new Map(), fields: new Map() },
@@ -114,6 +127,14 @@ function buildDocumentIndex(doc: vscode.TextDocument): DocumentIndex {
   const entityActions = new Map<string, Set<string>>();
   const entityFields = new Map<string, Set<string>>();
   const outline: OutlineSymbol[] = [];
+  const declarations = new Map<string, Declaration[]>();
+  const declare = (name: string, type: string, line: number, init?: string) => {
+    const t = type.replace(/\s+/g, '');
+    if (!t || isKeyword(t) && !isTypeWord(t)) return;
+    let list = declarations.get(name);
+    if (!list) { list = []; declarations.set(name, list); }
+    list.push({ type: t, line, init });
+  };
 
   let activeStruct: string | null = null;
   let activeEnum: string | null = null;
@@ -123,8 +144,14 @@ function buildDocumentIndex(doc: vscode.TextDocument): DocumentIndex {
   let namespaceDepth = 0;
 
   const end = doc.lineCount - 1;
+  let scannedChars = 0;
   for (let i = 0; i <= end; i++) {
     const text = doc.lineAt(i).text;
+    scannedChars += text.length;
+    // A line-count cap alone does not protect against generated/minified sources.
+    if (text.length > MAX_INDEX_LINE_CHARS || scannedChars > MAX_INDEX_CHARS) {
+      return emptyIndex(doc.version);
+    }
     let m: RegExpExecArray | null;
 
     if ((m = NAMESPACE_RE.exec(text))) {
@@ -238,10 +265,35 @@ function buildDocumentIndex(doc: vscode.TextDocument): DocumentIndex {
     }
 
     for (const name of foreachLocalNames(text)) out.locals.add(name);
+
+    // Typed declarations for member completion.
+    const trimmed = text.replace(/\/\/.*$/, '');
+    let d: RegExpExecArray | null;
+    if ((d = LET_TYPED_RE.exec(trimmed))) {
+      declare(d[1], d[2], i, d[3]);
+    } else if ((d = TYPED_DECL_RE.exec(trimmed)) && !/^\s*(?:return|print|run|if|while|for|else)\b/.test(trimmed)) {
+      const typeHead = d[1].replace(/<.*$/, '').trim();
+      if (!isKeyword(typeHead) || isTypeWord(typeHead)) declare(d[2], d[1], i, d[3]);
+    }
+    if ((d = ACTION_PARAMS_RE.exec(trimmed))) {
+      for (const part of d[1].split(',')) {
+        const pm = /^\s*([A-Za-z_]\w*)\s*:\s*([A-Za-z_][\w<>, ]*?)\s*$/.exec(part)
+          ?? /^\s*([A-Za-z_][\w<>]*)\s+([A-Za-z_]\w*)\s*$/.exec(part);
+        if (!pm) continue;
+        if (/:/.test(part)) declare(pm[1], pm[2], i); else declare(pm[2], pm[1], i);
+      }
+    }
+    if ((d = FOREACH_TYPED_RE.exec(trimmed))) {
+      for (const part of d[1].split(',')) {
+        const fm = /^\s*([A-Za-z_][\w<>]*)\s+([A-Za-z_]\w*)\s*$/.exec(part);
+        if (fm) declare(fm[2], fm[1], i);
+      }
+    }
   }
 
   return {
     version: doc.version,
+    declarations,
     symbols: out,
     entityInstances,
     entityMembers: { actions: entityActions, fields: entityFields },
@@ -261,6 +313,17 @@ export function getDocumentIndex(doc: vscode.TextDocument): DocumentIndex {
   const built = buildDocumentIndex(doc);
   _indexCache.set(key, built);
   return built;
+}
+
+/** The declaration of `name` in effect at `line`: the nearest one at or above it. */
+export function declarationAt(index: DocumentIndex, name: string, line: number): Declaration | undefined {
+  const list = index.declarations.get(name);
+  if (!list) return undefined;
+  let best: Declaration | undefined;
+  for (const d of list) {
+    if (d.line <= line) best = d;
+  }
+  return best;
 }
 
 export function invalidateDocumentIndex(docUri?: string): void {

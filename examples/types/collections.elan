@@ -1,0 +1,75 @@
+@erelang
+
+// Collections: Array<T>, fixed-size arrays, Map<K, V>, Set, iteration.
+// Run: erelang examples/types/collections.elan
+
+public action check(label: string, got: string, want: string) {
+    if (got != want) { fail(label + ": got [" + got + "] want [" + want + "]"); }
+    print "  " + label + " = " + got;
+}
+
+public action total(xs: Array<int>): int {
+    int sum = 0;
+    for (int x : xs) { sum = sum + x; }
+    return sum;
+}
+
+public action main() {
+    print "Array<T> grows and shrinks";
+    Array<int> nums = [3, 1, 4, 1, 5];
+    nums.push(9);
+    check("len", string(nums.len()), "6");
+    check("index", string(nums[2]), "4");
+    check("last", string(nums.back()), "9");
+    check("contains", string(nums.contains(5)), "true");
+    check("find", string(nums.find(4)), "2");
+    check("sum through a parameter", string(total(nums)), "23");
+    int popped = nums.pop();
+    check("pop", string(popped), "9");
+    check("join", nums.join(","), "3,1,4,1,5");
+
+    print "Array<T> name {4} has exactly 4 slots, zero filled";
+    Array<int> grid {4} = [7];
+    check("fixed length", string(grid.len()), "4");
+    check("filled", grid.join(" "), "7 0 0 0");
+    grid[3] = 2;
+    check("set by index", grid.join(" "), "7 0 0 2");
+
+    print "nested generics";
+    Array<string> words = ["red", "green", "blue"];
+    Map<string, Array<string>> groups = {"warm": ["red"], "cool": ["green", "blue"]};
+    check("words", words.join("/"), "red/green/blue");
+    check("keys of a nested map", string(groups.has("cool")), "true");
+
+    print "Map<K, V>";
+    Map<string, int> stock = {"apple": 3, "pear": 0};
+    stock["kiwi"] = 12;
+    check("get", string(stock["kiwi"]), "12");
+    check("has", string(stock.has("pear")), "true");
+    check("missing with default", string(stock.getOr("plum", -1)), "-1");
+    check("size", string(stock.len()), "3");
+    stock.remove("pear");
+    check("after remove", string(stock.has("pear")), "false");
+
+    print "iteration";
+    int units = 0;
+    for (string fruit, int count : stock) { units = units + count; }
+    check("sum of values", string(units), "15");
+    string order = "";
+    for (int i = 0; i < 3; i = i + 1) { order = order + string(i); }
+    check("C style for", order, "012");
+    int countdown = 0;
+    for (int i in 1..5) { countdown = countdown + i; }
+    check("range 1..5 (inclusive)", string(countdown), "15");
+
+    print "sets";
+    any seen = set_new();
+    set_add(seen, "a");
+    set_add(seen, "b");
+    set_add(seen, "a");
+    check("set size ignores duplicates", string(set_size(seen)), "2");
+    check("membership", string(set_has(seen, "b")), "true");
+
+    print "collections-ok";
+}
+run main;

@@ -1,48 +1,56 @@
-// SlashCommandBuilder for erelang
-// Direct JSON string building - no collections needed
+// Slash command option builders for Erelang.
+//
+// Each builder returns one option as JSON text. Combine them with discord_options(a, b) (up to
+// four) or by wrapping your own list in brackets, then pass the result to discord_create_command.
+//
+//   string opts = discord_options1(slash_option_string("message", "Text to echo", true));
+//   discord_create_command("echo", "Echoes your message", opts);
 
-action slash_option_string(string name, string description, string required) -> string {
-    string r = "{\"name\":\"" + name + "\",\"description\":\"" + description + "\",\"type\":3";
-    if (required == "true") { r = r + ",\"required\":true"; }
+public action slash_option(kind: int, name: string, description: string, required: bool): string {
+    string r = "{\"name\":" + discord_q(name) + ",\"description\":" + discord_q(description) + ",\"type\":" + string(kind);
+    if (required) { r = r + ",\"required\":true"; }
     return r + "}";
 }
 
-action slash_option_integer(string name, string description, string required) -> string {
-    string r = "{\"name\":\"" + name + "\",\"description\":\"" + description + "\",\"type\":4";
-    if (required == "true") { r = r + ",\"required\":true"; }
-    return r + "}";
+public action slash_option_string(name: string, description: string, required: bool): string {
+    return slash_option(3, name, description, required);
 }
 
-action slash_option_boolean(string name, string description, string required) -> string {
-    string r = "{\"name\":\"" + name + "\",\"description\":\"" + description + "\",\"type\":5";
-    if (required == "true") { r = r + ",\"required\":true"; }
-    return r + "}";
+public action slash_option_integer(name: string, description: string, required: bool): string {
+    return slash_option(4, name, description, required);
 }
 
-action slash_option_user(string name, string description, string required) -> string {
-    string r = "{\"name\":\"" + name + "\",\"description\":\"" + description + "\",\"type\":6";
-    if (required == "true") { r = r + ",\"required\":true"; }
-    return r + "}";
+public action slash_option_boolean(name: string, description: string, required: bool): string {
+    return slash_option(5, name, description, required);
 }
 
-action slash_option_channel(string name, string description, string required) -> string {
-    string r = "{\"name\":\"" + name + "\",\"description\":\"" + description + "\",\"type\":7";
-    if (required == "true") { r = r + ",\"required\":true"; }
-    return r + "}";
+public action slash_option_user(name: string, description: string, required: bool): string {
+    return slash_option(6, name, description, required);
 }
 
-action slash_option_role(string name, string description, string required) -> string {
-    string r = "{\"name\":\"" + name + "\",\"description\":\"" + description + "\",\"type\":8";
-    if (required == "true") { r = r + ",\"required\":true"; }
-    return r + "}";
+public action slash_option_channel(name: string, description: string, required: bool): string {
+    return slash_option(7, name, description, required);
 }
 
-// Quick register helpers
-action slash_register_ping() -> string {
-    return discord_create_command("ping", "Replies with pong!", "");
+public action slash_option_role(name: string, description: string, required: bool): string {
+    return slash_option(8, name, description, required);
 }
 
-action slash_register_echo() -> string {
-    string opts = "[" + slash_option_string("message", "The message to echo", "true") + "]";
+public action slash_option_number(name: string, description: string, required: bool): string {
+    return slash_option(10, name, description, required);
+}
+
+public action discord_options1(a: string): string { return "[" + a + "]"; }
+public action discord_options2(a: string, b: string): string { return "[" + a + "," + b + "]"; }
+public action discord_options3(a: string, b: string, c: string): string { return "[" + a + "," + b + "," + c + "]"; }
+public action discord_options4(a: string, b: string, c: string, d: string): string { return "[" + a + "," + b + "," + c + "," + d + "]"; }
+
+// Ready made commands.
+public action slash_register_ping(): string {
+    return discord_create_command("ping", "Replies with pong", "");
+}
+
+public action slash_register_echo(): string {
+    string opts = discord_options1(slash_option_string("message", "The message to echo", true));
     return discord_create_command("echo", "Echoes your message", opts);
 }

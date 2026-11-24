@@ -1,0 +1,33 @@
+@erelang
+
+#include <builtin/regex> as re
+#include <builtin/ai> as ai
+
+public action main() {
+    if (!re.expect("20xx", "2026")) { fail("digits should match"); }
+    if (re.expect("20xx", "20ab")) { fail("letters must not match digits"); }
+    if (re.expect("20xx", "20266")) { fail("whole text must match"); }
+    if (!re.expect("20xx-xx-xx", "2026-10-21")) { fail("date should match"); }
+    if (!re.expect("ORD-xxxx-XX", "ORD-0042-QA")) { fail("order id should match"); }
+    if (!re.expect("a*z", "abcz")) { fail("star should match a run"); }
+    if (!re.expect("a*z", "az")) { fail("star may be empty"); }
+    if (!re.expect("f?.log", "f7.log")) { fail("question mark is one char"); }
+    if (re.expect("v1.2", "v1x2")) { fail("dot must be literal"); }
+    if (!re.expect("\\xbo\\x", "xbox")) { fail("escaped x is literal"); }
+    string rx = re.explain("20xx20xx20");
+    if (rx != "20[0-9][0-9]20[0-9][0-9]20") { fail("explain gave " + rx); }
+    // AI assisted: patterns learned from samples work with re.expect.
+    string learned = ai.pattern("2026-10-21");
+    if (!re.expect(learned, "1999-01-02")) { fail("ai.pattern should accept a same shaped date"); }
+    if (re.expect(learned, "99-1-2")) { fail("ai.pattern should reject a different shape"); }
+    string ids = ai.infer.pattern(["AB-1234", "CD-5678", "EF-0042"]);
+    if (!re.expect(ids, "ZZ-9999")) { fail("ai.infer.pattern should accept a new id"); }
+    if (re.expect(ids, "ZZ-99999")) { fail("ai.infer.pattern should reject a longer id"); }
+    // An expect pattern and its explained regex agree.
+    if (!ai.regex.test(re.explain("20xx"), "2026")) { fail("explained regex should match 2026"); }
+    if (ai.regex.test(re.explain("20xx"), "20ab")) { fail("explained regex should reject 20ab"); }
+    // The AI explanation names the digits.
+    if (ai.regex.explain(re.explain("20xx")) != "Matches the text \"20\", then exactly 2 digits.") { fail("AI explanation of 20xx"); }
+    print "regex-expect-ok";
+}
+run main;

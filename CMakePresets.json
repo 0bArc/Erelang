@@ -1,0 +1,68 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "windows-base",
+      "hidden": true,
+      "generator": "MinGW Makefiles",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+    },
+    {
+      "name": "unix-base",
+      "hidden": true,
+      "generator": "Unix Makefiles",
+      "condition": { "type": "notEquals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+    },
+    {
+      "name": "debug",
+      "displayName": "Debug (Windows)",
+      "inherits": "windows-base",
+      "binaryDir": "${sourceDir}/build/debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "release",
+      "displayName": "Release (Windows)",
+      "inherits": "windows-base",
+      "binaryDir": "${sourceDir}/build/release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "BUILD_SHARED_RUNTIME": "OFF",
+        "ERELANG_BUILD_SYMCHECK": "OFF",
+        "ERELANG_UPDATE_PATH": "OFF"
+      }
+    },
+    {
+      "name": "unix-debug",
+      "displayName": "Debug (Linux, macOS)",
+      "inherits": "unix-base",
+      "binaryDir": "${sourceDir}/build/debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "ERELANG_BUILD_SYMCHECK": "OFF"
+      }
+    },
+    {
+      "name": "unix-release",
+      "displayName": "Release (Linux, macOS)",
+      "inherits": "unix-base",
+      "binaryDir": "${sourceDir}/build/release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "BUILD_SHARED_RUNTIME": "OFF",
+        "ERELANG_BUILD_SYMCHECK": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "debug", "configurePreset": "debug" },
+    { "name": "release", "configurePreset": "release" },
+    { "name": "unix-debug", "configurePreset": "unix-debug" },
+    { "name": "unix-release", "configurePreset": "unix-release" }
+  ]
+}

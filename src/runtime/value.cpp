@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
+#include <charconv>
+#include <limits>
+#include <system_error>
 #include "erelang/value.hpp"
 #include "erelang/runtime_helpers.hpp"
 
@@ -62,12 +65,24 @@ bool is_truthy(const Value& v) {
     return false;
 }
 
+// Shortest text that reads back as the same double, always marked as a float: 3.14, 2.0, 1e+20.
+std::string format_float(double f) {
+    if (f != f) return "nan";
+    if (f == std::numeric_limits<double>::infinity()) return "inf";
+    if (f == -std::numeric_limits<double>::infinity()) return "-inf";
+    char buf[64];
+    const auto res = std::to_chars(buf, buf + sizeof buf, f);
+    std::string out(buf, res.ec == std::errc() ? res.ptr : buf);
+    if (out.find_first_of(".eEn") == std::string::npos) out += ".0";
+    return out;
+}
+
 std::string to_display_string(const Value& v) {
     switch (v.kind) {
         case ValueKind::Null: return "nullptr";
         case ValueKind::Bool: return v.b ? "true" : "false";
         case ValueKind::Int: return std::to_string(v.i);
-        case ValueKind::Float: return std::to_string(v.f);
+        case ValueKind::Float: return format_float(v.f);
         case ValueKind::String: return v.string_ref();
         case ValueKind::Handle: {
             std::string out(handle_kind_prefix(v.h.kind));
@@ -150,7 +165,10 @@ Value value_from_legacy_string(std::string s) {
     Handle h;
     if (try_parse_legacy_handle(s, h)) return Value::from_handle(h);
     if (is_int_digits(s)) {
-        try { return Value::from_int(std::stoll(s)); } catch (...) {}
+        int64_t v = 0;
+        const char* b = s.data() + (s[0] == '+' ? 1 : 0);
+        const auto [p, ec] = std::from_chars(b, s.data() + s.size(), v);
+        if (ec == std::errc() && p == s.data() + s.size()) return Value::from_int(v);
     }
     if (is_float_digits(s)) {
         try { return Value::from_float(std::stod(s)); } catch (...) {}
@@ -164,7 +182,13 @@ int64_t value_as_int(const Value& v) {
         case ValueKind::Bool: return v.b ? 1 : 0;
         case ValueKind::Float: return static_cast<int64_t>(v.f);
         case ValueKind::String: {
-            try { return std::stoll(v.string_ref()); } catch (...) { return 0; }
+            const std::string& t = v.string_ref();
+            int64_t out = 0;
+            const char* b = t.data() + (!t.empty() && t[0] == '+' ? 1 : 0);
+            const auto [p, ec] = std::from_chars(b, t.data() + t.size(), out);
+            if (ec == std::errc()) return out;
+            // "3.9" and similar: truncate like a float would.
+            try { return static_cast<int64_t>(std::stod(t)); } catch (...) { return 0; }
         }
         case ValueKind::Handle: return static_cast<int64_t>(v.h.id);
         case ValueKind::Null: return 0;
@@ -205,7 +229,40 @@ static bool is_stringy(const Value& v) {
     return v.kind == ValueKind::String || v.kind == ValueKind::Handle;
 }
 
+// Both operands are ints: the common case in loops and counters, handled without kind checks.
+static Value int_binary(ValueBinOp op, int64_t a, int64_t b, bool& handled) {
+    handled = true;
+    switch (op) {
+        case ValueBinOp::Add: return Value::from_int(wrap_add(a, b));
+        case ValueBinOp::Sub: return Value::from_int(wrap_sub(a, b));
+        case ValueBinOp::Mul: return Value::from_int(wrap_mul(a, b));
+        case ValueBinOp::Div:
+            if (b == 0) throw std::runtime_error("Division by zero");
+            if (b == -1) return Value::from_int(wrap_sub(0, a));  // INT64_MIN / -1 traps on x86
+            return Value::from_int(a / b);
+        case ValueBinOp::Mod:
+            if (b == 0) throw std::runtime_error("Modulo by zero");
+            if (b == -1) return Value::from_int(0);
+            return Value::from_int(a % b);
+        case ValueBinOp::Eq: case ValueBinOp::StrictEq: return Value::from_bool(a == b);
+        case ValueBinOp::Ne: case ValueBinOp::StrictNe: return Value::from_bool(a != b);
+        case ValueBinOp::Lt: return Value::from_bool(a < b);
+        case ValueBinOp::Le: return Value::from_bool(a <= b);
+        case ValueBinOp::Gt: return Value::from_bool(a > b);
+        case ValueBinOp::Ge: return Value::from_bool(a >= b);
+        case ValueBinOp::BitAnd: return Value::from_int(a & b);
+        case ValueBinOp::BitOr: return Value::from_int(a | b);
+        case ValueBinOp::BitXor: return Value::from_int(a ^ b);
+        default: handled = false; return Value::null_value();
+    }
+}
+
 Value apply_binary(ValueBinOp op, const Value& left, const Value& right) {
+    if (left.kind == ValueKind::Int && right.kind == ValueKind::Int) {
+        bool handled = false;
+        Value r = int_binary(op, left.i, right.i, handled);
+        if (handled) return r;
+    }
     switch (op) {
         case ValueBinOp::And:
             return Value::from_bool(is_truthy(left) && is_truthy(right));
@@ -250,6 +307,13 @@ Value apply_binary(ValueBinOp op, const Value& left, const Value& right) {
                 if (op == ValueBinOp::Le) return Value::from_bool(a <= b);
                 if (op == ValueBinOp::Gt) return Value::from_bool(a > b);
                 return Value::from_bool(a >= b);
+            }
+            if (left.kind == ValueKind::String && right.kind == ValueKind::String) {
+                const int c = left.string_ref().compare(right.string_ref());
+                if (op == ValueBinOp::Lt) return Value::from_bool(c < 0);
+                if (op == ValueBinOp::Le) return Value::from_bool(c <= 0);
+                if (op == ValueBinOp::Gt) return Value::from_bool(c > 0);
+                return Value::from_bool(c >= 0);
             }
             const std::string a = to_display_string(left), b = to_display_string(right);
             if (op == ValueBinOp::Lt) return Value::from_bool(a < b);
@@ -320,7 +384,8 @@ Value apply_binary(ValueBinOp op, const Value& left, const Value& right) {
                 if (b == -1) return Value::from_int(0);
                 return Value::from_int(a % b);
             }
-            if (b < 0) return Value::from_int(0);
+            // A negative exponent has a fractional result: 2 ** -1 is 0.5, not 0.
+            if (b < 0) return Value::from_float(std::pow(static_cast<double>(a), static_cast<double>(b)));
             if (b > 62) throw std::runtime_error("Exponent too large for integer power");
             int64_t value = 1;
             for (int64_t i = 0; i < b; ++i) value = wrap_mul(value, a);

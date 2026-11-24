@@ -1,0 +1,34 @@
+@erelang
+
+// Automating a CLI tool from Erelang: run docker, read its output, react to the result.
+// sys.cmd runs a whole command line through the shell and returns what it printed;
+// sys.last_exit() is the exit code of that run.
+
+#include <builtin/system> as sys
+
+re
+public action main() {
+    
+    string version = sys.cmd("docker --version");
+    if (sys.last_exit() != 0) {
+        print "docker is not installed or not on PATH";
+        return;
+    }
+    print "found: " + version;
+
+    string running = sys.cmd("docker ps --format {{.Names}}");
+    if (sys.last_exit() != 0) {
+        print "docker is installed but the daemon is not running (start Docker Desktop)";
+        return;
+    }
+
+    if (running == "") {
+        print "no containers running";
+        return;
+    }
+    Array<string> names = string.split(running, "\n");
+    for (string n in names) {
+        if (n != "") { print "container: " + n; }
+    }
+}
+run main;

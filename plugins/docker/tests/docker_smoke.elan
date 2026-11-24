@@ -1,0 +1,52 @@
+@erelang
+#include <builtin/json> as json
+
+// Runs against tests/fake/docker.cmd (see run.ps1), so no daemon is needed.
+
+public action eq(label: string, got: string, want: string) {
+    if (got != want) { fail(label + ": got [" + got + "] want [" + want + "]"); }
+}
+
+public action main() {
+    if (!docker_available()) { fail("docker_available"); }
+    if (!docker_running()) { fail("docker_running"); }
+    eq("version", docker_version(), "99.0.0");
+
+    Array<string> containers = docker_ps(false);
+    eq("ps count", string(containers.len()), "2");
+    Map<string, string> first = from_json(containers[0]);
+    eq("ps name", first["Names"], "web");
+    eq("ps image", first["Image"], "nginx");
+
+    Array<string> names = docker_names();
+    eq("names", names.join(","), "web,db");
+
+    Array<string> images = docker_images();
+    Map<string, string> img = from_json(images[0]);
+    eq("image repo", img["Repository"], "nginx");
+
+    string id = docker_run("nginx", "-p 8080:80 --name web");
+    eq("run id", id, "c0ffee123");
+    if (!docker_stop(id)) { fail("stop"); }
+    if (!docker_rm(id, true)) { fail("rm"); }
+
+    string logs = docker_logs(id, 2);
+    if (!string.contains(logs, "line two")) { fail("logs: " + logs); }
+    eq("exec", string.strip(docker_exec(id, "echo hi")), "exec-output");
+
+    any info = docker_inspect(id);
+    string pretty = json.stringify(info);
+    if (!string.contains(pretty, "\"Pid\":4242")) { fail("inspect: " + pretty); }
+    eq("status", docker_status(id), "running");
+    if (!docker_wait_healthy(id, 2000)) { fail("wait_healthy"); }
+
+    any missing = docker_inspect("missing");
+    eq("inspect failure is empty", json.stringify(missing), "{}");
+    if (docker_ok()) { fail("docker_ok after a failure"); }
+    eq("last exit after failure", string(docker_last_exit()), "1");
+
+    if (!docker_compose_up(".")) { fail("compose up"); }
+    if (!docker_compose_down(".")) { fail("compose down"); }
+    print "docker-plugin-ok";
+}
+run main;

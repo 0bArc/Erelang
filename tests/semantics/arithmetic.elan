@@ -1,0 +1,15 @@
+@strict
+action main() {
+    int maximum = 9223372036854775807;
+    int minimum = -maximum - 1;
+    if (maximum + 1 != minimum) { fail("addition must wrap at 64 bits"); }
+    if (minimum - 1 != maximum) { fail("subtraction must wrap at 64 bits"); }
+    if (maximum * 2 != -2) { fail("multiplication must wrap at 64 bits"); }
+    if (minimum / -1 != minimum) { fail("minimum divided by -1 must wrap"); }
+    if (minimum % -1 != 0) { fail("minimum remainder -1 must be zero"); }
+    if (-7 / 3 != -2) { fail("integer division truncates toward zero"); }
+    if (-7 % 3 != -1) { fail("remainder follows dividend sign"); }
+    if (int("9.99") != 9 || int(-9.99) != -9) { fail("conversion truncates toward zero"); }
+    print "semantics-arithmetic-ok";
+}
+run main;

@@ -1,5 +1,9 @@
 @erelang
 
 public action plugin_shutdown {
-    return 
+    print "Shutting down";
+    return;
 }
+
+
+run plugin_shutdown;

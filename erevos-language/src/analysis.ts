@@ -1,8 +1,10 @@
 import {
   ACTION_RE, TYPED_FUNC_RE, FIELD_RE, STRUCT_RE, ENUM_RE, ENTITY_RE,
-  TYPE_ALIAS_RE, TRAIT_RE, HOOK_RE, LET_RE, GLOBAL_RE, LANGUAGE_KEYWORDS,
-  NAMESPACE_RE, BUILT_INS,
+  TYPE_ALIAS_RE, TRAIT_RE, HOOK_RE, LET_RE, GLOBAL_RE,
+  NAMESPACE_RE,
 } from './constants';
+import { isCoreBuiltin, isKeyword, isTypeWord } from './manifest';
+import { bindingIndex, tokenAt, boundReferences } from './scopeAnalysis';
 
 export type SymbolKindName =
   | 'local' | 'parameter' | 'action' | 'struct' | 'enum' | 'field'
@@ -41,8 +43,8 @@ export interface RefLocation {
   length: number;
 }
 
-const KEYWORD_SET = new Set(LANGUAGE_KEYWORDS);
-const BUILTIN_SET = new Set(BUILT_INS as readonly string[]);
+const KEYWORD_SET = { has: (w: string) => isKeyword(w) || isTypeWord(w) };
+const BUILTIN_SET = { has: (w: string) => isCoreBuiltin(w) };
 const TYPE_WORDS = new Set([
   'void', 'int', 'double', 'float', 'string', 'str', 'bool', 'char', 'auto',
   'any', 'pointer', 'Array', 'Map', 'HashMap', 'array', 'map', 'hashmap',
@@ -386,13 +388,23 @@ export function resolveSymbol(lines: string[], pos: TextPos): HoverInfo | null {
   if (isInStringLiteral(line, pos.character) || isInComment(line, pos.character)) return null;
   const w = wordAt(line, pos.character);
   if (!w) return null;
+  const index = bindingIndex(lines.join('\n'));
+  const token = tokenAt(index, pos);
+  if (!token) return null;
+  const binding = index.resolve(token);
 
   const range: TextRange = {
     start: { line: pos.line, character: w.start },
     end: { line: pos.line, character: w.end },
   };
 
-  const decls = collectDeclarations(lines).filter(d => d.name === w.word);
+  if (binding) {
+    const declaration = binding.kind === 'action' ? collectDeclarations(lines).find(d =>
+      d.kind === 'action' && d.name === w.word && d.line === binding.token.line) : undefined;
+    return { name: w.word, kind: binding.kind, detail: declaration?.detail ?? binding.detail, range };
+  }
+  const decls = collectDeclarations(lines).filter(d => d.name === w.word
+    && !['local', 'parameter', 'action'].includes(d.kind));
   const onDecl = decls.find(d => d.line === pos.line && pos.character >= d.start && pos.character <= d.start + d.length);
   if (onDecl) {
     return { name: onDecl.name, kind: onDecl.kind, detail: onDecl.detail, range };
@@ -433,25 +445,19 @@ export function formatHoverMarkdown(info: HoverInfo): string {
 }
 
 export function findReferencesInText(text: string, name: string): RefLocation[] {
-  const lines = splitLines(text);
-  const out: RefLocation[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    let from = 0;
-    while (from < line.length) {
-      const at = nameOffset(line, name, from);
-      if (at < 0) break;
-      out.push({ line: i, start: at, length: name.length });
-      from = at + name.length;
-    }
-  }
-  return out;
+  return bindingIndex(text).tokens.filter(t => t.text === name)
+    .map(t => ({ line: t.line, start: t.start, length: name.length }));
 }
 
 export function findReferencesAt(text: string, pos: TextPos): { name: string; kind: SymbolKindName; refs: RefLocation[] } | null {
   const lines = splitLines(text);
   const sym = resolveSymbol(lines, pos);
   if (!sym) return null;
+  const index = bindingIndex(text);
+  const token = tokenAt(index, pos);
+  const binding = token && index.resolve(token);
+  if (binding) return { name: sym.name, kind: sym.kind,
+    refs: boundReferences(index, binding).map(t => ({ line: t.line, start: t.start, length: t.text.length })) };
   if (sym.kind === 'keyword' || sym.kind === 'builtin') {
     return { name: sym.name, kind: sym.kind, refs: findReferencesInText(text, sym.name) };
   }
@@ -463,18 +469,36 @@ export function renameEdits(
   pos: TextPos,
   newName: string,
 ): { name: string; kind: SymbolKindName; edits: { range: TextRange; newText: string }[] } | null {
-  if (!/^[A-Za-z_]\w*$/.test(newName)) return null;
+  if (!/^[A-Za-z_]\w*$/.test(newName) || isKeyword(newName) || isTypeWord(newName) || isCoreBuiltin(newName)) return null;
   const lines = splitLines(text);
   const sym = resolveSymbol(lines, pos);
   if (!sym) return null;
+  // String interpolation needs expression-level compiler spans. Refuse a partial rename.
+  const quoted = /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/gs;
+  for (const match of text.matchAll(quoted)) {
+    const expressions = match[0].match(/\{[^}]*\}/g) ?? [];
+    if (expressions.some(expr => new RegExp(`\\b${sym.name}\\b`).test(expr))) return null;
+  }
   if (sym.kind === 'keyword' || sym.kind === 'builtin') return null;
   if (sym.kind !== 'local' && sym.kind !== 'parameter' && sym.kind !== 'action') return null;
 
-  const refs = findReferencesInText(text, sym.name);
+  const index = bindingIndex(text);
+  const token = tokenAt(index, pos);
+  const binding = token && index.resolve(token);
+  if (!binding) return null;
+  if (binding.kind === 'action' && binding.scope !== 0) return null;
+  const refs = boundReferences(index, binding);
+  // Reject capture: a rename must not change which existing variable a use refers to.
+  if (newName !== sym.name && (index.bindings.some(b => b !== binding && b.scope === binding.scope && b.token.text === newName)
+    || refs.some(t => index.resolve({ ...t, text: newName }))
+    || index.tokens.some(t => t.text === newName && (() => {
+      for (let s = t.scope; s >= 0; s = index.scopes[s].parent) if (s === binding.scope) return true;
+      return false;
+    })()))) return null;
   const edits = refs.map(r => ({
     range: {
       start: { line: r.line, character: r.start },
-      end: { line: r.line, character: r.start + r.length },
+      end: { line: r.line, character: r.start + r.text.length },
     },
     newText: newName,
   }));

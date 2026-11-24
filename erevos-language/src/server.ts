@@ -14,21 +14,21 @@ import {
   Location,
   ReferenceParams,
   TextEdit,
-  Range,
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
-import { spawn } from 'child_process';
-import * as fs from 'fs';
+import { CheckQueue } from './checkQueue';
+import { checkProcess } from './checkProcess';
+import { bindingIndex, tokenAt, useCompilerTokens } from './scopeAnalysis';
 import { fileURLToPath } from 'url';
+import * as fs from 'fs';
+import { projectDefinition, definitionLocation, tokenRange, sourceKey } from './projectAnalysis';
 import { resolveErelangExe } from './erelangPath';
 import { parseCheckOutput } from './checkOutput';
 import {
   splitLines,
   resolveSymbol,
   formatHoverMarkdown,
-  findReferencesInText,
   renameEdits,
-  collectDeclarations,
 } from './analysis';
 
 const connection = createConnection(ProposedFeatures.all);
@@ -36,6 +36,7 @@ const documents = new TextDocuments(TextDocument);
 
 let workspaceRoots: string[] = [];
 let configuredExe = '';
+let supportsProjectFiles = false;
 /** undefined = not resolved yet, null = resolved but missing (cached so `where` is not re-spawned). */
 let cachedExe: string | null | undefined;
 
@@ -48,7 +49,7 @@ connection.onInitialize((params: InitializeParams) => {
   workspaceRoots = (params.workspaceFolders ?? [])
     .map(f => {
       try {
-        return decodeURIComponent(f.uri.replace(/^file:\/\//, '').replace(/^\/([A-Za-z]:)/, '$1'));
+        return fileURLToPath(f.uri);
       } catch {
         return '';
       }
@@ -56,10 +57,11 @@ connection.onInitialize((params: InitializeParams) => {
     .filter(Boolean);
   if (!workspaceRoots.length && params.rootUri) {
     try {
-      workspaceRoots = [decodeURIComponent(params.rootUri.replace(/^file:\/\//, '').replace(/^\/([A-Za-z]:)/, '$1'))];
+      workspaceRoots = [fileURLToPath(params.rootUri)];
     } catch { /* ignore */ }
   }
-  const init = params.initializationOptions as { erelangPath?: string } | undefined;
+  const init = params.initializationOptions as { erelangPath?: string; projectFiles?: boolean } | undefined;
+  supportsProjectFiles = init?.projectFiles === true;
   if (init?.erelangPath) configuredExe = init.erelangPath;
   return {
     capabilities: {
@@ -72,6 +74,7 @@ connection.onInitialize((params: InitializeParams) => {
       hoverProvider: true,
       renameProvider: true,
       referencesProvider: true,
+      definitionProvider: true,
     },
   };
 });
@@ -100,8 +103,7 @@ const checkTimers = new Map<string, NodeJS.Timeout>();
 const changeBursts = new Map<string, number>();
 const lastPublished = new Map<string, string>();
 /** Docs waiting for the single check slot, in arrival order. */
-const checkQueue = new Set<string>();
-let running: { uri: string; child: ReturnType<typeof spawn> } | undefined;
+const checkQueue = new CheckQueue(runCheck, error => connection.console.error(String(error)));
 
 function shouldSkipCheck(doc: TextDocument): boolean {
   const uri = doc.uri.replace(/\\/g, '/').toLowerCase();
@@ -126,13 +128,10 @@ function cancelCheck(uri: string) {
   const timer = checkTimers.get(uri);
   if (timer) clearTimeout(timer);
   checkTimers.delete(uri);
-  checkQueue.delete(uri);
-  if (running?.uri === uri) {
-    try { running.child.kill(); } catch { /* ignore */ }
-  }
+  checkQueue.cancel(uri);
 }
 
-function scheduleCheck(uri: string, delayOverride?: number) {
+function scheduleCheck(uri: string) {
   cancelCheck(uri);
   const doc = documents.get(uri);
   if (!doc) return;
@@ -142,65 +141,47 @@ function scheduleCheck(uri: string, delayOverride?: number) {
   }
   const burst = (changeBursts.get(uri) ?? 0) + 1;
   changeBursts.set(uri, burst);
-  const delay = delayOverride ?? (burst > BURST_CHANGES ? BURST_DELAY_MS : CHECK_DELAY_MS);
+  const delay = burst > BURST_CHANGES ? BURST_DELAY_MS : CHECK_DELAY_MS;
   checkTimers.set(uri, setTimeout(() => {
     checkTimers.delete(uri);
     changeBursts.delete(uri);
-    checkQueue.add(uri);
-    pumpQueue();
+    checkQueue.enqueue(uri);
   }, delay));
 }
 
-function pumpQueue() {
-  if (running) return;
-  const next = checkQueue.values().next();
-  if (next.done) return;
-  checkQueue.delete(next.value);
-  void runCheck(next.value).finally(() => {
-    running = undefined;
-    pumpQueue();
-  });
-}
-
 /**
- * Checks the file on disk, not a temp copy: includes resolve relative to the
- * script, and AI edits land on disk anyway. Unsaved buffers keep their last
- * diagnostics until saved.
+ * Checks an in-memory source overlay through the compiler. The original path
+ * preserves include resolution and the file on disk is never rewritten.
  */
-async function runCheck(uri: string) {
+async function runCheck(uri: string, signal: AbortSignal) {
   const doc = documents.get(uri);
-  if (!doc || shouldSkipCheck(doc)) return;
+  if (signal.aborted || !doc || shouldSkipCheck(doc)) return;
+  const version = doc.version;
+  const isCurrent = () => !signal.aborted && documents.get(uri) === doc && doc.version === version;
   const exe = getExe();
   if (!exe) {
     publish(uri, []);
     return;
   }
   let filePath: string;
-  let onDisk: string;
   try {
     filePath = fileURLToPath(uri);
-    onDisk = await fs.promises.readFile(filePath, 'utf8');
   } catch {
     return;
   }
-  if (onDisk !== doc.getText()) return;
+  if (!isCurrent()) return;
 
-  const version = doc.version;
   try {
-    const child = spawn(exe, ['--check', filePath], { windowsHide: true });
-    running = { uri, child };
-    let stderr = '';
-    child.stderr.on('data', (d: Buffer) => { stderr += d.toString('utf8'); });
-    child.stdout.on('data', () => undefined);
-    const code: number | null = await new Promise(resolve => {
-      child.on('close', (c) => resolve(c));
-      child.on('error', () => resolve(-1));
-    });
-    // Killed (newer edit) or document moved on while checking: drop the result.
-    if (code === null || documents.get(uri)?.version !== version) return;
-    if (code === -1) throw new Error(`could not start ${exe}`);
+    const stderr = await checkProcess(exe, ['--check-stdin', filePath], signal,
+      10_000, 1024 * 1024, doc.getText(), output => {
+        if (!isCurrent()) return;
+        useCompilerTokens(doc.getText(), output);
+        void connection.sendNotification('erelang/compilerTokens', { uri, version, output });
+      });
+    if (stderr === undefined || !isCurrent()) return;
     publish(uri, parseCheckOutput(stderr));
   } catch (e) {
+    if (!isCurrent()) return;
     publish(uri, [{
       severity: DiagnosticSeverity.Error,
       range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
@@ -211,13 +192,20 @@ async function runCheck(uri: string) {
 }
 
 documents.onDidChangeContent(e => scheduleCheck(e.document.uri));
-documents.onDidSave(e => scheduleCheck(e.document.uri, 150));
+// Saves participate in the same debounce: AI/autosave bursts must not bypass it.
+documents.onDidSave(e => scheduleCheck(e.document.uri));
 documents.onDidClose(e => {
   const uri = e.document.uri;
   cancelCheck(uri);
   changeBursts.delete(uri);
   lastPublished.delete(uri);
   connection.sendDiagnostics({ uri, diagnostics: [] });
+});
+
+connection.onShutdown(() => {
+  for (const timer of checkTimers.values()) clearTimeout(timer);
+  checkTimers.clear();
+  checkQueue.dispose();
 });
 
 connection.onHover((params: TextDocumentPositionParams): Hover | null => {
@@ -231,71 +219,103 @@ connection.onHover((params: TextDocumentPositionParams): Hover | null => {
   };
 });
 
-connection.onReferences((params: ReferenceParams): Location[] => {
+const readSource = async (uri: string): Promise<string | undefined> => {
+  const open = documents.get(uri) ?? documents.all().find(d => sourceKey(d.uri) === sourceKey(uri));
+  if (open) return shouldSkipCheck(open) ? undefined : open.getText();
+  try {
+    const file = fileURLToPath(uri);
+    if ((await fs.promises.stat(file)).size > MAX_CHECK_CHARS) return undefined;
+    return await fs.promises.readFile(file, 'utf8');
+  } catch { return undefined; }
+};
+
+const resolveDefinition: typeof projectDefinition = async (uri, text, pos, read, visited) => {
+  const def = await projectDefinition(uri, text, pos, read, visited);
+  if (def) def.uri = documents.all().find(d => sourceKey(d.uri) === sourceKey(def.uri))?.uri ?? def.uri;
+  return def;
+};
+
+connection.onDefinition(async params => {
   const doc = documents.get(params.textDocument.uri);
-  if (!doc) return [];
-  const text = doc.getText();
-  const sym = resolveSymbol(splitLines(text), params.position);
-  if (!sym) return [];
-
-  const locations: Location[] = [];
-  const addFrom = (uri: string, src: string) => {
-    for (const r of findReferencesInText(src, sym.name)) {
-      locations.push({
-        uri,
-        range: {
-          start: { line: r.line, character: r.start },
-          end: { line: r.line, character: r.start + r.length },
-        },
-      });
-    }
-  };
-
-  addFrom(doc.uri, text);
-
-  if (sym.kind === 'action' || sym.kind === 'struct' || sym.kind === 'enum'
-    || sym.kind === 'entity' || sym.kind === 'typeAlias' || sym.kind === 'namespace') {
-    for (const other of documents.all()) {
-      if (other.uri === doc.uri) continue;
-      const decls = collectDeclarations(splitLines(other.getText()));
-      if (!decls.some(d => d.name === sym.name && d.kind === sym.kind)) continue;
-      addFrom(other.uri, other.getText());
-    }
-  }
-
-  return locations;
+  if (!doc || shouldSkipCheck(doc)) return null;
+  const def = await resolveDefinition(doc.uri, doc.getText(), params.position, readSource);
+  return def ? definitionLocation(def) : null;
 });
 
-connection.onRenameRequest((params: RenameParams): WorkspaceEdit | null => {
-  const doc = documents.get(params.textDocument.uri);
-  if (!doc) return null;
-  const text = doc.getText();
-  const result = renameEdits(text, params.position, params.newName);
-  if (!result) return null;
-
-  const changes: { [uri: string]: TextEdit[] } = {};
-  const toEdits = (src: string): TextEdit[] => {
-    return findReferencesInText(src, result.name).map(r => ({
-      range: {
-        start: { line: r.line, character: r.start },
-        end: { line: r.line, character: r.start + r.length },
-      } as Range,
-      newText: params.newName,
-    }));
-  };
-
-  changes[doc.uri] = toEdits(text);
-
-  if (result.kind === 'action') {
-    for (const other of documents.all()) {
-      if (other.uri === doc.uri) continue;
-      const decls = collectDeclarations(splitLines(other.getText()));
-      if (!decls.some(d => d.name === result.name && d.kind === 'action')) continue;
-      changes[other.uri] = toEdits(other.getText());
+async function projectReferences(def: Awaited<ReturnType<typeof projectDefinition>>, includeDeclaration: boolean,
+  cancelled: () => boolean = () => false): Promise<Location[]> {
+  if (!def) return [];
+  const locations: Location[] = [];
+  const sources = new Map(documents.all().filter(d => !shouldSkipCheck(d)).map(d => [d.uri, d.getText()]));
+  if (supportsProjectFiles && def.binding.kind === 'action') {
+    const files = await connection.sendRequest<{ uris: string[]; complete: boolean }>('erelang/projectFiles');
+    if (!files.complete) throw new Error('Project exceeds 2000 Erelang files; narrow the workspace before renaming.');
+    let bytes = 0;
+    // Explicit navigation requests may index closed files. Never do this on document edits.
+    for (const uri of files.uris) {
+      if (cancelled()) return [];
+      if ([...sources.keys()].some(key => sourceKey(key) === sourceKey(uri))) continue;
+      const source = await readSource(uri);
+      if (source === undefined) throw new Error('Cannot safely index project file: ' + uri);
+      bytes += source.length;
+      if (bytes > 8_000_000) throw new Error('Project analysis exceeds 8 MB; narrow the workspace before renaming.');
+      sources.set(uri, source);
     }
   }
+  const targetSource = await readSource(def.uri);
+  if (targetSource !== undefined && ![...sources.keys()].some(key => sourceKey(key) === sourceKey(def.uri))) sources.set(def.uri, targetSource);
+  const reads = new Map<string, Promise<string | undefined>>();
+  const read = (uri: string) => {
+    if (!reads.has(uri)) reads.set(uri, sources.has(uri) ? Promise.resolve(sources.get(uri)) : readSource(uri));
+    return reads.get(uri)!;
+  };
+  for (const [uri, text] of sources) {
+    if (cancelled()) return [];
+    for (const t of bindingIndex(text).tokens) {
+      if (cancelled()) return [];
+      if (t.text !== def.binding.token.text) continue;
+      const resolved = await resolveDefinition(uri, text, { line: t.line, character: t.start }, read);
+      if (!resolved || sourceKey(resolved.uri) !== sourceKey(def.uri) || resolved.binding.token.line !== def.binding.token.line
+        || resolved.binding.token.start !== def.binding.token.start) continue;
+      if (!includeDeclaration && sourceKey(uri) === sourceKey(def.uri) && t.line === def.binding.token.line
+        && t.start === def.binding.token.start) continue;
+      locations.push({ uri, range: tokenRange(t) });
+    }
+  }
+  return locations;
+}
 
-  return { changes };
+connection.onReferences(async (params: ReferenceParams, token): Promise<Location[]> => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc || shouldSkipCheck(doc)) return [];
+  const def = await resolveDefinition(doc.uri, doc.getText(), params.position, readSource);
+  return projectReferences(def, params.context.includeDeclaration, () => token.isCancellationRequested);
+});
+
+connection.onRenameRequest(async (params: RenameParams, token): Promise<WorkspaceEdit | null> => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc || shouldSkipCheck(doc)) return null;
+  const snapshots = new Map(documents.all().map(d => [d.uri, { version: d.version, text: d.getText() }]));
+  const def = await resolveDefinition(doc.uri, doc.getText(), params.position, readSource);
+  if (!def) return null;
+  const source = await readSource(def.uri);
+  if (source === undefined) return null;
+  const result = renameEdits(source, { line: def.binding.token.line, character: def.binding.token.start }, params.newName);
+  if (!result) return null;
+  const refs = await projectReferences(def, true, () => token.isCancellationRequested);
+  if (token.isCancellationRequested) return null;
+  const edits = new Map<string, TextEdit[]>();
+  for (const ref of refs) {
+    const text = ref.uri === def.uri ? source : snapshots.get(ref.uri)?.text ?? await readSource(ref.uri);
+    if (text === undefined) return null;
+    if (ref.uri !== def.uri && bindingIndex(text).bindings.some(b => b.token.text === params.newName)) return null;
+    if (!edits.has(ref.uri)) edits.set(ref.uri, []);
+    edits.get(ref.uri)!.push({ range: ref.range, newText: params.newName });
+  }
+  if ([...snapshots].some(([uri, snapshot]) => documents.get(uri)?.version !== snapshot.version)) return null;
+  return { documentChanges: [...edits].map(([uri, changes]) => ({
+    textDocument: { uri, version: snapshots.get(uri)?.version ?? null }, edits: changes,
+  })) };
 });
 
 documents.listen(connection);

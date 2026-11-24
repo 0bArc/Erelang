@@ -1,0 +1,22 @@
+@strict
+action main() {
+    int zero = 0;
+    bool a = false && (1 / zero == 0);
+    bool b = true || (1 / zero == 0);
+    if (a || !b) { fail("logical short circuit result"); }
+    int n = 0;
+    any bump = lambda() { n = n + 1; return n; };
+    bool c = true && (bump() == 1);
+    bool d = false || (bump() == 2);
+    if (!c || !d || n != 2) { fail("required RHS must run exactly once"); }
+    any present = 7;
+    any kept = present ?? bump();
+    if (kept != 7 || n != 2) { fail("coalesce must skip RHS for a non-null value"); }
+    any absent = null;
+    any filled = absent ?? bump();
+    if (filled != 3 || n != 3) { fail("coalesce must evaluate RHS for null"); }
+    int selected = true ? 5 : 1 / zero;
+    if (selected != 5) { fail("conditional expression selected wrong branch"); }
+    print "semantics-short-circuit-ok";
+}
+run main;

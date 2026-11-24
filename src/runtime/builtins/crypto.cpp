@@ -1,4 +1,5 @@
 // Basic crypto/hash helpers for erelang
+#include <random>
 #include "erelang/runtime.hpp"
 #include <string>
 #include <string_view>
@@ -21,14 +22,16 @@
 #endif
 #include <windows.h>
 #include <bcrypt.h>
+#else
+#include <openssl/evp.h>
+#include <openssl/rand.h>
 #endif
 
 namespace erelang {
 
-#ifdef _WIN32
+// Ciphertext layout (hex): nonce | cipher | tag. Identical on every platform.
 static constexpr size_t kAesGcmNonceBytes = 12;
 static constexpr size_t kAesGcmTagBytes = 16;
-#endif
 
 static std::string to_hex(const std::vector<uint8_t>& data) {
     std::ostringstream ss; ss<<std::hex<<std::setfill('0');
@@ -189,6 +192,98 @@ static std::string aes256_gcm_decrypt(const std::vector<uint8_t>& key, std::stri
         throw;
     }
 }
+
+static void os_random_bytes(uint8_t* out, std::size_t n, const char* what) {
+    if (n == 0) return;
+    bcrypt_check(BCryptGenRandom(nullptr, out, static_cast<ULONG>(n), BCRYPT_USE_SYSTEM_PREFERRED_RNG), what);
+}
+#else
+static void os_random_bytes(uint8_t* out, std::size_t n, const char* what) {
+    if (n == 0) return;
+    if (RAND_bytes(out, static_cast<int>(n)) != 1) throw std::runtime_error(what);
+}
+
+struct EvpCtx {
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    EvpCtx() = default;
+    ~EvpCtx() { EVP_CIPHER_CTX_free(ctx); }
+    EvpCtx(const EvpCtx&) = delete;
+    EvpCtx& operator=(const EvpCtx&) = delete;
+};
+
+static void evp_check(int ok, const char* what) {
+    if (ok != 1) throw std::runtime_error(what);
+}
+
+static std::string aes256_gcm_encrypt(const std::vector<uint8_t>& key, const std::string& plaintext) {
+    std::vector<uint8_t> nonce(kAesGcmNonceBytes);
+    os_random_bytes(nonce.data(), nonce.size(), "aes_encrypt: generate nonce failed");
+    EvpCtx c;
+    if (!c.ctx) throw std::runtime_error("aes_encrypt: cipher context failed");
+    evp_check(EVP_EncryptInit_ex(c.ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr), "aes_encrypt: init failed");
+    evp_check(EVP_CIPHER_CTX_ctrl(c.ctx, EVP_CTRL_GCM_SET_IVLEN, static_cast<int>(nonce.size()), nullptr),
+              "aes_encrypt: set nonce length failed");
+    evp_check(EVP_EncryptInit_ex(c.ctx, nullptr, nullptr, key.data(), nonce.data()), "aes_encrypt: set key failed");
+
+    std::vector<uint8_t> cipher(plaintext.size() + 16);
+    int len = 0;
+    int total = 0;
+    if (!plaintext.empty()) {
+        evp_check(EVP_EncryptUpdate(c.ctx, cipher.data(), &len,
+                                    reinterpret_cast<const unsigned char*>(plaintext.data()),
+                                    static_cast<int>(plaintext.size())),
+                  "aes_encrypt: encrypt failed");
+        total = len;
+    }
+    evp_check(EVP_EncryptFinal_ex(c.ctx, cipher.data() + total, &len), "aes_encrypt: encrypt failed");
+    total += len;
+    cipher.resize(static_cast<std::size_t>(total));
+
+    std::vector<uint8_t> tag(kAesGcmTagBytes);
+    evp_check(EVP_CIPHER_CTX_ctrl(c.ctx, EVP_CTRL_GCM_GET_TAG, static_cast<int>(tag.size()), tag.data()),
+              "aes_encrypt: read tag failed");
+
+    std::vector<uint8_t> packed;
+    packed.reserve(nonce.size() + cipher.size() + tag.size());
+    packed.insert(packed.end(), nonce.begin(), nonce.end());
+    packed.insert(packed.end(), cipher.begin(), cipher.end());
+    packed.insert(packed.end(), tag.begin(), tag.end());
+    return to_hex(packed);
+}
+
+static std::string aes256_gcm_decrypt(const std::vector<uint8_t>& key, std::string_view ciphertext_hex) {
+    auto packed = from_hex(ciphertext_hex);
+    if (packed.size() < kAesGcmNonceBytes + kAesGcmTagBytes) {
+        throw std::runtime_error("aes_decrypt: ciphertext too short");
+    }
+    const size_t cipherLen = packed.size() - kAesGcmNonceBytes - kAesGcmTagBytes;
+    const uint8_t* nonce = packed.data();
+    const uint8_t* cipher = packed.data() + kAesGcmNonceBytes;
+    uint8_t* tag = packed.data() + kAesGcmNonceBytes + cipherLen;
+
+    EvpCtx c;
+    if (!c.ctx) throw std::runtime_error("aes_decrypt: cipher context failed");
+    evp_check(EVP_DecryptInit_ex(c.ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr), "aes_decrypt: init failed");
+    evp_check(EVP_CIPHER_CTX_ctrl(c.ctx, EVP_CTRL_GCM_SET_IVLEN, static_cast<int>(kAesGcmNonceBytes), nullptr),
+              "aes_decrypt: set nonce length failed");
+    evp_check(EVP_DecryptInit_ex(c.ctx, nullptr, nullptr, key.data(), nonce), "aes_decrypt: set key failed");
+
+    std::vector<uint8_t> plain(cipherLen + 16);
+    int len = 0;
+    int total = 0;
+    if (cipherLen > 0) {
+        evp_check(EVP_DecryptUpdate(c.ctx, plain.data(), &len, cipher, static_cast<int>(cipherLen)),
+                  "aes_decrypt: decrypt failed");
+        total = len;
+    }
+    evp_check(EVP_CIPHER_CTX_ctrl(c.ctx, EVP_CTRL_GCM_SET_TAG, static_cast<int>(kAesGcmTagBytes), tag),
+              "aes_decrypt: set tag failed");
+    if (EVP_DecryptFinal_ex(c.ctx, plain.data() + total, &len) != 1) {
+        throw std::runtime_error("aes_decrypt: decrypt failed");
+    }
+    total += len;
+    return std::string(reinterpret_cast<const char*>(plain.data()), static_cast<std::size_t>(total));
+}
 #endif
 
 static std::string fnv1a(const std::string& s) {
@@ -198,11 +293,6 @@ static std::string fnv1a(const std::string& s) {
     return ss.str();
 }
 
-static std::atomic<uint32_t> g_xor_state{0x12345678u};
-static uint32_t xorshift32() {
-    uint32_t x = g_xor_state.load(std::memory_order_relaxed);
-    x ^= x << 13; x ^= x >> 17; x ^= x << 5; g_xor_state.store(x, std::memory_order_relaxed); return x;
-}
 
 static uint32_t rotr32(uint32_t x, uint32_t n) {
     return (x >> n) | (x << (32 - n));
@@ -272,33 +362,21 @@ static std::string crypto_dispatch(const std::string& name, const std::vector<st
     if (name == "hash_fnv1a") return fnv1a(argS(0));
     if (name == "hash_sha256" || name == "sha256") return sha256(argS(0));
     if (name == "random_bytes") {
+        // Operating system CSPRNG: these bytes are used for keys and nonces.
         int n = 0; try { n = std::stoi(argS(0)); } catch (...) { n = 0; }
-        if (n < 0) n = 0; if (n > 4096) n = 4096;
-        std::vector<uint8_t> buf; buf.reserve(n);
-        for (int i=0;i<n;++i) {
-            if ((i & 3) == 0) (void)xorshift32();
-            const uint32_t s = g_xor_state.load(std::memory_order_relaxed);
-            buf.push_back(uint8_t((s >> ((i & 3)*8)) & 0xFF));
-        }
+        if (n < 0) n = 0;
+        if (n > 4096) n = 4096;
+        std::vector<uint8_t> buf(static_cast<std::size_t>(n));
+        os_random_bytes(buf.data(), buf.size(), "random_bytes: system random source failed");
         return to_hex(buf);
     }
     if (name == "aes_encrypt") {
-#ifdef _WIN32
         const auto key = parse_aes_key_hex(argS(0));
         return aes256_gcm_encrypt(key, argS(1));
-#else
-        (void)argv;
-        throw std::runtime_error("aes_encrypt: not supported on this platform");
-#endif
     }
     if (name == "aes_decrypt") {
-#ifdef _WIN32
         const auto key = parse_aes_key_hex(argS(0));
         return aes256_gcm_decrypt(key, argS(1));
-#else
-        (void)argv;
-        throw std::runtime_error("aes_decrypt: not supported on this platform");
-#endif
     }
     return {};
 }
@@ -308,3 +386,13 @@ std::string __erelang_builtin_crypto_dispatch(const std::string& name, const std
 }
 
 } // namespace erelang
+
+// Module registration: see include/erelang/module_registry.hpp.
+#include "erelang/module_registry.hpp"
+namespace {
+const bool kModuleRegistered = erelang::modules::register_dispatch("crypto",
+    [](erelang::Runtime*, const std::string& name, const std::vector<std::string>& argv) {
+        return erelang::__erelang_builtin_crypto_dispatch(name, argv);
+    });
+}  // namespace
+ERELANG_MODULE_ANCHOR(crypto)

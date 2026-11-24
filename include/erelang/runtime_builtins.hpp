@@ -37,10 +37,10 @@ std::string __erelang_req_handle_method(int id, const std::string& method, const
 std::string __erelang_res_handle_method(int id, const std::string& method, const std::vector<std::string>& args);
 std::string __erelang_sse_handle_method(int id, const std::string& method, const std::vector<std::string>& args);
 
-// Server-side WebSocket (Winsock) — checked before WinHTTP client handles
+// Server-side WebSocket (Winsock): checked before WinHTTP client handles
 bool __erelang_ws_server_try_method(int id, const std::string& method, const std::vector<std::string>& args, std::string& out);
 
-// HTTP response handle (resp: prefix) — stores status + body + headers
+// HTTP response handle (resp: prefix): stores status + body + headers
 std::string __erelang_resp_handle_method(int id, const std::string& method, const std::vector<std::string>& args);
 
 // Raw TCP socket handle (tcp: prefix)

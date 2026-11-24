@@ -49,6 +49,8 @@ struct Handle {
 };
 
 [[nodiscard]] std::string to_display_string(const Value& v);
+// Shortest round-trip text of a double, always with a decimal point or exponent (2.0, 3.14).
+[[nodiscard]] std::string format_float(double f);
 [[nodiscard]] Value value_from_legacy_string(std::string s);
 
 struct Value {

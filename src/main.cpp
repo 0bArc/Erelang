@@ -16,6 +16,7 @@
 #include "erelang/ir.hpp"
 #include "erelang/codegen_x64.hpp"
 #include "erelang/plugins.hpp"
+#include "erelang/module_registry.hpp"
 #include "erelang/erodsl/spec.hpp"
 
 #ifdef _WIN32
@@ -70,6 +71,7 @@ static void static_check(const erelang::Program& prog) {
 
 int main(int argc, char** argv) {
     using namespace erelang;
+    modules::link_all_modules();
     namespace fs = std::filesystem;
 
 #ifdef _WIN32
@@ -321,6 +323,10 @@ int main(int argc, char** argv) {
         }
 
         if (buildNative) {
+#ifndef _WIN32
+            std::cerr << "--build-native emits Windows x64 code and only runs on Windows.\n";
+            return 1;
+#endif
             IRBuilder irBuilder;
             IRModule module = irBuilder.build(mainProg);
             X64Codegen codegen;

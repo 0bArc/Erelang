@@ -3,15 +3,17 @@
 Build with CMake, then run a few examples:
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
-cmake --build build --target erelang_runner -j 8
-./build/bin/Debug/erelang.exe examples/program.elan
-./build/bin/Debug/erelang.exe examples/language_kitchen_sink.elan
+cmake --preset debug          # Linux and macOS: cmake --preset unix-debug
+cmake --build --preset debug --target erelang_runner -j 8
+./build/debug/bin/Debug/erelang.exe examples/program.elan
+pwsh tests/run.ps1
 ```
+
+Code that touches the operating system (processes, sockets, HTTP, TLS, crypto, paths) must build and behave the same on Windows, Linux and macOS. CI runs the tests on Linux and macOS.
 
 C++20, 4-space indent, braces on the same line. Prefer the standard library. Do not add comments that restate the code.
 
-Layout: lexer/parser/typechecker/optimizer under `src/`, runtime under `src/runtime/`, headers under `include/erelang/`. CLI is `src/obs_main.cpp` (`erelang.exe`).
+Layout: lexer/parser/typechecker/optimizer under `src/`, runtime under `src/runtime/`, headers under `include/erelang/`. CLI is `src/obs_main.cpp` (`erelang`).
 
 To add an import-gated builtin:
 

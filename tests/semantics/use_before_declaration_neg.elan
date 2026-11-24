@@ -1,0 +1,7 @@
+// expect: TC010
+@strict
+action main() {
+    print later;
+    int later = 1;
+}
+run main;

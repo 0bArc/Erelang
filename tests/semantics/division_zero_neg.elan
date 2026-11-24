@@ -1,0 +1,7 @@
+// expect: Division by zero
+@strict
+action main() {
+    int zero = 0;
+    print 1 / zero;
+}
+run main;

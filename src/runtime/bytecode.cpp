@@ -137,6 +137,10 @@ bool compile_node(const Expr& e, Chunk& out, const Runtime::Env* env) {
         const auto& binary = std::get<BinaryExpr>(e.node);
         if (!binary.left || !binary.right) return false;
         switch (binary.op) {
+            // Until branch bytecodes exist, preserve lazy evaluation via the interpreter.
+            case BinOp::And:
+            case BinOp::Or:
+            case BinOp::Coalesce:
             case BinOp::Add:
             case BinOp::Sub:
             case BinOp::Mul:

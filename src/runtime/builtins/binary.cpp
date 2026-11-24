@@ -5,10 +5,13 @@
 #include <cstdint>
 #include <sstream>
 #include <iomanip>
+#include <mutex>
+#include <unordered_map>
 
 namespace erelang {
 struct BinBuf { std::vector<uint8_t> data; };
 static std::unordered_map<int,BinBuf> g_binbufs; static int g_nextBin=1;
+static std::mutex g_binMutex;
 
 static std::string to_hex_buf(const std::vector<uint8_t>& d){ std::ostringstream ss; ss<<std::hex<<std::setfill('0'); for(uint8_t b: d) ss<<std::setw(2)<<(int)b; return ss.str(); }
 
@@ -41,6 +44,7 @@ static int hex_digit_value(char ch) noexcept {
 
 static std::string binary_dispatch(const std::string& name, const std::vector<std::string>& argv){
     auto argS = [&](size_t i){ return i<argv.size()?argv[i]:std::string(); };
+    std::lock_guard<std::mutex> lock(g_binMutex);
     if (name == "bin_new") { int id=g_nextBin++; g_binbufs[id]= {}; return std::string("bin:")+std::to_string(id); }
     if (name == "bin_from_hex") {
         // Reject non-hex digits and odd-length input instead of silently
@@ -78,3 +82,13 @@ static std::string binary_dispatch(const std::string& name, const std::vector<st
 std::string __erelang_builtin_binary_dispatch(const std::string& name, const std::vector<std::string>& argv){ return binary_dispatch(name, argv);}    
 
 } // namespace erelang
+
+// Module registration: see include/erelang/module_registry.hpp.
+#include "erelang/module_registry.hpp"
+namespace {
+const bool kModuleRegistered = erelang::modules::register_dispatch("binary",
+    [](erelang::Runtime*, const std::string& name, const std::vector<std::string>& argv) {
+        return erelang::__erelang_builtin_binary_dispatch(name, argv);
+    });
+}  // namespace
+ERELANG_MODULE_ANCHOR(binary)

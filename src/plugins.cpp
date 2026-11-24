@@ -340,7 +340,7 @@ namespace fs = std::filesystem;
 }
 
 [[nodiscard]] const std::unordered_set<std::string>& builtin_script_extensions() {
-    static const std::unordered_set<std::string> exts = { ".0bs", ".erelang", ".obsecret" };
+    static const std::unordered_set<std::string> exts = { ".0bs", ".elan", ".erelang", ".obsecret" };
     return exts;
 }
 

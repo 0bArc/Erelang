@@ -1,0 +1,118 @@
+@erelang
+
+#include <builtin/ai> as ai
+#include <builtin/regex> as re
+
+public action eq(label: string, got: string, want: string) {
+    if (got != want) { fail(label + ": got [" + got + "] want [" + want + "]"); }
+}
+
+public action yes(label: string, ok: bool) {
+    if (!ok) { fail(label + ": expected true"); }
+}
+
+public action no(label: string, ok: bool) {
+    if (ok) { fail(label + ": expected false"); }
+}
+
+public action main() {
+    // ---- inference --------------------------------------------------------------------------
+    eq("pattern date", ai.pattern("2026-10-21"), "xxxx-xx-xx");
+    eq("pattern id", ai.pattern("AB-12"), "XX-xx");
+    eq("pattern star literal", ai.pattern("a*b"), "X\\*X");
+    eq("auto keyword", ai.auto(["ORD-0042-QA", "ORD-1937-QA", "ORD-8521-QA"]), "ORD-[0-9]{4}-QA");
+    eq("auto format", ai.auto(["me@site.io", "you@corp.com"]), ai.regex.of("email"));
+    eq("auto single", ai.auto("2026-10-21"), ai.regex.of("date"));
+    eq("infer same shape", ai.infer.regex(["user_001@example.com", "user_002@example.com"]), "user_[0-9]{3}@example\\.com");
+    eq("infer varying counts", ai.infer.regex(["a1", "b22", "c333"]), "[A-Za-z][0-9]{1,3}");
+    eq("infer pattern", ai.infer.pattern(["AB-1234", "CD-5678", "EF-0042"]), "XX-xxxx");
+    eq("infer pattern mixed", ai.infer.pattern(["A1", "2B"]), "??");
+    eq("infer pattern lengths", ai.infer.pattern(["report_final.csv", "report_v2_old.csv"]), "XXXXXX_X*XXX.XXX");
+    eq("re.infer", re.infer("ab12"), "[A-Za-z]{2}[0-9]{2}");
+
+    // The inferred regex accepts what it was learned from and rejects other shapes.
+    string learned = ai.infer.regex(["2026-10-21", "1999-01-02"]);
+    yes("learned accepts", ai.regex.test(learned, "2030-05-06"));
+    no("learned rejects", ai.regex.test(learned, "99-1-2"));
+
+    // ---- generation -------------------------------------------------------------------------
+    string email = ai.regex.generate("Match a corporate email address ending in .com");
+    yes("email com", ai.regex.test(email, "me@corp.com"));
+    no("email org", ai.regex.test(email, "me@corp.org"));
+    string rx = ai.regex.generate("3 digits then a dash then 4 letters");
+    yes("3-4 ok", ai.regex.test(rx, "123-abcd"));
+    no("3-4 bad", ai.regex.test(rx, "12-abcd"));
+    rx = ai.regex.generate("starts with ORD- followed by 4 digits");
+    yes("starts ok", ai.regex.test(rx, "ORD-1234"));
+    no("starts bad", ai.regex.test(rx, "XRD-1234"));
+    rx = ai.regex.generate("an optional minus sign then one or more digits");
+    yes("signed", ai.regex.test(rx, "-42"));
+    yes("unsigned", ai.regex.test(rx, "42"));
+    no("not a number", ai.regex.test(rx, "4a"));
+    rx = ai.regex.generate("between 2 and 5 digits");
+    yes("2 digits", ai.regex.test(rx, "12"));
+    no("1 digit", ai.regex.test(rx, "1"));
+    no("6 digits", ai.regex.test(rx, "123456"));
+    rx = ai.regex.generate("contains the word \"error\"");
+    yes("contains", ai.regex.test(rx, "an error happened"));
+    no("lacks", ai.regex.test(rx, "all fine"));
+    rx = ai.regex.generate("case insensitive \"hello\"");
+    yes("ci upper", ai.regex.test(rx, "HELLO"));
+    yes("ci mixed", ai.regex.test(rx, "hElLo"));
+    rx = ai.regex.generate("a digit or a letter");
+    yes("alt digit", ai.regex.test(rx, "7"));
+    yes("alt letter", ai.regex.test(rx, "q"));
+    no("alt neither", ai.regex.test(rx, "-"));
+    yes("ip address", ai.regex.test(ai.regex.generate("an ip address"), "10.0.0.255"));
+    yes("uuid", ai.regex.test(ai.regex.generate("a uuid"), "123e4567-e89b-12d3-a456-426614174000"));
+    no("gibberish", ai.regex.can_generate("banana split with unicorns"));
+    eq("gibberish empty", ai.regex.generate("banana split with unicorns"), "");
+    yes("can generate", ai.regex.can_generate("exactly 5 digits"));
+
+    // ---- explain, optimize, examples --------------------------------------------------------
+    eq("explain", ai.regex.explain("user_[0-9]{3}@example\\.com"), "Matches the text \"user_\", then exactly 3 digits, then the text \"@example.com\".");
+    eq("optimize merge", ai.regex.optimize("[0-9][0-9][0-9]"), "\\d{3}");
+    eq("optimize class", ai.regex.optimize("(?:a|b|c)"), "[a-c]");
+    eq("optimize counts", ai.regex.optimize("[0-9]{1}[0-9]{2}"), "\\d{3}");
+    eq("optimize keeps unknown", ai.regex.optimize("(?=a)b"), "(?=a)b");
+    yes("valid", ai.regex.valid("[a-z]+"));
+    no("invalid", ai.regex.valid("[a-z"));
+    Array<string> shown = ai.regex.examples("[a-c]{2}-[0-9]+", 4);
+    if (shown.len() != 4) { fail("examples count " + string(shown.len())); }
+    for (string s : shown) { yes("example fits " + s, ai.regex.test("[a-c]{2}-[0-9]+", s)); }
+
+    // ---- every known format: its examples validate and optimize keeps the meaning -----------
+    Array<string> names = ai.names();
+    for (string k : names) {
+        yes("kind of example " + k, ai.validate(k, ai.example(k)));
+        string canon = ai.regex.of(k);
+        Array<string> samples = ai.regex.examples(canon, 6);
+        for (string s : samples) { yes("canonical example " + k + " " + s, ai.validate(k, s)); }
+        string opt = ai.regex.optimize(canon);
+        for (string s : samples) { yes("optimized " + k + " " + s, ai.regex.test(opt, s)); }
+    }
+
+    // ---- text helpers -----------------------------------------------------------------------
+    string note = "Mail me@site.io or you@corp.com, server 10.0.0.7, order 2026-10-21.";
+    Array<string> mails = ai.extract(note, "email");
+    if (mails.len() != 2) { fail("extract emails " + string(mails.len())); }
+    eq("first email", mails[0], "me@site.io");
+    eq("count ips", string(ai.count(note, "ipv4")), "1");
+    eq("redact email", ai.redact("a me@site.io b", "email"), "a [EMAIL] b");
+    eq("redact all", ai.redact_all("me@site.io 10.0.0.7 2026-10-21"), "[EMAIL] [IPV4] 2026-10-21");
+    eq("kind int", ai.kind("42"), "int");
+    eq("kind float", ai.kind("-3.5"), "float");
+    eq("kind date", ai.kind("2026-10-21"), "date");
+    eq("kind time", ai.kind("12:30"), "time");
+    eq("kind email", ai.kind("me@site.io"), "email");
+    eq("kind url", ai.kind("https://erelang.dev/docs"), "url");
+    eq("kind ipv4", ai.kind("10.0.0.1"), "ipv4");
+    eq("kind hex", ai.kind("0xFF"), "hex");
+    eq("kind bool", ai.kind("true"), "bool");
+    eq("kind word", ai.kind("hello"), "word");
+    eq("kind text", ai.kind("a b c"), "text");
+    eq("kind empty", ai.kind(""), "empty");
+    eq("kind all", ai.kind_all(["1", "2", "x y"]), "int");
+    print "ai-ok";
+}
+run main;

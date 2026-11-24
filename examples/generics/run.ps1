@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Continue"
-$exe = Join-Path $PSScriptRoot "..\..\build\bin\Debug\erelang.exe"
+$exe = Join-Path $PSScriptRoot "..\..\build\debug\bin\Debug\erelang.exe"
 if (-not (Test-Path $exe)) {
-    Write-Error "Missing erelang at $exe - build with cmake --build build --target erelang erelang_runner -j 8"
+    Write-Error "Missing erelang at $exe - build with cmake --build --preset debug --target erelang_runner -j 8"
     exit 1
 }
 

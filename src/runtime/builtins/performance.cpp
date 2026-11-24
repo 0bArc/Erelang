@@ -1,4 +1,4 @@
-// Performance profiling and memory API (runtime only — compiler directives are parser-level)
+// Performance profiling and memory API (runtime only: compiler directives are parser-level)
 #include <chrono>
 #include <string>
 #include <vector>
@@ -19,7 +19,7 @@ namespace {
     std::unordered_map<std::string, ProfileEntry> g_profiles;
     std::mutex g_profileMutex;
 
-    // Memory stubs — in a real implementation these would query the OS
+    // Memory stubs: in a real implementation these would query the OS
     unsigned long long g_peakBytes = 0;
 }
 
@@ -77,15 +77,15 @@ static std::string performance_dispatch(const std::string& name, const std::vect
 
     // Memory API
     if (name == "perf.mem.usage") {
-        // Stub — would query OS for RSS
+        // Stub: would query OS for RSS
         return "Not implemented yet";
     }
     if (name == "perf.mem.peak") {
-        // Stub — would query OS for peak RSS
+        // Stub: would query OS for peak RSS
         return std::to_string(g_peakBytes);
     }
 
-    // GC controls (stubs — the runtime doesn't have a real GC)
+    // GC controls (stubs: the runtime doesn't have a real GC)
     if (name == "perf.gc.collect") {
         // Force cleanup of container state
         return "Not implemented yet";
@@ -111,3 +111,13 @@ std::string __erelang_builtin_performance_dispatch(const std::string& name, cons
 }
 
 } // namespace erelang
+
+// Module registration: see include/erelang/module_registry.hpp.
+#include "erelang/module_registry.hpp"
+namespace {
+const bool kModuleRegistered = erelang::modules::register_dispatch("perf",
+    [](erelang::Runtime*, const std::string& name, const std::vector<std::string>& argv) {
+        return erelang::__erelang_builtin_performance_dispatch(name, argv);
+    });
+}  // namespace
+ERELANG_MODULE_ANCHOR(perf)

@@ -1,0 +1,62 @@
+@erelang
+
+// Generics, traits and operator overloading.
+// Run: erelang examples/types/generics_traits.elan
+
+public action check(label: string, got: string, want: string) {
+    if (got != want) { fail(label + ": got [" + got + "] want [" + want + "]"); }
+    print "  " + label + " = " + got;
+}
+
+trait Add<T> {
+    action add(other: T): T;
+}
+
+trait Eq<T> {
+    action eq(other: T): bool;
+}
+
+struct Vec2 {
+    int x;
+    int y;
+
+    public action add(other: Vec2): Vec2 {
+        Vec2 out;
+        out.x = self.x + other.x;
+        out.y = self.y + other.y;
+        return out;
+    }
+
+    public action eq(other: Vec2): bool {
+        return self.x == other.x && self.y == other.y;
+    }
+}
+
+public action sum<T: Add<T>>(a: T, b: T): T {
+    return a + b;
+}
+
+public action identity<T>(x: T): T {
+    return x;
+}
+
+public action main() {
+    print "operators map to trait methods";
+    Vec2 a;
+    a.x = 1;
+    a.y = 2;
+    Vec2 b;
+    b.x = 3;
+    b.y = 4;
+    Vec2 c = a + b;
+    check("a + b", string(c.x) + "," + string(c.y), "4,6");
+    check("a == b", string(a == b), "false");
+    check("generic sum", string(c == sum(a, b)), "true");
+
+    print "generic functions";
+    check("identity int", string(identity<int>(7)), "7");
+    check("identity string", identity<string>("x"), "x");
+
+    print "generics-traits-ok";
+}
+run main;

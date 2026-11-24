@@ -1,0 +1,122 @@
+@erelang
+
+// Structs, enums with payloads, pattern matching, Option and Result with `?`.
+// Run: erelang examples/types/structs_enums.elan
+
+public action check(label: string, got: string, want: string) {
+    if (got != want) { fail(label + ": got [" + got + "] want [" + want + "]"); }
+    print "  " + label + " = " + got;
+}
+
+struct Point {
+    int x;
+    int y;
+
+    public action length_squared(): int {
+        return self.x * self.x + self.y * self.y;
+    }
+}
+
+struct Pair<A, B> {
+    A first;
+    B second;
+}
+
+enum Shape {
+    Circle(int),
+    Rect(int, int),
+    Empty
+}
+
+enum Option<T> {
+    Some(T),
+    None
+}
+
+enum Result<T, E> {
+    Ok(T),
+    Error(E)
+}
+
+public action area(s: Shape): int {
+    match (s) {
+        case Circle(r): { return 3 * r * r; }
+        case Rect(w, h) if w == h: { return w * w; }
+        case Rect(w, h): { return w * h; }
+        case Empty: { return 0; }
+    }
+    return 0;
+}
+
+public action find_even(xs: Array<int>): Option<int> {
+    for (int x : xs) {
+        if (x % 2 == 0) { return Option<int>.Some(x); }
+    }
+    return Option<int>.None;
+}
+
+public action parse_age(text: string): Result<int, string> {
+    if (!int.is(text)) { return Result<int, string>.Error("not a number: " + text); }
+    int age = int(text);
+    if (age < 0) { return Result<int, string>.Error("negative age"); }
+    return Result<int, string>.Ok(age);
+}
+
+// `?` returns the error early, otherwise unwraps the value.
+public action next_year(text: string): Result<int, string> {
+    int age = parse_age(text)?;
+    return Result<int, string>.Ok(age + 1);
+}
+
+public action describe(r: Result<int, string>): string {
+    match (r) {
+        case Ok(v): { return "ok " + string(v); }
+        case Error(e): { return "error " + e; }
+    }
+    return "";
+}
+
+public action main() {
+    print "structs are values: assignment copies";
+    Point a;
+    a.x = 3;
+    a.y = 4;
+    Point b = a;
+    b.x = 100;
+    check("original unchanged", string(a.x), "3");
+    check("method", string(a.length_squared()), "25");
+
+    print "generic struct and destructuring";
+    Pair<string, int> entry;
+    entry.first = "answer";
+    entry.second = 42;
+    let { first, second } = entry;
+    check("first", first, "answer");
+    check("second", string(second), "42");
+    let (k, v) = (first, second);
+    check("tuple", k + "=" + string(v), "answer=42");
+
+    print "enums carry data; match with guards";
+    check("circle", string(area(Shape.Circle(2))), "12");
+    check("square takes the guarded arm", string(area(Shape.Rect(5, 5))), "25");
+    check("rect", string(area(Shape.Rect(2, 7))), "14");
+    check("empty", string(area(Shape.Empty)), "0");
+
+    print "Option";
+    match (find_even([1, 3, 8, 5])) {
+        case Some(x): { check("found", string(x), "8"); }
+        case None: { fail("expected Some"); }
+    }
+    match (find_even([1, 3])) {
+        case Some(x): { fail("expected None"); }
+        case None: { print "  none = ok"; }
+    }
+
+    print "Result and the ? operator";
+    check("valid", describe(next_year("41")), "ok 42");
+    check("invalid", describe(next_year("abc")), "error not a number: abc");
+    check("negative", describe(next_year("-5")), "error negative age");
+
+    print "structs-enums-ok";
+}
+run main;

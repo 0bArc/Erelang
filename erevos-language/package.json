@@ -3,7 +3,7 @@
   "displayName": "Erelang Language",
   "publisher": "localdev",
   "description": "LSP, DAP debugger, and syntax highlighting for Erelang (.elan)",
-  "version": "0.0.36",
+  "version": "0.1.1",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -152,7 +152,7 @@
         "erelang.executablePath": {
           "type": "string",
           "default": "",
-          "description": "Path to erelang.exe (for LSP --check and DAP). Empty = search build/bin and PATH."
+          "description": "Path to erelang.exe (for LSP --check and DAP). Empty = search build/debug, build/release and PATH."
         }
       }
     },
@@ -278,7 +278,8 @@
   "main": "./out/extension.js",
   "scripts": {
     "build:icon": "powershell -NoProfile -ExecutionPolicy Bypass -File ../tools/build-erelang-icon.ps1",
-    "vscode:prepublish": "npm run build:icon && npm run compile",
+    "vscode:prepublish": "npm run build:icon && npm run gen && npm run compile",
+    "gen": "powershell -NoProfile -ExecutionPolicy Bypass -File ../tools/gen-extension-manifest.ps1",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "package": "vsce package --allow-missing-repository -o erelang_language.vsix",

@@ -2,3 +2,5 @@ out/test/**
 src/**
 **/*.map
 **/*.ts
+test/**
+*.vsix

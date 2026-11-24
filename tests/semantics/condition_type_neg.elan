@@ -1,0 +1,6 @@
+// expect: TC060
+@strict
+action main() {
+    if (1) { print "unreachable"; }
+}
+run main;

@@ -478,6 +478,11 @@ ExprPtr Parser::parse_expression() {
     else if (match(TokenKind::SlashAssign))  op = BinOp::Div;
     else if (match(TokenKind::PercentAssign))op = BinOp::Mod;
     else if (match(TokenKind::PowAssign))    op = BinOp::Pow;
+    else if (match(TokenKind::AmpAssign))    op = BinOp::BitAnd;
+    else if (match(TokenKind::PipeAssign))   op = BinOp::BitOr;
+    else if (match(TokenKind::CaretAssign))  op = BinOp::BitXor;
+    else if (match(TokenKind::ShlAssign))    op = BinOp::Shl;
+    else if (match(TokenKind::ShrAssign))    op = BinOp::Shr;
     else isCompound = false;
     if (isCompound) {
         auto right = parse_expression();
@@ -677,8 +682,9 @@ ExprPtr Parser::parse_primary() {
                 call.name = std::string("string.") + ident_text(methodTok);
                 call.args.push_back(target);
                 expect(TokenKind::LParen, "(");
+                skip_separators();
                 if (!match(TokenKind::RParen)) {
-                    do { call.args.push_back(parse_expression()); } while (match(TokenKind::Comma));
+                    do { skip_separators(); call.args.push_back(parse_expression()); skip_separators(); } while (match(TokenKind::Comma));
                     expect(TokenKind::RParen, ")");
                 }
                 target = std::make_shared<Expr>(Expr{ call });
@@ -701,16 +707,27 @@ ExprPtr Parser::parse_primary() {
                 call.name = std::string(".") + ident_text(methodTok);
                 call.args.push_back(target);
                 expect(TokenKind::LParen, "(");
+                skip_separators();
                 if (!match(TokenKind::RParen)) {
-                    do { call.args.push_back(parse_expression()); } while (match(TokenKind::Comma));
+                    do { skip_separators(); call.args.push_back(parse_expression()); skip_separators(); } while (match(TokenKind::Comma));
                     expect(TokenKind::RParen, ")");
                 }
                 target = std::make_shared<Expr>(Expr{ call });
                 continue;
             }
-            if (match(TokenKind::Question)) {
-                target = std::make_shared<Expr>(Expr{ TryExpr{ target } });
-                continue;
+            // `expr?` is the try operator; `cond ? a : b` is a ternary. A `?` followed by something
+            // that starts an expression belongs to the ternary.
+            if (peek().kind == TokenKind::Question) {
+                const TokenKind next = peek(1).kind;
+                const bool startsExpr = next == TokenKind::Number || next == TokenKind::String ||
+                    next == TokenKind::Word || next == TokenKind::Keyword || next == TokenKind::LParen ||
+                    next == TokenKind::LBracket || next == TokenKind::Minus || next == TokenKind::Bang ||
+                    next == TokenKind::Tilde;
+                if (!startsExpr) {
+                    consume();
+                    target = std::make_shared<Expr>(Expr{ TryExpr{ target } });
+                    continue;
+                }
             }
             break;
         }
@@ -721,7 +738,7 @@ ExprPtr Parser::parse_primary() {
     if ((t.kind == TokenKind::Word || t.kind == TokenKind::Keyword) && t.text == "await") {
         consume();
         auto inner = parse_primary();
-        // `await expr?` is `(await expr)?` — postfix `?` binds to the awaited value.
+        // `await expr?` is `(await expr)?`: postfix `?` binds to the awaited value.
         if (inner && std::holds_alternative<TryExpr>(inner->node)) {
             auto te = std::get<TryExpr>(inner->node);
             auto awaited = std::make_shared<Expr>(Expr{ AwaitExpr{ te.inner } });
@@ -997,8 +1014,9 @@ ExprPtr Parser::parse_primary() {
         const std::string derivedType = parse_type_annotation();
         if (peek().kind == TokenKind::Greater) consume();
         if (match(TokenKind::LParen)) {
+            skip_separators();
             if (!match(TokenKind::RParen)) {
-                do { call.args.push_back(parse_expression()); } while (match(TokenKind::Comma));
+                do { skip_separators(); call.args.push_back(parse_expression()); skip_separators(); } while (match(TokenKind::Comma));
                 expect(TokenKind::RParen, ")");
             }
         }
@@ -1083,24 +1101,38 @@ ExprPtr Parser::parse_primary() {
         // function call: ident(...) or ident<T>(...)
         if (match(TokenKind::LParen)) {
             FunctionCallExpr call; call.name = baseName; call.typeArgs = std::move(callTypeArgs);
+            skip_separators();
             if (!match(TokenKind::RParen)) {
-                do { call.args.push_back(parse_expression()); } while (match(TokenKind::Comma));
+                do { skip_separators(); call.args.push_back(parse_expression()); skip_separators(); } while (match(TokenKind::Comma));
                 expect(TokenKind::RParen, ")");
             }
             return apply_postfix(std::make_shared<Expr>(Expr{ call }));
         }
-        // One dotted segment: Type.Variant / obj.field — further `.method()` via apply_postfix
+        // One dotted segment: Type.Variant / obj.field: further `.method()` via apply_postfix
         if (match(TokenKind::Dot)) {
             const Token& mem = consume();
             if (!(mem.kind == TokenKind::Word || mem.kind == TokenKind::Keyword)) {
                 throw std::runtime_error("Expected member name after '.'");
             }
             const std::string member = ident_text(mem);
-            const std::string dottedName = baseName + "." + member;
+            std::string dottedName = baseName + "." + member;
+            // builtin/ai has groups: ai.regex.generate(...) and ai.infer.regex(...) fold into one call name.
+            if (peek().kind == TokenKind::Dot && programImports_) {
+                bool aiAlias = false;
+                for (const auto& imp : *programImports_) {
+                    if (imp.alias && *imp.alias == baseName && imp.path.find("builtin/ai") != std::string::npos) aiAlias = true;
+                }
+                while (aiAlias && peek().kind == TokenKind::Dot &&
+                       (peek(1).kind == TokenKind::Word || peek(1).kind == TokenKind::Keyword)) {
+                    consume();
+                    dottedName += "." + ident_text(consume());
+                }
+            }
             if (match(TokenKind::LParen)) {
                 FunctionCallExpr call; call.name = dottedName;
+                skip_separators();
                 if (!match(TokenKind::RParen)) {
-                    do { call.args.push_back(parse_expression()); } while (match(TokenKind::Comma));
+                    do { skip_separators(); call.args.push_back(parse_expression()); skip_separators(); } while (match(TokenKind::Comma));
                     expect(TokenKind::RParen, ")");
                 }
                 return apply_postfix(std::make_shared<Expr>(Expr{ call }));
@@ -1229,7 +1261,7 @@ Block Parser::parse_block(bool allowImplicit) {
         } catch (const std::exception& ex) {
             const std::string msg = ex.what() ? std::string(ex.what()) : std::string{};
             // Record the error and recover within the block so the rest of the
-            // statements still parse — this prevents one bad line from producing
+            // statements still parse: this prevents one bad line from producing
             // a flood of cascade "Unexpected top-level token" errors.
             pendingErrors_.push_back(format_parse_error(sourceName_, peek(), msg.empty() ? "Parse error" : msg));
             synchronize_block();
@@ -1571,13 +1603,16 @@ Statement Parser::parse_statement() {
                 expect(TokenKind::RBrace, "} after collection size");
             }
             ExprPtr val;
+            bool defaultInit = false;
             if (match(TokenKind::Assign)) {
                 val = parse_expression();
             } else {
                 val = make_default_initializer_for_declared_type(declaredType);
+                defaultInit = true;
             }
             LetStmt decl{ isConstDecl, ident_text(nameTok), val, declaredType };
             decl.sizeExpr = std::move(sizeExpr);
+            decl.defaultInit = defaultInit;
             return decl;
         } catch (...) {
             pos_ = savePos;
@@ -1758,7 +1793,10 @@ Statement Parser::parse_statement() {
         // compound assignment: name op= expr
         if (peek(1).kind == TokenKind::PlusAssign || peek(1).kind == TokenKind::MinusAssign ||
             peek(1).kind == TokenKind::StarAssign || peek(1).kind == TokenKind::SlashAssign ||
-            peek(1).kind == TokenKind::PercentAssign || peek(1).kind == TokenKind::PowAssign) {
+            peek(1).kind == TokenKind::PercentAssign || peek(1).kind == TokenKind::PowAssign ||
+            peek(1).kind == TokenKind::AmpAssign || peek(1).kind == TokenKind::PipeAssign ||
+            peek(1).kind == TokenKind::CaretAssign || peek(1).kind == TokenKind::ShlAssign ||
+            peek(1).kind == TokenKind::ShrAssign) {
             const Token& n = consume(); // name
             BinOp op;
             if (match(TokenKind::PlusAssign))         op = BinOp::Add;
@@ -1766,7 +1804,12 @@ Statement Parser::parse_statement() {
             else if (match(TokenKind::StarAssign))    op = BinOp::Mul;
             else if (match(TokenKind::SlashAssign))   op = BinOp::Div;
             else if (match(TokenKind::PercentAssign)) op = BinOp::Mod;
-            else { consume(); op = BinOp::Pow; }
+            else if (match(TokenKind::PowAssign))     op = BinOp::Pow;
+            else if (match(TokenKind::AmpAssign))     op = BinOp::BitAnd;
+            else if (match(TokenKind::PipeAssign))    op = BinOp::BitOr;
+            else if (match(TokenKind::CaretAssign))   op = BinOp::BitXor;
+            else if (match(TokenKind::ShlAssign))     op = BinOp::Shl;
+            else { consume(); op = BinOp::Shr; }
             auto v = parse_expression();
             auto left = std::make_shared<Expr>(Expr{ ExprIdent{ ident_text(n) } });
             return ExprStmt{ std::make_shared<Expr>(Expr{ CompoundAssignExpr{ op, left, v } }) };
@@ -1802,12 +1845,13 @@ Statement Parser::parse_statement() {
         }
         call.typeArgs = try_parse_call_type_args();
         if (match(TokenKind::LParen)) {
+            skip_separators();
             if (!match(TokenKind::RParen)) {
-                do { call.args.push_back(parse_expression()); } while (match(TokenKind::Comma));
+                do { skip_separators(); call.args.push_back(parse_expression()); skip_separators(); } while (match(TokenKind::Comma));
                 expect(TokenKind::RParen, ")");
             }
         } else {
-            throw std::runtime_error("Action calls require `()` — use `" + call.name + "()` not `" + call.name + "`");
+            throw std::runtime_error("Action calls require `()`: use `" + call.name + "()` not `" + call.name + "`");
         }
         return call;
     }
@@ -1928,7 +1972,7 @@ Program Parser::parse_program() {
                     if (braceDepth == 0) break; // consumed the closing brace of the bad block
                     continue;
                 }
-                // depth == 0: stray closing brace — consume and stop
+                // depth == 0: stray closing brace: consume and stop
                 consume();
                 break;
             }

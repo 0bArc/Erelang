@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include <map>
 #include "erelang/runtime_helpers.hpp"
 
 #include <algorithm>
@@ -39,6 +40,9 @@ void destroy_shared_if_unused(int id) {
     it->second.payload = Value::null_value();
     if (it->second.weak <= 0) g_shareds.erase(it);
 }
+
+using ViewKey = std::pair<const void*, std::size_t>;
+std::map<ViewKey, int> g_ptrViews;
 
 } // namespace
 
@@ -88,6 +92,20 @@ void mem_free_ptr(const Value& ptr) {
     if (g_freedPtrIds.count(id) || (!g_rawMem.count(id) && !g_ptrs.count(id))) {
         g_memStats.double_frees += 1;
         throw std::runtime_error("free: invalid or already freed pointer");
+    }
+    // Freeing a block also invalidates every `p + k` view into it.
+    if (auto* raw = raw_at(id); raw && raw->cells) {
+        const void* cells = raw->cells.get();
+        for (auto it = g_ptrViews.begin(); it != g_ptrViews.end();) {
+            if (it->first.first == cells) {
+                g_rawMem.erase(it->second);
+                g_ptrs.erase(it->second);
+                g_freedPtrIds.insert(it->second);
+                it = g_ptrViews.erase(it);
+            } else {
+                ++it;
+            }
+        }
     }
     g_rawMem.erase(id);
     g_ptrs.erase(id);
@@ -257,15 +275,21 @@ Value mem_ptr_add(const Value& ptr, std::int64_t delta) {
     const int id = *idOpt;
     auto* raw = raw_at(id);
     if (!raw || !raw->cells) throw std::runtime_error("pointer arithmetic requires typed alloc");
-    const int newId = g_nextPtrId++;
-    RawMemBlock view = *raw;
     const std::int64_t next = static_cast<std::int64_t>(raw->index) + delta;
     if (next < 0) throw std::runtime_error("pointer arithmetic underflow");
-    view.index = static_cast<std::size_t>(next);
+    if (delta == 0) return ptr;
+    // One view per (block, offset): `p + i` in a loop reuses ids instead of growing the tables.
+    const ViewKey key{raw->cells.get(), static_cast<std::size_t>(next)};
+    if (auto it = g_ptrViews.find(key); it != g_ptrViews.end() && g_rawMem.count(it->second)) {
+        return make_handle_value(HandleKind::Ptr, static_cast<uint32_t>(it->second));
+    }
+    const int newId = g_nextPtrId++;
+    RawMemBlock view = *raw;
+    view.index = key.second;
     g_rawMem[newId] = std::move(view);
-    // Views share `cells`; the byte shadow is only a validity marker for them. Copying the
-    // parent's shadow made every `p + k` O(block size).
+    // Views share `cells`; the byte shadow is only a validity marker for them.
     g_ptrs[newId] = std::string{};
+    g_ptrViews[key] = newId;
     return make_handle_value(HandleKind::Ptr, static_cast<uint32_t>(newId));
 }
 

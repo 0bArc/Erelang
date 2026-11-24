@@ -33,6 +33,7 @@ option(BUILD_SHARED_RUNTIME "Build erelang as a shared DLL (erelang.dll). OFF = 
 option(BUILD_DEBUGGER_EXE "Build debug.exe helper via --make-debug after erelang links" OFF)
 option(ERELANG_BUNDLE_MINGW_RUNTIME "Copy MinGW runtime DLLs next to erelang.exe for portable sharing" ON)
 option(ERELANG_AUTO_UPDATE_EXTENSION "Auto package/install VS Code extension after erelang build" OFF)
+option(ERELANG_UPDATE_PATH "Put this build's bin folder first on the user PATH after building erelang" ON)
 option(ERELANG_EXPERIMENTAL "Build creation kit, thread and monitor builtins" ON)
 
 set(_ERELANG_EXPERIMENTAL_SOURCES experimental/disabled_builtin_stubs.cpp)
@@ -60,7 +61,11 @@ else()
   add_compile_options($<$<CONFIG:Release>:-O2> $<$<CONFIG:Release>:-ffunction-sections>
                       $<$<CONFIG:Release>:-fdata-sections> $<$<CONFIG:Release>:-fvisibility=hidden>
                       $<$<CONFIG:Release>:-fvisibility-inlines-hidden>)
-  add_link_options($<$<CONFIG:Release>:-Wl,--gc-sections> $<$<CONFIG:Release>:-Wl,--strip-all>)
+  if (APPLE)
+    add_link_options($<$<CONFIG:Release>:-Wl,-dead_strip>)
+  else()
+    add_link_options($<$<CONFIG:Release>:-Wl,--gc-sections> $<$<CONFIG:Release>:-Wl,--strip-all>)
+  endif()
   # No IPO/LTO for MinGW/GCC: known ICE with <filesystem> + DLL link.
 endif()
 
@@ -74,8 +79,14 @@ add_library(erelang STATIC
     src/runtime/bytecode.cpp
     src/runtime/eval.cpp
     src/runtime/actions.cpp
+    src/runtime/exec_stmt.cpp
+    src/runtime/exec_decl.cpp
+    src/runtime/exec_calls.cpp
     src/runtime/debug.cpp
     src/runtime/imports.cpp
+    src/runtime/builtin_registry.cpp
+    src/runtime/module_registry.cpp
+    src/runtime/modules_all.cpp
     src/runtime/builtins.cpp
     src/runtime/mini_ir_vm.cpp
   src/erodsl/spec.cpp
@@ -83,9 +94,16 @@ add_library(erelang STATIC
   src/runtime/builtins/network.cpp
   src/runtime/builtins/system.cpp
   src/runtime/builtins/websocket.cpp
+  src/runtime/builtins/net_platform.cpp
   src/runtime/builtins/crypto.cpp
   src/runtime/builtins/data.cpp
   src/runtime/builtins/regex.cpp
+  src/runtime/builtins/json.cpp
+  src/runtime/builtins/ai.cpp
+  src/runtime/builtins/ai_infer.cpp
+  src/runtime/builtins/ai_nl.cpp
+  src/runtime/builtins/ai_regex_tools.cpp
+  src/runtime/builtins/ai_text.cpp
   src/runtime/builtins/perm.cpp
   src/runtime/builtins/binary.cpp
   src/runtime/builtins/performance.cpp
@@ -246,10 +264,17 @@ elseif (BUILD_SHARED_RUNTIME)
     src/runtime/builtins/math.cpp
     src/runtime/builtins/network.cpp
     src/runtime/builtins/websocket.cpp
+    src/runtime/builtins/net_platform.cpp
     src/runtime/builtins/system.cpp
     src/runtime/builtins/crypto.cpp
     src/runtime/builtins/data.cpp
     src/runtime/builtins/regex.cpp
+    src/runtime/builtins/json.cpp
+    src/runtime/builtins/ai.cpp
+    src/runtime/builtins/ai_infer.cpp
+    src/runtime/builtins/ai_nl.cpp
+    src/runtime/builtins/ai_regex_tools.cpp
+    src/runtime/builtins/ai_text.cpp
     src/runtime/builtins/perm.cpp
     src/runtime/builtins/binary.cpp
     src/runtime/builtins/performance.cpp
@@ -269,8 +294,14 @@ elseif (BUILD_SHARED_RUNTIME)
     src/runtime/bytecode.cpp
     src/runtime/eval.cpp
     src/runtime/actions.cpp
+    src/runtime/exec_stmt.cpp
+    src/runtime/exec_decl.cpp
+    src/runtime/exec_calls.cpp
     src/runtime/debug.cpp
     src/runtime/imports.cpp
+    src/runtime/builtin_registry.cpp
+    src/runtime/module_registry.cpp
+    src/runtime/modules_all.cpp
     src/runtime/builtins.cpp
     src/runtime/mini_ir_vm.cpp
     src/runtime/cabi_exports.cpp
@@ -316,26 +347,15 @@ if (WIN32)
             "$<TARGET_FILE_DIR:erelang_runner>/obs.exe"
     COMMENT "Creating legacy runner alias obs.exe"
   )
-  # Always refresh build/bin/Debug — that dir is first on PATH for instant `erelang`.
-  # Also mirror to build/bin and %LOCALAPPDATA%/Erelang/bin as fallbacks.
-  add_custom_command(TARGET erelang_runner POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${_OB_OUTPUT_BIN}/Debug"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "$<TARGET_FILE:erelang_runner>"
-            "${_OB_OUTPUT_BIN}/Debug/erelang.exe"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${_OB_OUTPUT_BIN}"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "$<TARGET_FILE:erelang_runner>"
-            "${_OB_OUTPUT_BIN}/erelang.exe"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "$ENV{LOCALAPPDATA}/Erelang/bin"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "$<TARGET_FILE:erelang_runner>"
-            "$ENV{LOCALAPPDATA}/Erelang/bin/erelang.exe"
-    COMMAND ${CMAKE_COMMAND}
-      -DBIN_DIR=${_OB_OUTPUT_BIN}/Debug
-      -P ${CMAKE_SOURCE_DIR}/tools/cmake/ensure-erelang-path.cmake
-    COMMENT "Installing erelang.exe to build/bin/Debug (PATH)"
-  )
+  if (ERELANG_UPDATE_PATH)
+    add_custom_command(TARGET erelang_runner POST_BUILD
+      COMMAND ${CMAKE_COMMAND}
+        -DBIN_DIR=$<TARGET_FILE_DIR:erelang_runner>
+        -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+        -P ${CMAKE_SOURCE_DIR}/tools/cmake/ensure-erelang-path.cmake
+      COMMENT "Putting this build's erelang.exe first on the user PATH"
+    )
+  endif()
 endif()
 if (WIN32 AND NOT MSVC AND ERELANG_BUNDLE_MINGW_RUNTIME)
   add_custom_command(TARGET erelang_runner POST_BUILD
@@ -355,11 +375,15 @@ endif()
 target_compile_definitions(erelang_runner PRIVATE ERELANG_STATIC_RUNNER=1)
 set_property(TARGET erelang_runner PROPERTY INTERPROCEDURAL_OPTIMIZATION OFF)
 if (NOT MSVC)
-  target_link_options(erelang_runner PRIVATE -s)
+  # Keep symbols in debug and profiling builds (gprof needs them).
+  target_link_options(erelang_runner PRIVATE $<$<NOT:$<CONFIG:Debug,RelWithDebInfo>>:-s>)
   target_compile_options(erelang_runner PRIVATE -fno-lto)
   target_link_options(erelang_runner PRIVATE -fno-lto)
   # Mini-compiler recursive lower of expanded compiler/*.elan needs a large stack.
-  target_link_options(erelang_runner PRIVATE -Wl,--stack,67108864)
+  # On Linux and macOS obs_main.cpp runs the interpreter on a thread with the same stack size.
+  if (WIN32)
+    target_link_options(erelang_runner PRIVATE -Wl,--stack,67108864)
+  endif()
 else()
   target_link_options(erelang_runner PRIVATE /STACK:67108864)
 endif()
@@ -427,6 +451,27 @@ foreach(_ob_warn_target IN ITEMS erelang erelang_runner obc)
     target_compile_options(${_ob_warn_target} PRIVATE -Wall -Wextra)
   endif()
 endforeach()
+
+# Linux and macOS: libcurl (HTTP client), OpenSSL (TLS for wss://, AES-GCM, random bytes),
+# threads and the dynamic loader (plugins).
+if (NOT WIN32)
+  # Homebrew installs OpenSSL outside the default search paths.
+  if (APPLE AND NOT DEFINED OPENSSL_ROOT_DIR)
+    execute_process(COMMAND brew --prefix openssl@3
+      OUTPUT_VARIABLE _ob_brew_openssl OUTPUT_STRIP_TRAILING_WHITESPACE
+      RESULT_VARIABLE _ob_brew_rc ERROR_QUIET)
+    if (_ob_brew_rc EQUAL 0 AND EXISTS "${_ob_brew_openssl}")
+      set(OPENSSL_ROOT_DIR "${_ob_brew_openssl}")
+    endif()
+  endif()
+  find_package(CURL REQUIRED)
+  find_package(OpenSSL REQUIRED)
+  find_package(Threads REQUIRED)
+  target_link_libraries(erelang PUBLIC CURL::libcurl OpenSSL::SSL OpenSSL::Crypto Threads::Threads ${CMAKE_DL_LIBS})
+  if (TARGET erelang_shared)
+    target_link_libraries(erelang_shared PUBLIC CURL::libcurl OpenSSL::SSL OpenSSL::Crypto Threads::Threads ${CMAKE_DL_LIBS})
+  endif()
+endif()
 
 # Windows-specific UI/linking settings
 if (WIN32)

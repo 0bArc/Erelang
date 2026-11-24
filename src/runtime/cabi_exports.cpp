@@ -1,3 +1,4 @@
+#include "erelang/module_registry.hpp"
 #include "erelang/cabi.h"
 #include <filesystem>
 #include <fstream>
@@ -147,6 +148,7 @@ static int run_programs(std::vector<Program>& ordered, int argc, const char* arg
 extern "C" {
 
 OB_API int ob_run_file(const char* main_file, int argc, const char* argv[], int flags, char** out_error) {
+    erelang::modules::link_all_modules();
     try {
         if (!main_file) {
             set_error_string(out_error, "ob_run_file: main_file is null");

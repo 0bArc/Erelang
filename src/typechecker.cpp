@@ -1,4 +1,5 @@
 #include "erelang/typechecker.hpp"
+#include "erelang/builtin_registry.hpp"
 #include "erelang/runtime_imports.hpp"
 #include <algorithm>
 #include <cctype>
@@ -84,16 +85,16 @@ std::optional<std::string> hint_for_unknown_call(const std::string& name) {
     auto starts = [&](const char* prefix) { return name.rfind(prefix, 0) == 0; };
     if (starts("file_") || name == "fopen" || name == "fread" || name == "fwrite" ||
         name == "fclose" || name == "fseek" || name == "ftell" || name == "fflush") {
-        return "Filesystem API — `#include <std/fs>` (or `<builtin/fs> as fs`), then `fs.open` / handle methods";
+        return "Filesystem API: `#include <std/fs>` (or `<builtin/fs> as fs`), then `fs.open` / handle methods";
     }
     if (starts("chan_") || name == "chan_new") {
-        return "Pipe API — `#include <std/pipe>`, then `pipe.new` / `p.send` / `p.receive`";
+        return "Pipe API: `#include <std/pipe>`, then `pipe.new` / `p.send` / `p.receive`";
     }
     if (name == "future_cancel" || name == "future_done") {
         return "Use future methods: `fut.cancel()` / `fut.done()`";
     }
     if (starts("strbuf_") || starts("ptr_") || name == "make_unique" || name == "make_shared") {
-        return "Removed low-level global — use string methods, `heap<T>`, `shared<T>`, or `buffer<T>`";
+        return "Removed low-level global: use string methods, `heap<T>`, `shared<T>`, or `buffer<T>`";
     }
     if (name == "toint" || name == "toInt" || name == "tostr" || name == "toString" || name == "tofloat" || name == "tobool") {
         return "Use type constructors: `int(...)`, `string(...)`, `float(...)`, `bool(...)`";
@@ -101,17 +102,20 @@ std::optional<std::string> hint_for_unknown_call(const std::string& name) {
     if (starts("dict_") || starts("list_")) {
         return "Use array/map literals (`[…]`, `{k: v}`) instead of list_/dict_ constructors";
     }
+    if (starts("ai_")) {
+        return "AI builtin: add `#include <builtin/ai> as ai`";
+    }
     if (starts("regex_")) {
-        return "Regex builtin — add `#include <builtin/regex> as regex`";
+        return "Regex builtin: add `#include <builtin/regex> as regex`";
     }
     if (starts("sha") || starts("hash_") || name == "md5" || starts("aes_")) {
-        return "Crypto builtin — add `#include <builtin/crypto> as crypto`, then `crypto.sha256(...)`";
+        return "Crypto builtin: add `#include <builtin/crypto> as crypto`, then `crypto.sha256(...)`";
     }
     if (starts("thread_") || name == "spawn_thread") {
-        return "Threads builtin — add `#include <builtin/threads> as threads`";
+        return "Threads builtin: add `#include <builtin/threads> as threads`";
     }
     if (starts("net_") || name == "http_get" || name == "http_post") {
-        return "Network builtin — add `#include <builtin/network> as net`";
+        return "Network builtin: add `#include <builtin/network> as net`";
     }
     return std::nullopt;
 }
@@ -249,6 +253,8 @@ bool TypeChecker::is_assignable(const TypeInfo& from, const TypeInfo& to) const 
     if (from.name == "unknown" && (to.name.rfind("enum:", 0) == 0 || to.name.rfind("struct:", 0) == 0)) return true;
     if (to.name == "unknown" || from.name == "unknown") return false;
     if (types_equal(from, to)) return true;
+    // An int widens to a float without a cast (float f = 3;).
+    if (is_double(to) && is_int(from)) return true;
 
     auto is_fun = [](const std::string& n) {
         return n.rfind("action(", 0) == 0;
@@ -820,27 +826,16 @@ static std::optional<TypeInfo> collection_method_type(const TypeChecker& tc, con
         if (t == "any") return {"unknown"};
         return tc.resolve_type(t, ctx.program, nullptr);
     };
-    auto is = [&](std::initializer_list<const char*> names) {
-        for (const char* n : names) if (method == n) return true;
-        return false;
-    };
-    if (isArray) {
-        if (is({"len", "length", "size", "capacity", "find", "index_of"})) return TypeInfo{"int"};
-        if (is({"empty", "contains", "erase", "remove", "remove_at"})) return TypeInfo{"bool"};
-        if (is({"get", "at", "front", "back", "first", "last", "pop", "pop_back"})) return arg(0);
-        if (is({"push", "append", "push_back", "emplace_back", "emplace", "insert", "set", "clear",
-                "reserve", "shrink_to_fit"})) return TypeInfo{"void"};
-        if (method == "join") return TypeInfo{"string"};
-        return std::nullopt;
-    }
-    if (is({"len", "length", "size"})) return TypeInfo{"int"};
-    if (is({"has", "contains", "containsKey", "count", "remove", "erase", "empty"})) return TypeInfo{"bool"};
-    if (is({"get", "at", "getOr", "get_or", "get_or_default", "getOrDefault"})) return arg(1);
-    if (method == "keys") return TypeInfo{"array<" + arg(0).name + ">"};
-    if (method == "values") return TypeInfo{"array<" + arg(1).name + ">"};
-    if (method == "clone") return TypeInfo{recvType};
-    if (is({"set", "put", "insert", "clear", "merge"})) return TypeInfo{"void"};
-    return std::nullopt;
+    const registry::TypeMember* m = registry::type_member(isArray ? "array" : "map", method);
+    if (!m) return std::nullopt;
+    const std::string ret = m->returns;
+    if (ret == "T") return arg(0);
+    if (ret == "K") return arg(0);
+    if (ret == "V") return arg(1);
+    if (ret == "array<K>") return TypeInfo{"array<" + arg(0).name + ">"};
+    if (ret == "array<V>") return TypeInfo{"array<" + arg(1).name + ">"};
+    if (ret == "self") return TypeInfo{recvType};
+    return TypeInfo{ret};
 }
 
 // ================= ExprChecker =================
@@ -928,6 +923,12 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
             switch (node.op) {
                 case BinOp::Add:
                     if (TypeChecker::is_int(lt) && TypeChecker::is_int(rt)) { inferred = {"int"}; break; }
+                    if (TypeChecker::is_number(lt) && TypeChecker::is_number(rt)) { inferred = {"double"}; break; }
+                    if (TypeChecker::is_open(lt) || TypeChecker::is_open(rt)) {
+                        // any/unknown: the runtime decides (number + number, or concatenation).
+                        inferred = (TypeChecker::is_string(lt) || TypeChecker::is_string(rt)) ? TypeInfo{"string"} : TypeInfo{"any"};
+                        break;
+                    }
                     if (TypeChecker::is_string(lt) && TypeChecker::is_string(rt)) { inferred={"string"}; break; }
                     if ((!lt.name.empty() && lt.name.front() == '*') && TypeChecker::is_int(rt)) {
                         inferred = lt;
@@ -942,6 +943,9 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
                     break;
                 case BinOp::Sub: case BinOp::Mul: case BinOp::Div: case BinOp::Mod: case BinOp::Pow:
                     if (TypeChecker::is_int(lt) && TypeChecker::is_int(rt)) { inferred = {"int"}; break; }
+                    if (TypeChecker::is_number(lt) && TypeChecker::is_number(rt)) { inferred = {"double"}; break; }
+                    if ((TypeChecker::is_open(lt) || TypeChecker::is_number(lt)) &&
+                        (TypeChecker::is_open(rt) || TypeChecker::is_number(rt))) { inferred = {"any"}; break; }
                     if (node.op == BinOp::Sub && (!lt.name.empty() && lt.name.front() == '*') && TypeChecker::is_int(rt)) {
                         inferred = lt;
                         break;
@@ -952,6 +956,8 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
                     break;
                 case BinOp::BitAnd: case BinOp::BitXor: case BinOp::BitOr: case BinOp::Shl: case BinOp::Shr:
                     if (TypeChecker::is_int(lt) && TypeChecker::is_int(rt)) { inferred = {"int"}; break; }
+                    if ((TypeChecker::is_open(lt) || TypeChecker::is_int(lt)) &&
+                        (TypeChecker::is_open(rt) || TypeChecker::is_int(rt))) { inferred = {"int"}; break; }
                     DiagBuilder(result_, Severity::Error, "Invalid bitwise operand types: " + lt.name + " " + rt.name, "TC013", ctx.actionName())
                         .hint("Bitwise operators require int operands").emit();
                     inferred = {"unknown"};
@@ -1147,9 +1153,9 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
         } else if constexpr (std::is_same_v<T, ListLiteralExpr>) {
             if (node.elements.empty()) {
                 DiagBuilder(result_, Severity::Error,
-                    "Empty array literal `[]` is not allowed — provide at least one element or use a typed declaration with a default value",
+                    "Empty array literal `[]` is not allowed: provide at least one element or use a typed declaration with a default value",
                     "TC055", ctx.actionName())
-                    .hint("Example: `Array<string> items = [\"first\"];` — empty collections must be initialized with values")
+                    .hint("Example: `Array<string> items = [\"first\"];`: empty collections must be initialized with values")
                     .emit();
                 inferred = {"array<any>"};
                 return;
@@ -1269,7 +1275,7 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
         } else if constexpr (std::is_same_v<T, DictLiteralExpr>) {
             if (node.entries.empty()) {
                 DiagBuilder(result_, Severity::Error,
-                    "Empty map literal `{}` is not allowed — provide at least one key-value pair",
+                    "Empty map literal `{}` is not allowed: provide at least one key-value pair",
                     "TC056", ctx.actionName())
                     .hint("Example: `Map<string,string> config = {\"key\": \"value\"};`")
                     .emit();
@@ -1418,6 +1424,21 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
                             inferred = *typed;
                             return;
                         }
+                        // Method declared on the variable's struct: use its declared return type.
+                        if (tn.rfind("struct:", 0) == 0) {
+                            std::string structName = tn.substr(7);
+                            if (const auto lt = structName.find('<'); lt != std::string::npos) structName.resize(lt);
+                            if (auto sit = tc_.structs_.find(structName); sit != tc_.structs_.end() && sit->second) {
+                                for (const auto& m : sit->second->methods) {
+                                    if (m.name != method) continue;
+                                    for (const auto& arg : node.args) (void)check(arg, ctx);
+                                    inferred = m.returnType.empty() ? TypeInfo{"void"}
+                                                                    : tc_.resolve_type(m.returnType, ctx.program, nullptr);
+                                    if (inferred.name == "unknown") inferred = {"any"};
+                                    return;
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1541,7 +1562,7 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
             }
 
             if (!enumConstructed) {
-            // Enum methods: recv.method / chained .method() — same path as struct methods
+            // Enum methods: recv.method / chained .method(): same path as struct methods
             {
                 std::string methodName;
                 TypeInfo recvType{"unknown"};
@@ -1808,15 +1829,30 @@ TypeInfo ExprChecker::check(const ExprPtr& e, CheckContext& ctx) {
                             node.name.find("::") == std::string::npos) {
                             // Check if name is a variable in scope (possibly a func:N handle)
                             if (ctx.scopes && ctx.scopes->lookup(node.name)) {
-                                // Variable exists in scope — treat as function handle call
+                                // Variable exists in scope: treat as function handle call
                                 inferred = {"string"};
                             } else {
                                 emit_unknown_call(result_, node.name, ctx.actionName());
                                 inferred = {"unknown"};
                             }
                         } else {
-                            // Handle/struct method call - returns string
-                            inferred = {"string"};
+                            // Method on a handle held in a string variable (sock.recv(), p.alive()).
+                            // Use the return type the registry lists for that method name when the
+                            // handle kinds agree on it; otherwise leave the type open.
+                            const std::string method = node.name.substr(node.name.rfind('.') + 1);
+                            std::string found;
+                            bool ambiguous = false;
+                            for (const auto& spec : registry::types()) {
+                                const std::string_view kind = spec.kind;
+                                if (kind == "array" || kind == "map") continue;
+                                for (const auto& m : spec.members) {
+                                    if (method != m.name) continue;
+                                    if (found.empty()) found = m.returns;
+                                    else if (found != m.returns) ambiguous = true;
+                                }
+                            }
+                            if (!found.empty() && !ambiguous) inferred = {found};
+                            else inferred = {found.empty() ? "string" : "unknown"};
                         }
                     }
                 } else {
@@ -2049,7 +2085,7 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                     auto actionIt = tc_.actions_.find(stmt.method);
                     if (actionIt == tc_.actions_.end()) {
                         DiagBuilder(result_, Severity::Error, "Unknown imported action: " + callName, "TC001", ctx.actionName())
-                            .hint("Module `" + stmt.objectName + "` has no exported action `" + stmt.method + "` — check import path and `public action` visibility")
+                            .hint("Module `" + stmt.objectName + "` has no exported action `" + stmt.method + "`: check import path and `public action` visibility")
                             .emit();
                     } else if (actionIt->second->params.size() != stmt.args.size()) {
                         DiagBuilder(result_, Severity::Error,
@@ -2325,6 +2361,14 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                 }
                 // A sized declaration may omit the initializer (empty literal is filled at runtime).
                 vi.type = emptyDefault ? declT : expr_.check(stmt.value, ctx);
+            } else if (stmt.defaultInit && stmt.value &&
+                       ((std::holds_alternative<ListLiteralExpr>(stmt.value->node) &&
+                         std::get<ListLiteralExpr>(stmt.value->node).elements.empty()) ||
+                        (std::holds_alternative<DictLiteralExpr>(stmt.value->node) &&
+                         std::get<DictLiteralExpr>(stmt.value->node).entries.empty()))) {
+                // `Array<string> items;` declares an empty collection. The parser synthesizes the
+                // empty literal, so do not report it as a user-written `[]` (TC055/TC056).
+                vi.type = tc_.resolve_type(stmt.declaredType, ctx.program, nullptr);
             } else {
                 vi.type = expr_.check(stmt.value, ctx);
             }
@@ -2396,8 +2440,11 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
             }
         } else if constexpr (std::is_same_v<T, IfStmt>) {
             expr_.require_bool(stmt.cond, ctx, "TC060", "If condition not bool");
-            auto guardThen = scopes.push();
-            auto rfThen = check_block(*stmt.thenBlk, ctx, scopes, retType);
+            ReturnFlow rfThen;
+            {
+                auto guardThen = scopes.push();
+                rfThen = check_block(*stmt.thenBlk, ctx, scopes, retType);
+            }
             ReturnFlow rfElse = ReturnFlow::NoReturn;
             if (stmt.elseBlk) { auto guardElse = scopes.push(); rfElse = check_block(*stmt.elseBlk, ctx, scopes, retType); }
             if (rfThen == ReturnFlow::AlwaysReturn && rfElse == ReturnFlow::AlwaysReturn) flow = ReturnFlow::AlwaysReturn;
@@ -2432,14 +2479,25 @@ ReturnFlow StmtChecker::check_stmt(const Statement& s, CheckContext& ctx, ScopeM
                 DiagBuilder(result_, Severity::Error,
                     "Loop variable '" + stmt.var + "' must have an explicit type annotation",
                     "TC054", ctx.actionName())
-                    .hint("Add a type before the variable name — e.g. `for (string item : items)` or `for (int n : nums)`")
+                    .hint("Add a type before the variable name: e.g. `for (string item : items)` or `for (int n : nums)`")
                     .emit();
             }
+            const TypeInfo iterT = expr_.check(stmt.iterable, ctx); // iterable validation later
             VarInfo vi; vi.type = {stmt.varType.empty() ? "unknown" : stmt.varType}; vi.assigned=true; scopes.declare(stmt.var, vi);
             if (stmt.valueVar) {
-                VarInfo vv; vv.assigned=true; scopes.declare(*stmt.valueVar, vv);
+                // `for (k, v : map)`: v takes the map's value type when it is known.
+                VarInfo vv; vv.assigned=true;
+                if (iterT.name.rfind("map<", 0) == 0) {
+                    try {
+                        const TypeRef ref = parse_type_ref_string(iterT.name);
+                        if (ref.args.size() == 2 && type_ref_canonical(ref.args[1]) != "any") {
+                            vv.type = tc_.resolve_type(type_ref_canonical(ref.args[1]), ctx.program, nullptr);
+                        }
+                    } catch (...) {
+                    }
+                }
+                scopes.declare(*stmt.valueVar, vv);
             }
-            expr_.check(stmt.iterable, ctx); // iterable validation later
             CheckContext inner = ctx; inner.loop = LoopCtx::InLoop; inner.scopes = ctx.scopes;
             check_block(*stmt.body, inner, scopes, retType);
         } else if constexpr (std::is_same_v<T, TryCatchStmt>) {
@@ -2843,364 +2901,39 @@ TCResult TypeChecker::check(const Program& program) {
 }
 
 void TypeChecker::register_imported_module_builtins(const Program& program) {
-    auto add = [&](std::string n, int minP, int maxP, std::string rt) {
-        builtins_[std::move(n)] = BuiltinInfo{minP, maxP, std::move(rt)};
+    // Arity and return types come from the builtin registry. A builtin reachable through several
+    // script names (net.patch, net.patch_auth) gets the widest arity of those names.
+    auto add = [&](const registry::Member& m) {
+        auto it = builtins_.find(m.builtin);
+        if (it == builtins_.end()) {
+            builtins_[m.builtin] = BuiltinInfo{m.minArgs, m.maxArgs, m.returns};
+            return;
+        }
+        it->second.minParams = std::min(it->second.minParams, m.minArgs);
+        if (it->second.maxParams >= 0) it->second.maxParams = m.maxArgs < 0 ? -1 : std::max(it->second.maxParams, m.maxArgs);
     };
-    if (program_imports_module(&program, "builtin/network") || program_imports_module(&program, "builtin/net")) {
-        add("http_get", 1, 1, "string");
-        add("http_get_auth", 2, 2, "string");
-        add("http_post", 3, 3, "string");
-        add("http_post_auth", 4, 4, "string");
-        add("http_put_auth", 4, 4, "string");
-        add("http_patch_auth", 4, 4, "string");
-        add("http_delete_auth", 2, 2, "string");
-        add("http_status", 1, 1, "string");
-        add("http_download", 2, 2, "bool");
-        add("hls_download_best", 2, 2, "bool");
-        add("url_encode", 1, 1, "string");
-        add("http_create_server", 1, 3, "string");
-        add("http_create_server_tls", 3, 3, "string");
-        // Also register the alias-qualified forms so expressions like
-        //   string s = net.create_server("8080")
-        // resolve without needing a separate FunctionCallExpr -> alias lookup
-        add("net.create_server", 1, 3, "string");
-        add("net.create_server_tls", 3, 3, "string");
-        add("net.get", 1, 1, "string");
-        add("net.get_auth", 2, 2, "string");
-        add("net.post", 3, 3, "string");
-        add("net.post_auth", 4, 4, "string");
-        add("net.put", 3, 3, "string");
-        add("net.put_auth", 4, 4, "string");
-        add("net.patch", 4, 4, "string");
-        add("net.patch_auth", 4, 4, "string");
-        add("net.delete", 1, 1, "string");
-        add("net.delete_auth", 2, 2, "string");
-        add("net.head", 1, 1, "string");
-        add("net.status", 1, 1, "string");
-        add("net.download", 2, 2, "bool");
-        add("net.encode", 1, 1, "string");
-        add("net.json_encode", 1, 1, "string");
-        add("net.json_decode", 1, 1, "string");
-        add("net.get_resp", 1, 1, "string");
-        add("net.udp_bind", 2, 2, "string");
-        add("net.udp", 2, 2, "string");
-        add("network.ip.flush", 0, 0, "string");
-        add("network.ip.release", 0, 1, "string");
-        add("network.ip.renew", 0, 1, "string");
-        add("network.ip.registerdns", 0, 0, "string");
-        add("network.debug.enable", 0, 1, "string");
-        add("network.debug.disable", 0, 0, "string");
-        add("network.debug.status", 0, 0, "string");
-        add("network.debug.last", 0, 0, "string");
-        add("network.debug.clear", 0, 0, "string");
-        add("network.debug.log_tail", 0, 1, "string");
-    }
-    if (program_imports_module(&program, "builtin/tcp") || program_imports_module(&program, "builtin/rawtcp")) {
-        add("tcp.connect", 2, 2, "string");
-    }
-    if (program_imports_module(&program, "builtin/websocket") || program_imports_module(&program, "builtin/ws")) {
-        add("ws_connect", 1, 1, "string");
-        add("ws_send", 2, 2, "bool");
-        add("ws_recv", 1, 1, "string");
-        add("ws_recv_timeout", 2, 2, "string");
-        add("ws_close", 1, 1, "void");
-        add("ws_state", 1, 1, "string");
-        // Alias-qualified forms
-        add("ws.connect", 1, 1, "string");
-        add("ws.recv_timeout", 2, 2, "string");
-        add("ws.broadcast", 1, 1, "bool");
-        add("ws.send_binary", 1, 1, "bool");
-    }
-    if (program_imports_module(&program, "builtin/regex")) {
-        add("regex_match", 2, 2, "bool");
-        add("regex_find", 2, 2, "string");
-        add("regex_replace", 3, 3, "string");
-    }
-    if (program_imports_module(&program, "builtin/crypto") || program_imports_module(&program, "std/crypto")) {
-        add("hash_fnv1a", 1, 1, "string");
-        add("hash_sha256", 1, 1, "string");
-        add("random_bytes", 1, 1, "string");
-        add("aes_encrypt", 2, 2, "string");
-        add("aes_decrypt", 2, 2, "string");
-        add("crypto.sha256", 1, 1, "string");
-        add("crypto.hash", 1, 1, "string");
-        add("crypto.aes_encrypt", 2, 2, "string");
-        add("crypto.aes_decrypt", 2, 2, "string");
-        add("crypto.random_bytes", 1, 1, "string");
-    }
-    if (program_imports_module(&program, "builtin/binary")) {
-        add("bin_new", 0, 0, "string");
-        add("bin_push_u8", 2, 2, "void");
-        add("bin_len", 1, 1, "int");
-        add("bin_hex", 1, 1, "string");
-        add("bin_from_hex", 1, 1, "string");
-        add("bin_get_u8", 2, 2, "int");
-    }
-    if (program_imports_module(&program, "builtin/threads")) {
-        add("thread_run", 1, 2, "string");
-        add("thread_join", 1, 1, "bool");
-        add("thread_join_timeout", 2, 2, "bool");
-        add("thread_done", 1, 1, "bool");
-        add("thread_list", 0, 0, "string");
-        add("thread_wait_all", 0, 0, "void");
-        add("thread_count", 0, 0, "string");
-        add("thread_yield", 0, 0, "void");
-        add("thread_gc", 0, 0, "void");
-        add("thread_gc_all", 0, 0, "void");
-        add("thread_purge", 0, 0, "void");
-        add("thread_remove", 1, 2, "string");
-        add("thread_state", 1, 1, "string");
-        add("thread_sleep", 1, 1, "void");
-        add("thread_result", 1, 1, "any");
-    }
-    if (program_imports_module(&program, "builtin/monitor")) {
-        add("monitor_add", 1, 2, "string");
-        add("monitor_remove", 1, 1, "void");
-        add("monitor_list", 0, 0, "string");
-        add("monitor_info", 1, 1, "string");
-        add("monitor_last_change", 1, 1, "string");
-        add("monitor_set_interval", 2, 2, "void");
-    }
-    if (program_imports_module(&program, "builtin/math")) {
-        add("add", 2, 2, "int"); add("sub", 2, 2, "int"); add("mul", 2, 2, "int"); add("div", 2, 2, "int"); add("mod", 2, 2, "int");
-        add("min", 2, 2, "int"); add("max", 2, 2, "int"); add("abs", 1, 1, "int");
-        add("sin", 1, 1, "int"); add("cos", 1, 1, "int"); add("tan", 1, 1, "int");
-        add("sqrt", 1, 1, "int"); add("pow", 2, 2, "int");
-        add("collatz_len", 1, 1, "int"); add("collatz_sweep", 1, 1, "int");
-        add("collatz_best_n", 0, 0, "int"); add("collatz_best_steps", 0, 0, "int");
-        add("collatz_total_steps", 0, 0, "int"); add("collatz_avg_steps", 0, 0, "int");
-    }
-    if (program_imports_module(&program, "builtin/data")) {
-        add("data_new", 0, 0, "string");
-        add("data_set", 3, 3, "void");
-        add("data_get", 2, 2, "string");
-        add("data_has", 2, 2, "bool");
-        add("data_keys", 1, 1, "string");
-        add("data_save", 2, 2, "void");
-        add("data_load", 1, 1, "string");
-    }
-    if (program_imports_module(&program, "builtin/perm")) {
-        add("perm_grant", 1, 1, "void"); add("perm_revoke", 1, 1, "void");
-        add("perm_has", 1, 1, "bool"); add("perm_list", 0, 0, "string");
-    }
-    if (program_imports_module(&program, "builtin/system") || program_imports_module(&program, "builtin/process") ||
-        program_imports_module(&program, "builtin/proc") || program_imports_module(&program, "std/process") ||
-        program_imports_module(&program, "std/system")) {
-        add("system.cmd", 1, 2, "string");
-        add("system.execute", 1, 3, "int");
-        add("system.output", 0, 0, "string");
-        add("system.last_exit", 0, 0, "int");
-        add("system.ip.flush", 0, 0, "string");
-    }
-    if (program_imports_module(&program, "builtin/performance") || program_imports_module(&program, "builtin/perf")) {
-        add("perf.profile.begin", 1, 1, "void");
-        add("perf.profile.end", 1, 1, "void");
-        add("perf.profile.duration", 1, 1, "string");
-        add("perf.profile.calls", 1, 1, "string");
-        add("perf.profile.report", 0, 0, "string");
-        add("perf.mem.usage", 0, 0, "string");
-        add("perf.mem.peak", 0, 0, "string");
-        add("perf.gc.collect", 0, 0, "void");
-        add("perf.gc.threshold", 1, 1, "void");
-        add("perf.gc.pause", 0, 0, "void");
-        add("perf.gc.resume", 0, 0, "void");
-    }
-    if (program_imports_module(&program, "builtin/path") || program_imports_module(&program, "builtin/erepath") ||
-        program_imports_module(&program, "std/path")) {
-        add("path_join", 1, -1, "string"); add("path_dirname", 1, 1, "string");
-        add("path_basename", 1, 1, "string"); add("path_ext", 1, 1, "string");
-        add("file_exists", 1, 1, "bool");
-    }
-    if (program_imports_module(&program, "builtin/fs") || program_imports_module(&program, "builtin/erefs") ||
-        program_imports_module(&program, "std/fs")) {
-        add("read_text", 1, 1, "string"); add("write_text", 2, 2, "void"); add("append_text", 2, 2, "void");
-        add("file_exists", 1, 1, "bool"); add("is_dir", 1, 1, "bool"); add("is_file", 1, 1, "bool");
-        add("mkdirs", 1, 1, "void"); add("copy_file", 2, 2, "bool");
-        add("move_file", 2, 2, "bool"); add("delete_file", 1, 1, "bool");
-        add("list_files", 1, 1, "array<string>"); add("list_dirs", 1, 1, "array<string>");
-        add("list_regular_files", 1, 1, "array<string>");
-        add("load_elan", 1, 1, "string"); add("load_elan_dir", 1, 1, "unknown");
-        add("call_action", 1, -1, "any");
-        add("cwd", 0, 0, "string"); add("chdir", 1, 1, "bool");
-        add("path_join", 1, -1, "string"); add("path_dirname", 1, 1, "string");
-        add("path_basename", 1, 1, "string"); add("path_ext", 1, 1, "string");
-        add("file_mtime", 1, 1, "int"); add("file_size", 1, 1, "int");
-        add("file_open", 1, 2, "string"); add("file_close", 1, 1, "bool");
-        add("file_read", 1, 2, "string"); add("file_write", 2, 2, "string");
-        add("file_seek", 2, 3, "bool"); add("file_tell", 1, 1, "int");
-        add("file_flush", 1, 1, "bool");
-        add("file_buffer", 1, 2, "bool");
-        add("fs.open", 1, 2, "string"); add("fs.close", 1, 1, "bool");
-        add("fs.read", 1, 1, "string"); add("fs.write", 2, 2, "void");
-        add("fs.append", 2, 2, "void"); add("fs.exists", 1, 1, "bool");
-    }
-    if (program_imports_module(&program, "builtin/log") || program_imports_module(&program, "std/log")) {
-        add("log_set_level", 1, 1, "bool");
-        add("log_to_file", 1, 1, "bool");
-        add("log_write", 2, 2, "void");
-        add("log_debug", 1, 1, "void");
-        add("log_info", 1, 1, "void");
-        add("log_warn", 1, 1, "void");
-        add("log_error", 1, 1, "void");
-        add("log.set_level", 1, 1, "bool");
-        add("log.to_file", 1, 1, "bool");
-        add("log.write", 2, 2, "void");
-        add("log.debug", 1, 1, "void");
-        add("log.info", 1, 1, "void");
-        add("log.warn", 1, 1, "void");
-        add("log.error", 1, 1, "void");
-    }
-    if (program_imports_module(&program, "std/pipe") || program_imports_module(&program, "builtin/pipe")) {
-        add("chan_new", 0, 1, "string");
-        add("chan_send", 2, 2, "void");
-        add("chan_recv", 1, 1, "string");
-        add("chan_try_send", 2, 2, "bool");
-        add("chan_try_recv", 1, 1, "string");
-        add("chan_close", 1, 1, "void");
-        add("chan_len", 1, 1, "int");
-        add("pipe.new", 0, 1, "string");
-        add("pipe.send", 2, 2, "void");
-        add("pipe.receive", 1, 1, "string");
-        add("pipe.close", 1, 1, "void");
-        add("pipe.len", 1, 1, "int");
+    for (const auto& importDecl : program.imports) {
+        if (importDecl.path.empty()) continue;
+        if (const registry::Module* module = registry::module_for_path(importDecl.path)) {
+            for (const auto& member : module->members) add(member);
+        }
     }
 }
 
 void TypeChecker::init_builtins() {
-    auto add=[&](std::string n,int minP,int maxP,std::string rt){ builtins_[std::move(n)] = BuiltinInfo{minP,maxP,rt}; };
-    add("now_ms",0,0,"int");
-    add("env",1,1,"string");
-    add("dotenv_load",0,1,"int");
-    add("rand_int",0,2,"int");
-    add("uuid",0,0,"string");
-    add("args_count",0,0,"int");
-    add("args_get",1,1,"string");
-    add("read_line",0,0,"string");
-    add("input",0,1,"string");
-    add("stderr_print",1,1,"void");
-    add("exec",1,1,"int");
-    add("spawn",1,1,"int");
-    add("exit",1,1,"void");
-    add("mini_ir_run",1,1,"string");
-    add("mini_ir.run",1,1,"string");
-    add("mini_ir_run_file",1,1,"string");
-    add("mini_ir.run_file",1,1,"string");
-    add("mini_lex_buffer",1,1,"unknown");
-    add("int",1,1,"int");
-    add("float",1,1,"double");
-    add("string",1,1,"string");
-    add("bool",1,1,"bool");
-    add("__builtin_sizeof",1,1,"int");
-    add("__builtin_alignof",1,1,"int");
-    add("__builtin_typeof",1,1,"string");
-    add("__builtin_decltype",1,1,"string");
-    add("__builtin_offsetof",2,2,"int");
-    add("__builtin_is_base_of",2,2,"bool");
-    add("alloc",0,1,"pointer");
-    add("free",1,1,"void");
-    add("realloc",2,2,"pointer");
-    add("copy",3,3,"void");
-    add("move",3,3,"void");
-    add("fill",3,3,"void");
-    add("zero",2,2,"void");
-    add("mem_stats",0,0,"string");
-    add("mem.stats",0,0,"string");
-    add("mem_alive",0,0,"int");
-    add("mem.alive",0,0,"int");
-    add("mem_reset_stats",0,0,"void");
-    add("mem.reset_stats",0,0,"void");
-    add("heap",1,1,"unknown");
-    add("shared",1,1,"unknown");
-    add("weak",1,1,"unknown");
-    add("buffer",1,1,"unknown");
-    add("dynamic_cast",2,2,"unknown");
-    add("reinterpret_cast",2,2,"unknown");
-    add("bit_cast",2,2,"unknown");
-    add("to_json",1,1,"string");
-    add("from_json",1,1,"string");
-    add("json.encode",1,1,"string");
-    add("json.decode",1,1,"string");
-    add("url_encode",1,1,"string");
-    add("json_encode",1,1,"string");
-    add("json_decode",1,1,"string");
-    add("http_get_resp",1,1,"string");
-    add("tcp_connect",2,2,"string");
-    add("tcp.connect",2,2,"string");
-    add("load_elan",1,1,"string");
-    add("load_elan_dir",1,1,"unknown");
-    add("call_action",1,-1,"any");
-    add("string.len",1,1,"int");
-    add("string.strip",1,1,"string");
-    add("string.lstrip",1,1,"string");
-    add("string.rstrip",1,1,"string");
-    add("string.lower",1,1,"string");
-    add("string.upper",1,1,"string");
-    add("string.find",2,2,"int");
-    add("string.substr",2,3,"string");
-    add("string.starts_with",2,2,"bool");
-    add("string.ends_with",2,2,"bool");
-    add("string.replace",3,3,"string");
-    add("string.split",2,2,"unknown");
-    add("now_iso",0,0,"string");
-    add("is_int",1,1,"bool");
-    add("is_float",1,1,"bool");
-    add("char_is_digit",1,1,"bool");
-    add("char_is_alpha",1,1,"bool");
-    add("char_is_space",1,1,"bool");
-    add("map",2,2,"string");
-    add("filter",2,2,"string");
-    add("reduce",3,3,"string");
-    add("set_new",0,-1,"set<any>");
-    add("set_of",0,-1,"set<any>");
-    add("set_add",2,2,"bool");
-    add("set_has",2,2,"bool");
-    add("set_remove",2,2,"bool");
-    add("set_size",1,1,"int");
-    add("fail",1,1,"never");
-    add("mutex_new",0,0,"string");
-    add("mutex_lock",1,1,"void");
-    add("mutex_unlock",1,1,"void");
-    add("mutex_try_lock",1,1,"bool");
-    add("language_name",0,0,"string");
-    add("language_version",0,0,"string");
-    add("plugin_core",2,2,"string");
-    add("plugin_core_files",1,1,"string");
-    add("plugin_core_keys",2,2,"string");
-    add("req.body",0,0,"string");
-    add("req.query",1,1,"string");
-    add("req.header",1,1,"string");
-    add("req.method",0,0,"string");
-    add("req.path",0,0,"string");
-    add("req.cookie",1,1,"string");
-    add("req.file",1,1,"string");
-    add("req.save_upload",2,2,"string");
-    add("res.html",1,1,"void");
-    add("res.json",1,1,"void");
-    add("res.text",1,1,"void");
-    add("res.write",1,1,"void");
-    add("res.status",1,1,"void");
-    add("res.header",2,2,"void");
-    add("res.cookie",3,6,"void");
-    add("res.end",0,0,"void");
-    add("ws.send",1,1,"bool");
-    add("ws.send_binary",1,1,"bool");
-    add("ws.recv",0,0,"string");
-    add("ws.recv_timeout",1,1,"string");
-    add("ws.close",0,2,"void");
-    add("ws.broadcast",1,1,"bool");
-    add("ws.state",0,0,"string");
-    add("resp.status",0,0,"int");
-    add("resp.body",0,0,"string");
-    add("resp.header",1,1,"string");
-    add("resp.json",0,0,"string");
-    add("tcp.send",1,1,"int");
-    add("tcp.recv",0,0,"string");
-    add("tcp.recv_timeout",0,1,"string");
-    add("tcp.close",0,0,"bool");
-    add("tcp.state",0,0,"string");
-    add("sse.emit",2,2,"void");
-    add("sse.close",0,0,"void");
-
+    for (const auto& m : registry::core()) {
+        builtins_[m.builtin] = BuiltinInfo{m.minArgs, m.maxArgs, m.returns};
+        if (std::string_view(m.name) != m.builtin) builtins_[m.name] = BuiltinInfo{m.minArgs, m.maxArgs, m.returns};
+    }
+    // Methods on handles held in variables conventionally named after their kind (req.body in a
+    // route, ws.send on a socket). Element placeholders do not apply to handles.
+    for (const char* kind : {"ws", "tcp", "resp", "req", "res", "sse"}) {
+        const registry::TypeSpec* spec = registry::type_spec(kind);
+        if (!spec) continue;
+        for (const auto& m : spec->members) {
+            builtins_[std::string(kind) + "." + m.name] = BuiltinInfo{m.minArgs, m.maxArgs, m.returns};
+        }
+    }
 }
 
 } // namespace erelang

@@ -1,0 +1,51 @@
+@erelang
+
+// re.expect(pattern, text): match text against a readable pattern, no regex syntax needed.
+//   x = one digit      X = one letter      ? = any one character
+//   * = any run of characters (may be empty)      backslash + c = the literal character c
+// The whole text must match. re.explain(pattern) shows the regex it expands to.
+
+#include <builtin/regex> as re
+#include <builtin/ai> as ai
+
+public action check(label: string, pattern: string, text: string) {
+    string ok = "no";
+    if (re.expect(pattern, text)) { ok = "yes"; }
+    print label + ": " + ok;
+}
+
+public action main() {
+    string year = "20xx";
+    check("year 2026", year, "2026");
+    check("year 20ab", year, "20ab");
+
+    string stamp = "20xx-xx-xx";
+    check("date", stamp, "2026-10-21");
+    check("bad date", stamp, "2026/10/21");
+
+    check("order id", "ORD-xxxx-XX", "ORD-0042-QA");
+    check("any middle", "report_*.csv", "report_final_v2.csv");
+    check("one char", "file?.log", "file7.log");
+    check("escaped x", "\\xbo\\x", "xbox");
+    check("xbox vs xbox (x is a digit: expect no)", "xbox", "xbox");
+    check("v1.2 vs v1x2 (dot is literal: expect no)", "v1.2", "v1x2");
+    check("v1.2 vs v1.2 (expect yes)", "v1.2", "v1.2");
+
+    print "regex for 20xx20xx20: " + re.explain("20xx20xx20");
+    string match = "20xx20xx20";
+    check("long form", match, "2024202520");
+    check("long form miss", match, "20242025");
+
+    // Let the AI library write and check the pattern instead of typing it.
+    string learned = ai.pattern("2026-10-21");
+    check("ai.pattern " + learned, learned, "1999-01-02");
+    string many = ai.infer.pattern(["AB-1234", "CD-5678", "EF-0042"]);
+    check("ai.infer.pattern " + many, many, "ZZ-9999");
+    // The same idea in English becomes a regex, and re.explain-style output shows what it does.
+    string rx = ai.regex.generate("exactly 4 digits");
+    print "ai.regex.generate: " + rx + " accepts 2026: " + string(ai.regex.test(rx, "2026"));
+    // Cross check: an expect pattern and its AI generated regex agree on the same text.
+    string viaExpect = re.explain("20xx");
+    print "expect 20xx is regex " + viaExpect + ", AI says: " + ai.regex.explain(viaExpect);
+}
+run main;

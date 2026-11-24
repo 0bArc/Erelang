@@ -1,0 +1,6 @@
+// expect: TC010
+@strict
+action main() {
+    if (true) { int hidden = 1; } else { print hidden; }
+}
+run main;

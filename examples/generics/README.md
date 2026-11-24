@@ -22,14 +22,14 @@ From repo root (prefer built Debug binary; `erelang` PATH may be stale):
 Or one file:
 
 ```powershell
-.\build\bin\Debug\erelang.exe examples\generics\positive\01_inference_same.elan
-.\build\bin\Debug\erelang.exe examples\generics\negative\01_conflicting_inference.elan
+.\build\debug\bin\Debug\erelang.exe examples\generics\positive\01_inference_same.elan
+.\build\debug\bin\Debug\erelang.exe examples\generics\negative\01_conflicting_inference.elan
 ```
 
 Smoke test (also covers struct-return field binding):
 
 ```powershell
-.\build\bin\Debug\erelang.exe examples\generics.elan
+.\build\debug\bin\Debug\erelang.exe examples\generics.elan
 ```
 
 ## Positive

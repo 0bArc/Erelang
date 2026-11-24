@@ -1,0 +1,11 @@
+@erelang
+public action add(a: int, b: int): int { return a + b; }
+public action main() {
+    int x = add(
+        1,
+        2
+    );
+    if (x != 3) { fail("multi-line call args"); }
+    print "multiline-call-ok";
+}
+run main;

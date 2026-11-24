@@ -299,7 +299,10 @@ std::vector<Token> Lexer::lex() {
             if (i+1<src_.size() && src_[i+1]=='=') { push(TokenKind::AmpAssign, "&="); i+=2; col+=2; continue; }
             push(TokenKind::Amp, "&"); ++i; ++col; continue;
         }
-        if (c == '^') { push(TokenKind::Caret, "^"); ++i; ++col; continue; }
+        if (c == '^') {
+            if (i+1<src_.size() && src_[i+1]=='=') { push(TokenKind::CaretAssign, "^="); i+=2; col+=2; continue; }
+            push(TokenKind::Caret, "^"); ++i; ++col; continue;
+        }
         if (c == '~') { push(TokenKind::Tilde, "~"); ++i; ++col; continue; }
         // Raw string r"..." (no escapes); multi-line allowed
         if (c == 'r' && i+1 < src_.size() && src_[i+1] == '"') {
@@ -394,7 +397,7 @@ std::vector<Token> Lexer::lex() {
             } else {
                 bool hasDot = false;
                 if (src_[j] != '.') while (j < src_.size() && std::isdigit(static_cast<unsigned char>(src_[j]))) ++j;
-                if (j < src_.size() && src_[j]=='.') { hasDot = true; ++j; while (j < src_.size() && std::isdigit(static_cast<unsigned char>(src_[j]))) ++j; }
+                if (j < src_.size() && src_[j]=='.' && !(j + 1 < src_.size() && src_[j + 1]=='.')) { hasDot = true; ++j; while (j < src_.size() && std::isdigit(static_cast<unsigned char>(src_[j]))) ++j; }
                 if (j < src_.size() && (src_[j]=='e' || src_[j]=='E')) {
                     ++j; if (j < src_.size() && (src_[j]=='+' || src_[j]=='-')) ++j;
                     while (j < src_.size() && std::isdigit(static_cast<unsigned char>(src_[j]))) ++j;

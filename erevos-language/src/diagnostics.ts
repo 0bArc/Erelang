@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { BUILT_INS } from './constants';
+import { isCoreBuiltin } from './manifest';
 import { getDocumentIndex, isInStringLiteral } from './symbols';
 
 export function needsSemicolon(line: string): boolean {
@@ -27,7 +27,7 @@ const KEYWORD_CALLS = new Set([
   'dynamic_cast', 'reinterpret_cast', 'bit_cast', 'bitcast',
 ]);
 
-const BUILTIN_SET = new Set(BUILT_INS);
+const BUILTIN_SET = { has: (w: string) => isCoreBuiltin(w) };
 const MAX_VALIDATION_LINES = 50_000;
 const MAX_LINE_LENGTH = 20_000;
 

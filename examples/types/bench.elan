@@ -1,0 +1,46 @@
+@erelang
+
+// Small benchmarks. Timings vary by machine; the checks verify the results.
+// Run: erelang examples/types/bench.elan
+
+public action report(label: string, start: int) {
+    print "  " + label + ": " + string(now_ms() - start) + " ms";
+}
+
+public action fib(n: int): int {
+    if (n < 2) { return n; }
+    return fib(n - 1) + fib(n - 2);
+}
+
+public action main() {
+    int t = now_ms();
+    int sum = 0;
+    for (int i = 0; i < 1000000; i = i + 1) { sum = sum + i; }
+    if (sum != 499999500000) { fail("int loop"); }
+    report("int loop 1e6", t);
+
+    t = now_ms();
+    float f = 0.0;
+    for (int i = 0; i < 300000; i = i + 1) { f = f + 0.5; }
+    if (f != 150000.0) { fail("float loop"); }
+    report("float loop 3e5", t);
+
+    t = now_ms();
+    if (fib(22) != 17711) { fail("fib"); }
+    report("fib(22)", t);
+
+    t = now_ms();
+    Array<int> xs = [0];
+    for (int i = 0; i < 50000; i = i + 1) { xs.push(i); }
+    if (xs.len() != 50001) { fail("list"); }
+    report("list push 5e4", t);
+
+    t = now_ms();
+    Map<string, int> m = {"seed": 0};
+    for (int i = 0; i < 20000; i = i + 1) { m["k" + string(i)] = i; }
+    if (m.len() != 20001) { fail("map"); }
+    report("map insert 2e4", t);
+
+    print "bench-ok";
+}
+run main;

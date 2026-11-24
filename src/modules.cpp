@@ -14,7 +14,10 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#else
+#include <dlfcn.h>
 #endif
+#include <filesystem>
 
 namespace erelang {
 
@@ -30,18 +33,14 @@ struct ModuleRegistry {
         return modules;
     }
 
-#ifdef _WIN32
-    void retain_handle(HMODULE handle) {
+    void retain_handle(void* handle) {
         std::scoped_lock lock(mutex);
         dynamicHandles.push_back(handle);
     }
-#endif
 
     mutable std::mutex mutex;
     std::vector<ModuleDef> modules;
-#ifdef _WIN32
-    std::vector<HMODULE> dynamicHandles; // kept alive for module lifetime
-#endif
+    std::vector<void*> dynamicHandles; // HMODULE or dlopen handle, kept alive for module lifetime
 };
 
 ModuleRegistry& registry() {
@@ -49,31 +48,6 @@ ModuleRegistry& registry() {
     return instance;
 }
 
-#ifdef _WIN32
-struct FindHandle {
-    HANDLE handle{INVALID_HANDLE_VALUE};
-    FindHandle() = default;
-    explicit FindHandle(HANDLE h) : handle(h) {}
-    FindHandle(const FindHandle&) = delete;
-    FindHandle& operator=(const FindHandle&) = delete;
-    FindHandle(FindHandle&& other) noexcept : handle(std::exchange(other.handle, INVALID_HANDLE_VALUE)) {}
-    FindHandle& operator=(FindHandle&& other) noexcept {
-        if (this != &other) {
-            reset();
-            handle = std::exchange(other.handle, INVALID_HANDLE_VALUE);
-        }
-        return *this;
-    }
-    ~FindHandle() { reset(); }
-    void reset() noexcept {
-        if (handle != INVALID_HANDLE_VALUE) {
-            FindClose(handle);
-            handle = INVALID_HANDLE_VALUE;
-        }
-    }
-    explicit operator bool() const noexcept { return handle != INVALID_HANDLE_VALUE; }
-};
-#endif
 
 } // namespace
 
@@ -94,49 +68,38 @@ std::vector<ModuleDef> get_registered_modules() {
     return registry().snapshot();
 }
 
+// Loads every *.odll in `dir` (a shared library exporting ErelangGetModule) and registers its module.
 void load_dynamic_modules_in_dir(const std::filesystem::path& dir) {
-#ifdef _WIN32
     if (dir.empty()) {
         return;
     }
-
     std::error_code ec;
-    if (!std::filesystem::exists(dir, ec)) {
+    if (!std::filesystem::is_directory(dir, ec)) {
         return;
     }
 
-    const std::wstring pattern = (dir / L"*.odll").wstring();
-    WIN32_FIND_DATAW data{};
-    FindHandle finder{FindFirstFileW(pattern.c_str(), &data)};
-    if (!finder) {
-        return;
-    }
-
-    const auto try_register_module = [&](const std::filesystem::path& modulePath) {
-        if (modulePath.empty()) {
-            return;
+    using GetModuleFn = const ModuleDef* (*)();
+    for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+        if (!entry.is_regular_file(ec) || entry.path().extension() != ".odll") {
+            continue;
         }
-
-        if (HMODULE handle = LoadLibraryW(modulePath.c_str()); handle != nullptr) {
-            registry().retain_handle(handle);
-            using GetModuleFn = const ModuleDef* (*)();
-            if (const auto fn = reinterpret_cast<GetModuleFn>(GetProcAddress(handle, "ErelangGetModule")); fn != nullptr) {
-                if (const ModuleDef* def = fn(); def != nullptr && def->files != nullptr && def->file_count > 0) {
-                    register_embedded_module(*def);
-                }
+#ifdef _WIN32
+        HMODULE handle = LoadLibraryW(entry.path().c_str());
+        if (!handle) continue;
+        // Through void* so GCC does not warn about casting FARPROC to another function type.
+        const auto fn = reinterpret_cast<GetModuleFn>(reinterpret_cast<void*>(GetProcAddress(handle, "ErelangGetModule")));
+#else
+        void* handle = dlopen(entry.path().c_str(), RTLD_NOW | RTLD_LOCAL);
+        if (!handle) continue;
+        const auto fn = reinterpret_cast<GetModuleFn>(dlsym(handle, "ErelangGetModule"));
+#endif
+        registry().retain_handle(reinterpret_cast<void*>(handle));
+        if (fn != nullptr) {
+            if (const ModuleDef* def = fn(); def != nullptr && def->files != nullptr && def->file_count > 0) {
+                register_embedded_module(*def);
             }
         }
-    };
-
-    do {
-        if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
-            try_register_module(dir / data.cFileName);
-        }
-    } while (FindNextFileW(finder.handle, &data));
-
-#else
-    (void)dir;
-#endif
+    }
 }
 
 } // namespace erelang

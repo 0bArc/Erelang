@@ -1,0 +1,205 @@
+// Docker helpers for Erelang scripts.
+//
+// Every action shells out to the docker CLI (docker_bin, "docker" by default) and returns plain
+// values: ids as strings, listings as arrays of JSON objects (one per line, read them with
+// from_json), inspect results as maps. After any call, docker_last_exit() and docker_last_output()
+// tell you what the CLI said.
+
+#include <builtin/system> as sys
+#include <builtin/json> as json
+
+global string docker_bin = "docker";
+global int docker_exit = 0;
+global string docker_output = "";
+
+// ---- plumbing ---------------------------------------------------------------------------------
+
+// Runs `docker <args>` through the shell and remembers exit code and output.
+public action docker_cli(args: string): string {
+    string out = sys.cmd(docker_bin + " " + args);
+    docker_exit = sys.last_exit();
+    docker_output = out;
+    return out;
+}
+
+public action docker_ok(): bool { return docker_exit == 0; }
+public action docker_last_exit(): int { return docker_exit; }
+public action docker_last_output(): string { return docker_output; }
+
+// Non-empty lines of a command's output, trimmed.
+public action docker_lines(text: string): Array<string> {
+    Array<string> out;
+    Array<string> raw = string.split(string.replace(text, "\r", ""), "\n");
+    for (string line : raw) {
+        string t = string.strip(line);
+        if (t != "") { out.push(t); }
+    }
+    return out;
+}
+
+// ---- status -----------------------------------------------------------------------------------
+
+// The docker CLI is installed and on PATH.
+public action docker_available(): bool {
+    docker_cli("--version");
+    return docker_ok();
+}
+
+// The daemon answers (Docker Desktop or dockerd is running).
+public action docker_running(): bool {
+    docker_cli("info --format {{.ServerVersion}}");
+    return docker_ok();
+}
+
+public action docker_version(): string {
+    string v = string.strip(docker_cli("version --format {{.Server.Version}}"));
+    if (!docker_ok()) { return ""; }
+    return v;
+}
+
+// ---- listings ---------------------------------------------------------------------------------
+
+// Containers as JSON objects (ID, Names, Image, Status, ...). all: include stopped ones.
+public action docker_ps(all: bool): Array<string> {
+    string flag = "";
+    if (all) { flag = " -a"; }
+    string out = docker_cli("ps" + flag + " --no-trunc --format {{json .}}");
+    if (!docker_ok()) {
+        Array<string> none;
+        return none;
+    }
+    return docker_lines(out);
+}
+
+// Images as JSON objects (Repository, Tag, ID, Size, ...).
+public action docker_images(): Array<string> {
+    string out = docker_cli("images --format {{json .}}");
+    if (!docker_ok()) {
+        Array<string> none;
+        return none;
+    }
+    return docker_lines(out);
+}
+
+// Names of running containers.
+public action docker_names(): Array<string> {
+    string out = docker_cli("ps --format {{.Names}}");
+    if (!docker_ok()) {
+        Array<string> none;
+        return none;
+    }
+    return docker_lines(out);
+}
+
+// ---- lifecycle --------------------------------------------------------------------------------
+
+// Starts `image` detached. args: extra flags such as "-p 8080:80 --name web". Returns the
+// container id, or "" when docker refused.
+public action docker_run(image: string, args: string): string {
+    string extra = "";
+    if (args != "") { extra = args + " "; }
+    string out = docker_cli("run -d " + extra + image);
+    if (!docker_ok()) { return ""; }
+    Array<string> lines = docker_lines(out);
+    if (lines.len() == 0) { return ""; }
+    return lines[lines.len() - 1];
+}
+
+public action docker_stop(id: string): bool {
+    docker_cli("stop " + id);
+    return docker_ok();
+}
+
+public action docker_start(id: string): bool {
+    docker_cli("start " + id);
+    return docker_ok();
+}
+
+public action docker_restart(id: string): bool {
+    docker_cli("restart " + id);
+    return docker_ok();
+}
+
+// Removes a container; force also stops a running one.
+public action docker_rm(id: string, force: bool): bool {
+    string flag = "";
+    if (force) { flag = "-f "; }
+    docker_cli("rm " + flag + id);
+    return docker_ok();
+}
+
+public action docker_pull(image: string): bool {
+    docker_cli("pull " + image);
+    return docker_ok();
+}
+
+// Last `tail` lines of a container's log (0 = all).
+public action docker_logs(id: string, tail: int): string {
+    string flag = "";
+    if (tail > 0) { flag = "--tail " + string(tail) + " "; }
+    return docker_cli("logs " + flag + id + " 2>&1");
+}
+
+// Runs a command inside a running container and returns its output.
+public action docker_exec(id: string, command: string): string {
+    return docker_cli("exec " + id + " " + command);
+}
+
+// ---- inspect ----------------------------------------------------------------------------------
+
+// Full `docker inspect` of one object as a map (nested values are maps and arrays too).
+public action docker_inspect(id: string): any {
+    string out = docker_cli("inspect " + id);
+    if (!docker_ok()) { return json.parse("{}"); }
+    Array<string> items = from_json(out);
+    if (items.len() == 0) { return json.parse("{}"); }
+    return json.parse(items[0]);
+}
+
+// One field via a Go template, for example docker_field(id, "{{.State.Status}}").
+public action docker_field(id: string, template: string): string {
+    string out = docker_cli("inspect --format " + template + " " + id);
+    if (!docker_ok()) { return ""; }
+    return string.strip(out);
+}
+
+public action docker_status(id: string): string {
+    return docker_field(id, "{{.State.Status}}");
+}
+
+// Waits until the container reports healthy (or simply running when it has no health check).
+// Returns true when it got there within timeoutMs.
+public action docker_wait_healthy(id: string, timeoutMs: int): bool {
+    int until = now_ms() + timeoutMs;
+    while (now_ms() < until) {
+        string health = docker_field(id, "{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}");
+        if (health == "healthy" || health == "running") { return true; }
+        if (health == "exited" || health == "dead" || health == "unhealthy") { return false; }
+        sleep 250ms;
+    }
+    return false;
+}
+
+// ---- compose ----------------------------------------------------------------------------------
+
+public action docker_compose_up(dir: string): bool {
+    string out = sys.cmd(docker_bin + " compose up -d", dir);
+    docker_exit = sys.last_exit();
+    docker_output = out;
+    return docker_ok();
+}
+
+public action docker_compose_down(dir: string): bool {
+    string out = sys.cmd(docker_bin + " compose down", dir);
+    docker_exit = sys.last_exit();
+    docker_output = out;
+    return docker_ok();
+}
+
+// ---- plugin hooks -----------------------------------------------------------------------------
+
+// onLoad: DOCKER_BIN overrides the CLI path (useful for podman or a wrapper script).
+public action docker_init() {
+    string bin = env("DOCKER_BIN");
+    if (bin != "") { docker_bin = bin; }
+}

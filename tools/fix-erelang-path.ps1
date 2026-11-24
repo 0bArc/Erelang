@@ -1,36 +1,20 @@
-# Point user PATH at build\bin\Debug (always refreshed by erelang_runner post-build).
-# Prefer an existing Debug binary over Release so a manual fix cannot clobber a newer Debug build.
-$repo = Split-Path $PSScriptRoot -Parent
-$debugDir = Join-Path $repo "build\bin\Debug"
-$debugExe = Join-Path $debugDir "erelang.exe"
-$releaseExe = Join-Path $repo "build\bin\Release\erelang.exe"
-$flatExe = Join-Path $repo "build\bin\erelang.exe"
-$localBin = Join-Path $env:LOCALAPPDATA "Erelang\bin"
+# Put build\debug\bin\Debug first on the user PATH and drop other PATH entries inside this repo.
+# The debug build does this itself after linking erelang; run this only to repair PATH by hand.
+$repo = (Resolve-Path (Split-Path $PSScriptRoot -Parent)).Path.TrimEnd('\')
+$binDir = Join-Path $repo "build\debug\bin\Debug"
 
-$src = $null
-if (Test-Path $debugExe) { $src = $debugExe }
-elseif (Test-Path $flatExe) { $src = $flatExe }
-elseif (Test-Path $releaseExe) { $src = $releaseExe }
-
-if ($src) {
-  New-Item -ItemType Directory -Force $debugDir | Out-Null
-  if ($src -ne $debugExe) {
-    Copy-Item -Force $src $debugExe
-  }
-  New-Item -ItemType Directory -Force $localBin | Out-Null
-  Copy-Item -Force $src (Join-Path $localBin "erelang.exe")
-  Copy-Item -Force $src $flatExe
+if (-not (Test-Path (Join-Path $binDir "erelang.exe"))) {
+  throw "Missing $binDir\erelang.exe. Build first: cmake --preset debug; cmake --build --preset debug"
 }
 
 $user = [Environment]::GetEnvironmentVariable("Path", "User")
 $parts = @($user -split ";" | ForEach-Object { $_.Trim() } | Where-Object {
   $_ -and
-  ($_ -notmatch '[\\/]build[\\/]bin[\\/]Release$') -and
-  ($_ -notmatch '[\\/]AppData[\\/]Local[\\/]Erelang[\\/]bin$') -and
-  ($_ -ne $debugDir)
+  -not ($_.TrimEnd('\') + '\').StartsWith($repo + '\', [StringComparison]::OrdinalIgnoreCase) -and
+  ($_ -notmatch '[\\/]AppData[\\/]Local[\\/]Erelang[\\/]bin$')
 })
-$parts = @($debugDir) + $parts
+$parts = @($binDir) + $parts
 [Environment]::SetEnvironmentVariable("Path", ($parts -join ";"), "User")
-Write-Host "PATH fixed. First erelang entry: $debugDir"
+Write-Host "PATH fixed. First erelang entry: $binDir"
 Write-Host "Refresh this shell with:"
 Write-Host '  $env:Path = [Environment]::GetEnvironmentVariable("Path","User") + ";" + [Environment]::GetEnvironmentVariable("Path","Machine")'

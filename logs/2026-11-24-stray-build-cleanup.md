@@ -8,6 +8,8 @@
 ## What changed
 
 - Deleted `build-editor-analysis/`, `docs/site/`, `docs/hooks/__pycache__/` and `compiler/.mini_ir_run.tmp`. None were tracked by git.
+- Removed the `.cursor/` folder (three editor rule files).
+- Removed the `Co-authored-by: Cursor` trailer from the 2026-08-11 commit "Erelang Language Maturation" by rewriting `main` from that commit onward.
 - Kept `build/old-files/` (a hand-made release archive and `ws_smoke.cs`), `build/debug`, `build/release`, `erevos-language/node_modules/`, `erevos-language/out/` and `.cache/clangd`.
 
 ## Behavior changes

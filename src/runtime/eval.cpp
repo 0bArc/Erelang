@@ -407,14 +407,7 @@ Value Runtime::eval_value(const Expr& e, const Env& env) const {
         const auto& range = std::get<RangeExpr>(e.node);
         const int64_t start = value_as_int(eval_value(*range.start, env));
         const int64_t end = value_as_int(eval_value(*range.end, env));
-        const int id = g_nextListId++;
-        auto& list = g_lists[id];
-        if (range.exclusive) {
-            for (int64_t i = start; i < end; ++i) list.push_back(Value::from_int(i));
-        } else {
-            for (int64_t i = start; i <= end; ++i) list.push_back(Value::from_int(i));
-        }
-        return make_handle_value(HandleKind::List, static_cast<uint32_t>(id));
+        return make_range_list(start, end, range.exclusive);
     }
     if (std::holds_alternative<BinaryExpr>(e.node)) {
         const auto& binary = std::get<BinaryExpr>(e.node);
@@ -583,26 +576,10 @@ Value Runtime::eval_value_rest(const Expr& e, const Env& env) const {
         if (std::holds_alternative<ExprIdent>(index.object->node))
             objectName = std::get<ExprIdent>(index.object->node).name;
         Value objectValue = eval_value(*index.object, env);
-        if (value_is_handle(objectValue, HandleKind::List)) {
-            const Value indexValue = eval_value(*index.index, env);
-            const int64_t position = value_as_int(indexValue);
-            auto list = g_lists.find(static_cast<int>(value_handle_id(objectValue)));
-            if (list != g_lists.end() && position >= 0 &&
-                position < static_cast<int64_t>(list->second.size())) {
-                return list->second[static_cast<size_t>(position)];
-            }
-            return Value::from_int(0);
-        }
-        if (value_is_handle(objectValue, HandleKind::Dict)) {
-            const Value indexValue = eval_value(*index.index, env);
-            auto dict = g_dicts.find(static_cast<int>(value_handle_id(objectValue)));
-            if (dict != g_dicts.end()) {
-                auto item = indexValue.kind == ValueKind::String
-                    ? dict->second.find(indexValue.string_ref())
-                    : dict->second.find(to_display_string(indexValue));
-                if (item != dict->second.end()) return item->second;
-            }
-            return Value::null_value();
+        if (value_is_handle(objectValue, HandleKind::List) || value_is_handle(objectValue, HandleKind::Dict)) {
+            Value item;
+            (void)collection_index_get(objectValue, eval_value(*index.index, env), item);
+            return item;
         }
         auto objectFields = lastReturnFields_;
         const std::string container = to_display_string(objectValue);
@@ -893,6 +870,7 @@ Value Runtime::eval_value_rest(const Expr& e, const Env& env) const {
                 if (action->isAsync) {
                     return invoke_async_action(*action, call.args, env, tls_in_async_action);
                 }
+                if (Value fastResult; fast_call(*action, call.args, env, false, fastResult)) return fastResult;
                 Env callEnv;
                 for (size_t i = 0; i < action->params.size() && i < call.args.size(); ++i) {
                     const std::string& parameter = action->params[i].name;
@@ -996,9 +974,7 @@ Value Runtime::eval_value_rest(const Expr& e, const Env& env) const {
             if (std::holds_alternative<ExprString>(el->node)) items.push_back(Value::from_string(eval_string(*el, env)));
             else items.push_back(eval_arg(*el, env));
         }
-        const int id = g_nextListId++;
-        g_lists[id] = std::move(items);
-        return make_handle_value(HandleKind::List, static_cast<uint32_t>(id));
+        return make_list_value(std::move(items));
     }
     if (std::holds_alternative<TupleLiteralExpr>(e.node)) {
         const auto& literal = std::get<TupleLiteralExpr>(e.node);
@@ -1037,14 +1013,14 @@ Value Runtime::eval_value_rest(const Expr& e, const Env& env) const {
     }
     if (std::holds_alternative<DictLiteralExpr>(e.node)) {
         const auto& literal = std::get<DictLiteralExpr>(e.node);
-        const int id = g_nextDictId++;
-        auto& dict = g_dicts[id];
-        dict.reserve(literal.entries.size() / 2);
+        // The map exists before its entries are evaluated: a nested literal gets the next id.
+        const Value handle = new_dict_value(literal.entries.size() / 2);
+        auto& dict = g_dicts[static_cast<int>(value_handle_id(handle))];
         for (std::size_t i = 0; i + 1 < literal.entries.size(); i += 2) {
             std::string key = eval_string(*literal.entries[i], env);
             dict[std::move(key)] = eval_arg(*literal.entries[i + 1], env);
         }
-        return make_handle_value(HandleKind::Dict, static_cast<uint32_t>(id));
+        return handle;
     }
     if (std::holds_alternative<LambdaExpr>(e.node)) {
         const auto& lambda = std::get<LambdaExpr>(e.node);
@@ -1248,6 +1224,90 @@ int64_t new_list_from(std::vector<Value> items) {
 }
 
 } // namespace
+
+Value make_list_value(std::vector<Value> items) {
+    return make_handle_value(HandleKind::List, static_cast<uint32_t>(new_list_from(std::move(items))));
+}
+
+Value new_dict_value(std::size_t reserve) {
+    const int id = g_nextDictId++;
+    g_dicts[id].reserve(reserve);
+    return make_handle_value(HandleKind::Dict, static_cast<uint32_t>(id));
+}
+
+Value make_range_list(int64_t start, int64_t end, bool exclusive) {
+    const int id = g_nextListId++;
+    auto& list = g_lists[id];
+    if (exclusive) {
+        for (int64_t i = start; i < end; ++i) list.push_back(Value::from_int(i));
+    } else {
+        for (int64_t i = start; i <= end; ++i) list.push_back(Value::from_int(i));
+    }
+    return make_handle_value(HandleKind::List, static_cast<uint32_t>(id));
+}
+
+bool collection_index_get(const Value& object, const Value& index, Value& out) {
+    if (value_is_handle(object, HandleKind::List)) {
+        const int64_t position = value_as_int(index);
+        auto list = g_lists.find(static_cast<int>(value_handle_id(object)));
+        if (list != g_lists.end() && position >= 0 && position < static_cast<int64_t>(list->second.size())) {
+            out = list->second[static_cast<std::size_t>(position)];
+        } else {
+            out = Value::from_int(0);
+        }
+        return true;
+    }
+    if (value_is_handle(object, HandleKind::Dict)) {
+        out = Value::null_value();
+        auto dict = g_dicts.find(static_cast<int>(value_handle_id(object)));
+        if (dict != g_dicts.end()) {
+            auto item = index.kind == ValueKind::String ? dict->second.find(index.string_ref())
+                                                        : dict->second.find(to_display_string(index));
+            if (item != dict->second.end()) out = item->second;
+        }
+        return true;
+    }
+    return false;
+}
+
+bool collection_index_set(const Value& object, const Value& index, Value value) {
+    if (value_is_handle(object, HandleKind::List)) {
+        const int64_t position = value_as_int(index);
+        auto& list = g_lists[static_cast<int>(value_handle_id(object))];
+        if (position < 0 || static_cast<std::size_t>(position) >= list.size()) {
+            throw std::runtime_error("list index " + std::to_string(position) + " out of bounds (length " +
+                                     std::to_string(list.size()) + ")");
+        }
+        list[static_cast<std::size_t>(position)] = std::move(value);
+        return true;
+    }
+    if (value_is_handle(object, HandleKind::Dict)) {
+        auto& dict = g_dicts[static_cast<int>(value_handle_id(object))];
+        if (index.kind == ValueKind::String) dict[index.string_ref()] = std::move(value);
+        else dict[to_display_string(index)] = std::move(value);
+        return true;
+    }
+    return false;
+}
+
+std::string_view list_method_name(std::string_view method) { return canonical_list_method(method); }
+
+// Must name exactly the methods Runtime::collection_method handles for each kind.
+bool collection_method_known(HandleKind kind, std::string_view method) {
+    if (kind == HandleKind::List) {
+        static const std::unordered_set<std::string_view> names{
+            "len", "get", "set", "push", "insert", "pop", "erase", "clear", "capacity", "reserve",
+            "shrink_to_fit", "empty", "front", "back", "contains", "find", "join"};
+        return names.count(canonical_list_method(method)) > 0;
+    }
+    if (kind == HandleKind::Dict) {
+        static const std::unordered_set<std::string_view> names{
+            "set", "get", "has", "getOr", "remove", "clear", "len", "empty", "keys", "values", "items",
+            "merge", "clone"};
+        return names.count(canonical_dict_method(method)) > 0;
+    }
+    return false;
+}
 
 bool collection_method_is_void(std::string_view method) {
     const std::string_view l = canonical_list_method(method);

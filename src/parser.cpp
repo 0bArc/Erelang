@@ -164,9 +164,59 @@ private:
 };
 } // namespace
 
-Parser::Parser(std::vector<Token> tokens) : tokens_(std::move(tokens)) {}
+// A newline ends a statement unless the expression clearly continues: the line ends with a
+// binary operator, '=', ',' or '.', or the next line starts with '.', '&&', '||' or '??'.
+// Those newlines are dropped here so the expression parser never sees them.
+static bool continues_after(TokenKind k) {
+    switch (k) {
+        case TokenKind::Plus: case TokenKind::Minus: case TokenKind::Star: case TokenKind::Slash:
+        case TokenKind::Percent: case TokenKind::Pow:
+        case TokenKind::EqualEqual: case TokenKind::BangEqual: case TokenKind::StrictEqual:
+        case TokenKind::StrictNotEqual: case TokenKind::Less: case TokenKind::LessEqual:
+        case TokenKind::GreaterEqual:
+        case TokenKind::AmpAmp: case TokenKind::PipePipe: case TokenKind::NullCoalesce:
+        case TokenKind::Pipe: case TokenKind::Caret: case TokenKind::Shl:
+        case TokenKind::Assign: case TokenKind::PlusAssign: case TokenKind::MinusAssign:
+        case TokenKind::StarAssign: case TokenKind::SlashAssign: case TokenKind::PercentAssign:
+        case TokenKind::PowAssign: case TokenKind::AmpAssign: case TokenKind::PipeAssign:
+        case TokenKind::CaretAssign: case TokenKind::ShlAssign: case TokenKind::ShrAssign:
+        case TokenKind::Question: case TokenKind::Comma: case TokenKind::Dot:
+        case TokenKind::Arrow: case TokenKind::FatArrow:
+        case TokenKind::DotDot: case TokenKind::DotDotLt:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool continues_before(TokenKind k) {
+    return k == TokenKind::Dot || k == TokenKind::AmpAmp || k == TokenKind::PipePipe ||
+           k == TokenKind::NullCoalesce;
+}
+
+static std::vector<Token> join_continued_lines(std::vector<Token> tokens) {
+    std::vector<Token> out;
+    out.reserve(tokens.size());
+    for (size_t i = 0; i < tokens.size();) {
+        if (tokens[i].kind != TokenKind::Newline) {
+            out.push_back(std::move(tokens[i++]));
+            continue;
+        }
+        size_t end = i;
+        while (end < tokens.size() && tokens[end].kind == TokenKind::Newline) ++end;
+        const bool joinPrev = !out.empty() && continues_after(out.back().kind);
+        const bool joinNext = end < tokens.size() && continues_before(tokens[end].kind);
+        if (!joinPrev && !joinNext) {
+            for (; i < end; ++i) out.push_back(std::move(tokens[i]));
+        }
+        i = end;
+    }
+    return out;
+}
+
+Parser::Parser(std::vector<Token> tokens) : tokens_(join_continued_lines(std::move(tokens))) {}
 Parser::Parser(std::vector<Token> tokens, std::string sourceName)
-    : tokens_(std::move(tokens)), sourceName_(std::move(sourceName)) {}
+    : tokens_(join_continued_lines(std::move(tokens))), sourceName_(std::move(sourceName)) {}
 
 static std::string token_preview(const Token& tok) {
     if (tok.kind == TokenKind::End) return "<eof>";
@@ -462,6 +512,13 @@ void Parser::expect(TokenKind kind, std::string_view what) {
     }
 }
 
+void Parser::expect_statement_end() {
+    if (match(TokenKind::Semicolon)) return;
+    const TokenKind k = peek().kind;
+    if (k == TokenKind::Newline || k == TokenKind::RBrace || k == TokenKind::End) return;
+    throw std::runtime_error("Unexpected token after statement: start a new line or separate with ;");
+}
+
 void Parser::skip_separators() {
     while (peek().kind == TokenKind::Newline || peek().kind == TokenKind::Semicolon) consume();
 }
@@ -493,12 +550,20 @@ ExprPtr Parser::parse_expression() {
 
 ExprPtr Parser::parse_ternary() {
     auto cond = parse_coalesce();
+    // `?` and `:` may start a continuation line.
+    auto skip_newlines_before = [&](TokenKind k) {
+        size_t i = 0;
+        while (peek(i).kind == TokenKind::Newline) ++i;
+        if (i > 0 && peek(i).kind == k) { while (i-- > 0) consume(); }
+    };
+    skip_newlines_before(TokenKind::Question);
     if (!match(TokenKind::Question)) {
         return cond;
     }
     ++inTernaryThen_;
     auto thenExpr = parse_expression();
     --inTernaryThen_;
+    skip_newlines_before(TokenKind::Colon);
     expect(TokenKind::Colon, ":");
     auto elseExpr = parse_expression();
     return std::make_shared<Expr>(Expr{ TernaryExpr{ cond, thenExpr, elseExpr } });
@@ -1253,7 +1318,7 @@ Block Parser::parse_block(bool allowImplicit) {
             const int stmtLine = peek().line;
             Statement stmt = parse_statement();
             if (requires_semicolon(stmt)) {
-                expect(TokenKind::Semicolon, ";");
+                expect_statement_end();
             }
             b.stmts.push_back(std::move(stmt));
             b.lines.push_back(stmtLine);
@@ -2106,10 +2171,10 @@ Program Parser::parse_program() {
                 prog.hooks.push_back(parse_hook());
             } else if (kind == "global") {
                 prog.globals.push_back(parse_global());
-                expect(TokenKind::Semicolon, ";");
+                expect_statement_end();
             } else if (kind == "extern") {
                 prog.externs.push_back(parse_extern_decl());
-                expect(TokenKind::Semicolon, ";");
+                expect_statement_end();
             } else if (kind == "import") {
                 consume();
                 ImportDecl decl = parse_import_decl();
@@ -2119,7 +2184,7 @@ Program Parser::parse_program() {
                     prog.pluginAliases.push_back(*decl.alias);
                 }
                 prog.imports.push_back(std::move(decl));
-                expect(TokenKind::Semicolon, ";");
+                expect_statement_end();
             } else if (kind == "struct") {
                 prog.structs.push_back(parse_struct());
             } else if (kind == "enum") {
@@ -2152,7 +2217,7 @@ Program Parser::parse_program() {
                     runName += "::" + ident_text(seg);
                 }
                 prog.runTarget = qualify_name(runName);
-                expect(TokenKind::Semicolon, ";");
+                expect_statement_end();
             } else {
                 // allow stray separators and ignore unknown top-level '@' blocks handled above
                 skip_separators();

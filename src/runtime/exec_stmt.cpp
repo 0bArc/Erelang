@@ -142,6 +142,7 @@ void Runtime::exec_continue(const ContinueStmt& node, const Program& program, Ex
 }
 
 void Runtime::exec_while(const WhileStmt& node, const Program& program, ExecContext& ctx, Env& env) const {
+    if (fast_loop(node, ctx, env)) return;
     const auto& st = node;
     while (is_truthy(eval_value(*st.cond, env))) {
         exec_block(*st.body, program, ctx, env);
@@ -161,6 +162,7 @@ void Runtime::exec_while(const WhileStmt& node, const Program& program, ExecCont
 }
 
 void Runtime::exec_repeat(const RepeatStmt& node, const Program& program, ExecContext& ctx, Env& env) const {
+    if (fast_loop(node, ctx, env)) return;
     const auto& st = node;
     const int64_t count = to_int(eval_string(*st.count, env));
     for (int64_t i = 0; i < count; ++i) {
@@ -181,6 +183,7 @@ void Runtime::exec_repeat(const RepeatStmt& node, const Program& program, ExecCo
 }
 
 void Runtime::exec_for(const ForStmt& node, const Program& program, ExecContext& ctx, Env& env) const {
+    if (fast_loop(node, ctx, env)) return;
     const auto& st = node;
     if (st.init) exec_block(*st.init, program, ctx, env);
     {
@@ -212,6 +215,7 @@ void Runtime::exec_for(const ForStmt& node, const Program& program, ExecContext&
 }
 
 void Runtime::exec_do_while(const DoWhileStmt& node, const Program& program, ExecContext& ctx, Env& env) const {
+    if (fast_loop(node, ctx, env)) return;
     const auto& st = node;
     while (true) {
         exec_block(*st.body, program, ctx, env);
@@ -233,6 +237,7 @@ void Runtime::exec_do_while(const DoWhileStmt& node, const Program& program, Exe
 }
 
 void Runtime::exec_for_in(const ForInStmt& node, const Program& program, ExecContext& ctx, Env& env) const {
+    if (fast_loop(node, ctx, env)) return;
     const auto& st = node;
     const Value iterValue = eval_value(*st.iterable, env);
     if (value_is_handle(iterValue, HandleKind::List)) {

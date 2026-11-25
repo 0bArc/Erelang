@@ -1,0 +1,80 @@
+@erelang
+#include <builtin/fs> as fs
+
+// Statements end at a newline; `;` is still accepted.
+
+global int base = 10
+const int LIMIT = 3
+
+public struct Point {
+    x: int
+    y: int
+}
+
+public action add(a: int, b: int): int {
+    return a + b
+}
+
+public action main() {
+    int x = 5
+    x = x + 1
+    x++
+    x += 2
+    if (x != 9) { fail("assignments") }
+
+    int a = 1; int b = 2
+    if (a + b != 3) { fail("semicolons on one line") }
+
+    // A line ending in an operator, comma or `=` continues on the next line.
+    int sum = 1 +
+        2 +
+        3
+    if (sum != 6) { fail("trailing operator") }
+    int called = add(x,
+                     base)
+    if (called != 19) { fail("multi-line call") }
+    string joined =
+        "a" + "b"
+    if (joined != "ab") { fail("trailing =") }
+
+    // A line starting with `.`, `&&`, `||`, `??`, `?` or `:` continues the previous one.
+    bool both = x > 1
+        && base > 1
+        || false
+    if (!both) { fail("leading logical operator") }
+    int pick = x > 1
+        ? 1
+        : 2
+    if (pick != 1) { fail("multi-line ternary") }
+    string trimmed = "  hi  "
+        .trim()
+    if (trimmed != "hi") { fail("leading dot") }
+
+    Array<int> xs = [1, 2,
+        3]
+    xs.push(4)
+    Map<string, int> m = {
+        "one": 1
+        "two": 2
+    }
+    if (xs.len() != 4 || m["two"] != 2) { fail("collections") }
+
+    Point p = Point { x: 1, y: 2 }
+    if (p.x + p.y != 3) { fail("struct") }
+
+    int n = 0
+    for (int i = 0; i < LIMIT; i++) { n += i }
+    while (n < 10) { n++ }
+    do { n-- } while (n > 5)
+    repeat (2) { n++ }
+    if (n != 7) { fail("loops") }
+
+    string label = ""
+    if (n > 5) { label = "big" } else { label = "small" }
+    if (label != "big") { fail("one-line if/else") }
+
+    if (!fs.exists(".")) { fail("module call") }
+    print "no_semicolons ok"
+}
+
+run main

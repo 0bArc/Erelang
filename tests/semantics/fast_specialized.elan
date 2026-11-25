@@ -1,0 +1,87 @@
+@strict
+// Specialized fast-path ops (int add / sub / mul, compare-and-jump, fused loop steps, inline
+// list access) on values that are not plain ints, where they must act as the generic ops.
+
+// The actions avoid fail() so that they compile; main checks their results.
+
+// Counter that turns into a float inside the loop: the fused step and jump take the slow path.
+public action float_counter(): float {
+    any i = 0;
+    int steps = 0;
+    while (i < 3) {
+        i = i + 0.5;
+        steps++;
+    }
+    return i * 10 + steps;
+}
+
+// `+` on strings and comparisons on strings through the int-specialized ops.
+public action strings(): string {
+    any s = "a";
+    for (int k = 0; k < 3; k++) { s = s + "b"; }
+    any t = "abc";
+    if (t < "abd") { s = s + "<"; }
+    if (t == "abc") { s = s + "="; }
+    if (t != "abc") { s = s + "!"; }
+    return s;
+}
+
+// Mixed int / float compares in both jump directions (false-jumps invert only for ints).
+public action mixed_compares(): int {
+    int hits = 0;
+    any f = 2.5;
+    if (f < 3) { hits++; }
+    if (f >= 3) { hits = hits + 100; }
+    if (1 == 1.0) { hits++; }
+    if (3 <= f) { hits = hits + 100; }
+    any g = 0.1 + 0.2;
+    if (g != 0.3) { hits++; }
+    return hits;
+}
+
+// Wrapping int arithmetic and a step loop that counts down with `<=` checks.
+public action wrap_and_steps(): int {
+    int big = 4611686018427387904;
+    int w = big * 4;
+    int n = 0;
+    for (int k = 10; k <= 20; k = k + 5) { n = n + k; }
+    int m = 0;
+    for (int j = 0; j <= 4; j++) { m = m + j; }
+    return w + n + m;
+}
+
+// Two lists used alternately, a call in between, out-of-range reads and `get`.
+public action other(Array<int> ys): int {
+    ys.push(7);
+    return ys.len();
+}
+
+public action lists(): int {
+    Array<int> a = [1, 2, 3];
+    Array<int> b = [10, 20];
+    int s = 0;
+    for (int k = 0; k < 3; k++) {
+        s = s + a[k];
+        s = s + b[k];
+        int n = other(b);
+        s = s + n;
+        a[k] = a[k] * 2;
+    }
+    s = s + a[0] + a[-1] + a[9];
+    s = s + a.len() + b.len();
+    s = s + a.get(1);
+    return s;
+}
+
+action main() {
+    if (float_counter() != 36.0) { fail("float counter"); }
+    if (strings() != "abbb<=") { fail("strings"); }
+    if (mixed_compares() != 3) { fail("mixed compares"); }
+    if (wrap_and_steps() != 55) { fail("wrap and steps"); }
+    // Rounds add a[k] + b[k] + len(b) after a push: (1+10+3) + (2+20+4) + (3+7+5) = 55, then
+    // a = [2, 4, 6]: 2 + 0 + 0, lengths 3 + 5, a.get(1) 4.
+    if (lists() != 69) { fail("lists"); }
+    print "fast-specialized-ok";
+}
+
+run main;

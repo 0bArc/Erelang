@@ -28,6 +28,34 @@
 
 namespace erelang {
 
+std::string Runtime::runtime_value_type(const Value& vv, const Env& env) {
+    if (vv.kind == ValueKind::Handle) {
+        switch (vv.h.kind) {
+            case HandleKind::List: return "array<any>";
+            case HandleKind::Dict: return "map<string,any>";
+            case HandleKind::Set: return "set<any>";
+            case HandleKind::Ptr: return "pointer";
+            case HandleKind::Own: return "heap";
+            case HandleKind::Shared: return "shared";
+            case HandleKind::Weak: return "weak";
+            case HandleKind::Buffer: return "buffer";
+            default: break;
+        }
+    }
+    const std::string text = to_display_string(vv);
+    if (text.rfind("list:", 0) == 0) return "array<any>";
+    if (text.rfind("dict:", 0) == 0) return "map<string,any>";
+    if (text.rfind("set:", 0) == 0) return "set<any>";
+    if (text.rfind("struct:", 0) == 0) return normalize_runtime_type_name(text);
+    if (vv.kind == ValueKind::Bool || text == "true" || text == "false") return "bool";
+    if (vv.kind == ValueKind::Int || is_int_string(text)) return "int";
+    if (vv.kind == ValueKind::Float || is_float_string(text)) return "double";
+    if (auto it = env.objects.find(text); it != env.objects.end() && it->second) {
+        return normalize_runtime_type_name(it->second->typeName);
+    }
+    return "string";
+}
+
 void Runtime::exec_let(const LetStmt& node, const Program& program, ExecContext& ctx, Env& env) const {
     const auto& st = node;
     if (st.pattern) {
@@ -266,34 +294,7 @@ void Runtime::exec_let(const LetStmt& node, const Program& program, ExecContext&
             }
         }
         if (!st.declaredType.empty()) {
-            auto infer_runtime_value_type = [&](const Value& vv) {
-                if (vv.kind == ValueKind::Handle) {
-                    switch (vv.h.kind) {
-                        case HandleKind::List: return std::string("array<any>");
-                        case HandleKind::Dict: return std::string("map<string,any>");
-                        case HandleKind::Set: return std::string("set<any>");
-                        case HandleKind::Ptr: return std::string("pointer");
-                        case HandleKind::Own: return std::string("heap");
-                        case HandleKind::Shared: return std::string("shared");
-                        case HandleKind::Weak: return std::string("weak");
-                        case HandleKind::Buffer: return std::string("buffer");
-                        default: break;
-                    }
-                }
-                const std::string text = to_display_string(vv);
-                if (text.rfind("list:", 0) == 0) return std::string("array<any>");
-                if (text.rfind("dict:", 0) == 0) return std::string("map<string,any>");
-                if (text.rfind("set:", 0) == 0) return std::string("set<any>");
-                if (text.rfind("struct:", 0) == 0) return normalize_runtime_type_name(text);
-                if (vv.kind == ValueKind::Bool || text == "true" || text == "false") return std::string("bool");
-                if (vv.kind == ValueKind::Int || is_int_string(text)) return std::string("int");
-                if (vv.kind == ValueKind::Float || is_float_string(text)) return std::string("double");
-                if (auto it = env.objects.find(text); it != env.objects.end() && it->second) {
-                    return normalize_runtime_type_name(it->second->typeName);
-                }
-                return std::string("string");
-            };
-            const std::string actualType = infer_runtime_value_type(value);
+            const std::string actualType = runtime_value_type(value, env);
             const std::string declaredNorm = normalize_runtime_type_name(st.declaredType);
             if (declaredNorm == "string" || declaredNorm == "str") {
             } else if ((!declaredNorm.empty() && declaredNorm.front() == '*') ||
@@ -369,26 +370,11 @@ void Runtime::exec_index_set(const IndexSetStmt& node, const Program& program, E
     const Value object = eval_value(*st.object, env);
     const Value indexValue = eval_value(*st.index, env);
     Value value = eval_value(*st.value, env);
-    if (value_is_handle(object, HandleKind::Dict)) {
-        auto& dict = g_dicts[static_cast<int>(value_handle_id(object))];
-        if (indexValue.kind == ValueKind::String) dict[indexValue.string_ref()] = std::move(value);
-        else dict[to_display_string(indexValue)] = std::move(value);
-        return;
-    }
-    const int64_t index = value_as_int(indexValue);
     if (value_is_handle(object, HandleKind::Buffer)) {
-        mem_buffer_index_set(object, index, value);
+        mem_buffer_index_set(object, value_as_int(indexValue), value);
         return;
     }
-    if (value_is_handle(object, HandleKind::List)) {
-        auto& list = g_lists[static_cast<int>(value_handle_id(object))];
-        if (index < 0 || static_cast<std::size_t>(index) >= list.size()) {
-            throw std::runtime_error("list index " + std::to_string(index) + " out of bounds (length " +
-                                     std::to_string(list.size()) + ")");
-        }
-        list[static_cast<std::size_t>(index)] = std::move(value);
-        return;
-    }
+    if (collection_index_set(object, indexValue, std::move(value))) return;
     throw std::runtime_error("index assignment requires buffer, list or map");
 }
 

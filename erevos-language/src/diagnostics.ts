@@ -2,25 +2,6 @@ import * as vscode from 'vscode';
 import { isCoreBuiltin } from './manifest';
 import { getDocumentIndex, isInStringLiteral } from './symbols';
 
-export function needsSemicolon(line: string): boolean {
-  const t = line.trim();
-  if (!t) return false;
-
-  if (t.startsWith('//') || t.startsWith('#') || t.startsWith('@')) return false;
-  if (t.startsWith('/*') || t.startsWith('*') || t.endsWith('*/'))  return false;
-
-  if (t.endsWith(';') || t.endsWith('{') || t.endsWith('}') || t.endsWith(':')) return false;
-  if (t.endsWith(',') || t.endsWith('(') || t.endsWith('['))                    return false;
-
-  if (/^(if|else|while|for|switch|match|try|catch|do|repeat|unsafe|parallel|namespace)\b/.test(t)) return false;
-  if (/^(?:public|private|export)?\s*(?:async\s+)?(?:action|entity|struct|enum|hook|field)\b/.test(t)) return false;
-
-  if (/^[A-Za-z_]\w*\s*:\s*[A-Za-z_][\w<>,\s]*[,]?$/.test(t))      return false;
-  if (/^(?:"[^"]*"|'[^']*'|[A-Za-z_]\w*)\s*:\s*.+[,]?$/.test(t))   return false;
-
-  return true;
-}
-
 const KEYWORD_CALLS = new Set([
   'if', 'while', 'for', 'switch', 'match', 'catch', 'sizeof', 'typeof',
   'decltype', 'alignof', 'offsetof', 'lambda', 'action',
@@ -75,18 +56,6 @@ export function validateDocument(
       const text = doc.lineAt(i).text;
       if (text.length > MAX_LINE_LENGTH) continue;
 
-      if (needsSemicolon(text)) {
-        const len = text.trimEnd().length;
-        const start = Math.max(0, len - 1);
-        const range = safeRange(doc, i, start, len);
-        if (range) {
-          const d = new vscode.Diagnostic(range, 'Missing semicolon (;)', vscode.DiagnosticSeverity.Error);
-          d.source = 'erelang';
-          diags.push(d);
-          if (diags.length >= MAX_DIAGNOSTICS) break;
-        }
-      }
-
       if (/(?:^|\s)(?:public|private|export)?\s*(?:async\s+)?action\s+\w+/.test(text)) continue;
       if (/(?:^|\s)(?:public|private|export)?\s*(?:async\s+)?(?:void|int|double|float|string|str|bool|char|auto)\s+\w+\s*\(/.test(text)) continue;
 
@@ -140,8 +109,4 @@ export function validateDocument(
       try { coll.set(doc.uri, []); } catch {}
     }
   }
-}
-
-export function validateSemicolons(doc: vscode.TextDocument, coll: vscode.DiagnosticCollection): void {
-  validateDocument(doc, coll);
 }

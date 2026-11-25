@@ -1,0 +1,40 @@
+@erelang
+// Statements end at a newline; ';' is still accepted.
+
+public action add(a: int, b: int): int {
+    return a + b
+}
+
+public action main() {
+    int x = 5
+    string s = "hi"
+    x = x + 1
+    x++
+    x += 2; int y = 1;
+    if (x != 9) { fail("assign") }
+    if (add(x,
+            2) != 11) { fail("call args across lines") }
+    Array<int> xs = [1, 2,
+        3]
+    xs.push(4)
+    if (xs.len() != 4) { fail("list") }
+    int sum = 0
+    for (int i = 0; i < 3; i++) { sum = sum + i }
+    int k = 0
+    while (k < 2) { k = k + 1 }
+    do { k-- } while (k > 0)
+    if (sum != 3 || k != 0) { fail("loops") }
+    int t = x > 1
+        ? 1
+        : 2
+    int total = 1 +
+        2
+    bool both = x > 1
+        && y == 1
+    string up = s
+        .upper()
+    if (t != 1 || total != 3 || !both || up != "HI") { fail("continuation lines") }
+    if (x > 1) { print "ok" } else { print "bad" }
+}
+
+run main

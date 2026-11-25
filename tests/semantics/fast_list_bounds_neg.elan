@@ -1,0 +1,12 @@
+// expect: list index 3 out of bounds (length 3)
+@strict
+public action write_indexes(Array<int> xs, int n): int {
+    for (int i = 0; i < n; i++) { xs[i] = i; }
+    return xs.len();
+}
+
+action main() {
+    Array<int> xs = [0, 0, 0];
+    print write_indexes(xs, 4);
+}
+run main;

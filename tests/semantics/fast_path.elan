@@ -1,0 +1,99 @@
+@strict
+// Loops and actions here run on the bytecode fast path; the checks run on the tree-walker.
+
+public action fib(int n): int {
+    if (n < 2) { return n; }
+    return fib(n - 1) + fib(n - 2);
+}
+
+public action is_even(int n): bool {
+    if (n == 0) { return true; }
+    return is_odd(n - 1);
+}
+
+public action is_odd(int n): bool {
+    if (n == 0) { return false; }
+    return is_even(n - 1);
+}
+
+public action classify(int n): string {
+    if (n % 15 == 0) { return "fizzbuzz"; }
+    if (n % 3 == 0) { return "fizz"; }
+    if (n % 5 == 0) { return "buzz"; }
+    return "{n}";
+}
+
+public action first_square_over(int limit): int {
+    int i = 0;
+    while (true) {
+        if (i * i > limit) { return i; }
+        i++;
+    }
+    return -1;
+}
+
+action main() {
+    int sum = 0;
+    for (int i = 0; i < 100; i++) {
+        if (i % 2 == 0) { continue; }
+        if (i > 50) { break; }
+        sum += i;
+    }
+    if (sum != 625) { fail("for with break/continue"); }
+
+    int n = 0;
+    do { n = n + 3; } while (n < 10);
+    if (n != 12) { fail("do-while"); }
+
+    int r = 0;
+    repeat (7) { r += 2; }
+    if (r != 14) { fail("repeat"); }
+
+    float f = 0.0;
+    int k = 0;
+    while (k < 10) {
+        f = f + 0.25;
+        k++;
+    }
+    if (f != 2.5) { fail("float accumulation"); }
+
+    string s = "";
+    int c = 0;
+    while (c < 3) {
+        s = s + "{c},";
+        c++;
+    }
+    if (s != "0,1,2,") { fail("interpolation in a loop"); }
+
+    string fb = "";
+    for (int j = 1; j <= 15; j++) { fb = fb + classify(j) + " "; }
+    if (fb != "1 2 fizz 4 buzz fizz 7 8 fizz buzz 11 fizz 13 14 fizzbuzz ") { fail("calls returning strings"); }
+
+    if (fib(20) != 6765) { fail("recursion"); }
+    if (!is_even(10) || is_odd(10)) { fail("mutual recursion"); }
+    if (first_square_over(50) != 8) { fail("return from inside a loop"); }
+
+    int total = 0;
+    string word = "hello";
+    for (int t = 0; t < 4; t++) { total = total + string.len(word); }
+    if (total != 20) { fail("string builtin in a loop"); }
+
+    int big = 9223372036854775807;
+    int wrapped = 0;
+    repeat (1) { wrapped = big + 1; }
+    if (wrapped != -big - 1) { fail("integer wrap"); }
+
+    int done = 0;
+    try {
+        for (int q = 5; q >= 0; q--) {
+            done = done + 1;
+            int z = 10 / q;
+        }
+    } catch (e) {
+        if (done != 6) { fail("loop state is kept when an error leaves the loop"); }
+    }
+    if (done != 6) { fail("division by zero must reach the catch block"); }
+
+    print "semantics-fast-path-ok";
+}
+run main;

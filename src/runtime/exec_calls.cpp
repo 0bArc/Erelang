@@ -532,6 +532,7 @@ void Runtime::exec_action_call(const ActionCallStmt& node, const Program& progra
             (void)invoke_async_action(*a, call.args, env, async_in_async_action());
             return;
         }
+        if (Value ignored; fast_call(*a, call.args, env, true, ignored)) return;
         Env calleeEnv;
         // Bind positional args into parameter names
         for (size_t i=0; i<a->params.size() && i<call.args.size(); ++i) {

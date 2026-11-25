@@ -47,6 +47,35 @@ hook onEnd   { print "Done.";      }
 run main;
 ```
 
+## Statements and semicolons
+
+A statement ends at the end of its line, at `;`, or before a closing `}`. Semicolons are optional;
+use one to put two statements on a line.
+
+```elan
+int x = 5
+x++; print x
+if (x > 1) { print "big" } else { print "small" }
+```
+
+A statement continues on the next line when the line ends with a binary operator, `=`, `,`, `.`
+or `?`, when the next line starts with `.`, `&&`, `||`, `??`, `?` or `:`, or while a `(` or `[`
+is still open.
+
+```elan
+int total = 1 +
+    2
+bool ok = total > 1
+    && total < 5
+string name = "ada"
+    .upper()
+int pick = ok
+    ? 1
+    : 2
+print add(total,
+          pick)
+```
+
 ## Actions (Functions)
 
 Action declarations can use either style:

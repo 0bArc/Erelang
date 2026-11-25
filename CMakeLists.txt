@@ -69,6 +69,12 @@ else()
   # No IPO/LTO for MinGW/GCC: known ICE with <filesystem> + DLL link.
 endif()
 
+# The bytecode loop dispatches with computed goto; without these GCC merges every op's jump to
+# the next op into one shared indirect jump, which costs about a third of loop speed.
+if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  set_source_files_properties(src/runtime/fast_vm.cpp PROPERTIES COMPILE_OPTIONS "-fno-gcse;-fno-crossjumping")
+endif()
+
 add_library(erelang STATIC
     src/lexer.cpp
     src/parser.cpp
@@ -77,6 +83,7 @@ add_library(erelang STATIC
     src/runtime/memory.cpp
     src/runtime/value.cpp
     src/runtime/bytecode.cpp
+    src/runtime/fast_vm.cpp
     src/runtime/eval.cpp
     src/runtime/actions.cpp
     src/runtime/exec_stmt.cpp
@@ -292,6 +299,7 @@ elseif (BUILD_SHARED_RUNTIME)
     src/runtime/memory.cpp
     src/runtime/value.cpp
     src/runtime/bytecode.cpp
+    src/runtime/fast_vm.cpp
     src/runtime/eval.cpp
     src/runtime/actions.cpp
     src/runtime/exec_stmt.cpp

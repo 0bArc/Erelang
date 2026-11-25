@@ -1,0 +1,8 @@
+// expect: Unexpected token after statement
+@erelang
+
+public action main() {
+    int x = 5 print x
+}
+
+run main

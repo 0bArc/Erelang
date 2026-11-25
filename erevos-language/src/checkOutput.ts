@@ -13,6 +13,12 @@ export function parseCheckOutput(stderr: string): Diagnostic[] {
   for (const raw of stderr.split(/\r?\n/)) {
     const t = raw.trim();
     if (!t) continue;
+    // Semicolon suggestions from older compilers must not reintroduce an editor requirement.
+    // The parser's batch header carries no location or useful detail on its own.
+    if (/^(?:Check error:\s*)?Syntax errors\s*\(\d+\):\s*$/.test(t)) continue;
+    const parserMessage = t.replace(/^Check error:\s*/, '').replace(/^(?:-\s*)?.*?:\d+:\d+:\s*/, '');
+    if (/^;\s*(?:\(near\b.*\))?$/.test(parserMessage)) continue;
+    if (/^(?:expected|expecting|missing|required)\s+(?:(?:a|the)\s+)?(?:['"`]?;['"`]?|semicolon\b)/i.test(parserMessage)) continue;
     const m = TAGGED_RE.exec(t);
     if (!m) {
       // Loader / internal errors ("Check error: ...") have no tag.

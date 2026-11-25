@@ -1,0 +1,147 @@
+@strict
+// Lists, maps and mixed int/float math on the bytecode fast path; the checks run on the tree-walker.
+
+public action sum_list(Array<int> xs): int {
+    int s = 0;
+    for (int x : xs) { s = s + x; }
+    return s;
+}
+
+public action squares(int n): Array<int> {
+    Array<int> out;
+    for (int i = 0; i < n; i++) { out.push(i * i); }
+    return out;
+}
+
+public action count_words(Array<string> words): Map<string, int> {
+    Map<string, int> counts = {"": 0};
+    for (string w : words) {
+        if (counts.has(w)) { counts[w] = counts[w] + 1; } else { counts[w] = 1; }
+    }
+    return counts;
+}
+
+public action bsearch(Array<int> xs, int target): int {
+    int lo = 0;
+    int hi = xs.len() - 1;
+    while (lo <= hi) {
+        int mid = (lo + hi) / 2;
+        if (xs[mid] == target) { return mid; }
+        if (xs[mid] < target) { lo = mid + 1; } else { hi = mid - 1; }
+    }
+    return -1;
+}
+
+// A list holding a heap value runs on the tree-walker, which releases it when `x` goes out of scope.
+public action touch(Array<any> xs): int {
+    int n = 0;
+    for (any x : xs) { n++; }
+    return n;
+}
+
+public action scale(float x, int i): float {
+    return x * 0.5 + i;
+}
+
+action main() {
+    Array<int> sq = squares(6);
+    if (sum_list(sq) != 55) { fail("for-each in an action"); }
+    if (sq.len() != 6 || sq[5] != 25) { fail("list returned from an action"); }
+
+    int found = 0;
+    for (int k = 0; k < 30; k++) {
+        if (bsearch(sq, k) >= 0) { found++; }
+    }
+    if (found != 6) { fail("binary search"); }
+
+    // Past the end gives 0 and a missing key null, as on the tree-walker.
+    int past = -1;
+    Map<string, int> empty = {"x": 1};
+    bool missing = false;
+    for (int i = 0; i < 1; i++) {
+        past = sq[99];
+        missing = empty["nope"] == null;
+    }
+    if (past != 0 || !missing) { fail("out-of-range reads"); }
+
+    // A method statement leaves its result in `_`.
+    Array<int> stack = [1, 2, 3];
+    for (int i = 0; i < 1; i++) { stack.pop(); }
+    if (_ != 3 || stack.len() != 2) { fail("pop result in _"); }
+
+    // A list grown inside for-each: the loop covers the length it had on entry.
+    Array<int> grow = [1, 2];
+    int seen = 0;
+    for (int g : grow) {
+        grow.push(g);
+        seen++;
+    }
+    if (seen != 2 || grow.len() != 4) { fail("for-each over a growing list"); }
+
+    Map<string, int> counts = count_words(["a", "b", "a", "c", "a"]);
+    int total = 0;
+    string keys = "";
+    for (string k, int v : counts) {
+        total = total + v;
+        keys = keys + k;
+    }
+    if (total != 5 || counts["a"] != 3 || counts.len() != 4) { fail("map counts"); }
+    string walked = "";
+    for (string k, int v : counts) { walked = walked + k; }
+    if (walked != keys) { fail("map iteration order"); }
+
+    Array<Array<int>> grid;
+    for (int r = 0; r < 4; r++) {
+        Array<int> row;
+        for (int c = 0; c < 4; c++) { row.push(r * c); }
+        grid.push(row);
+    }
+    int gs = 0;
+    for (int r = 0; r < grid.len(); r++) {
+        Array<int> row = grid[r];
+        for (int v : row) { gs = gs + v; }
+    }
+    if (gs != 36) { fail("nested lists"); }
+
+    int rs = 0;
+    for (int i : 1 .. 4) { rs = rs + i; }
+    for (int i : 0 ..< 3) { rs = rs + i; }
+    if (rs != 13) { fail("ranges"); }
+
+    Array<bool> sieve;
+    for (int i = 0; i <= 50; i++) { sieve.push(true); }
+    int primes = 0;
+    for (int i = 2; i <= 50; i++) {
+        if (sieve[i]) {
+            primes++;
+            for (int j = i * i; j <= 50; j = j + i) { sieve[j] = false; }
+        }
+    }
+    if (primes != 15) { fail("sieve"); }
+
+    heap<int> h = heap<int>(5);
+    Array<any> mixed = [1, h];
+    if (touch(mixed) != 2 || mem_alive() != 0) { fail("heap value in a list"); }
+
+    // Mixed int/float arithmetic, comparisons and conversions.
+    float acc = 0.0;
+    float z = 0.0;
+    int truncated = 0;
+    string big = "";
+    for (int i = 0; i < 10; i++) {
+        acc = acc + i * 0.5;
+        if (acc > 10.0) { acc = acc - 10.0; }
+        float y = i * 1.5;
+        z = scale(z, i);
+        truncated = truncated + int(y);
+        big = string(float(500000));
+    }
+    if (acc != 2.5) { fail("int * float accumulation"); }
+    if (truncated != 65) { fail("int() of a float"); }
+    if (big != "5e+05") { fail("float() keeps exponent text"); }
+    if (z < 16.0 || z > 18.0) { fail("float action call"); }
+
+    print "fast-collections-ok";
+}
+
+run main;

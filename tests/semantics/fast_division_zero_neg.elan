@@ -1,0 +1,10 @@
+// expect: Division by zero
+@strict
+action main() {
+    int total = 0;
+    for (int i = 3; i >= 0; i--) {
+        total = total + 12 / i;
+    }
+    print total;
+}
+run main;

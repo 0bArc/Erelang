@@ -28,6 +28,7 @@ struct Hook;
 struct Entity;
 struct Expr;
 struct Chunk;
+class FastVm;
 using ExprPtr = std::shared_ptr<Expr>;
 } // namespace erelang
 
@@ -37,6 +38,19 @@ namespace erelang {
 
 // True for list/dict methods that produce no result (push, set, clear, ...).
 [[nodiscard]] bool collection_method_is_void(std::string_view method);
+// True when Runtime::collection_method handles `method` (or an alias) for a List or Dict.
+[[nodiscard]] bool collection_method_known(HandleKind kind, std::string_view method);
+// The name Runtime::collection_method uses for a list method alias ("size" is "len").
+[[nodiscard]] std::string_view list_method_name(std::string_view method);
+// New list / map handles, as the literals `[...]`, `{...}` and ranges `a .. b` create them.
+[[nodiscard]] Value make_list_value(std::vector<Value> items);
+[[nodiscard]] Value new_dict_value(std::size_t reserve);
+[[nodiscard]] Value make_range_list(int64_t start, int64_t end, bool exclusive);
+// `object[index]` on a list (0 when out of range) or map (null when missing). False, with out
+// untouched, when object is neither.
+bool collection_index_get(const Value& object, const Value& index, Value& out);
+// `object[index] = value` on a list (throws when out of range) or map. False when object is neither.
+bool collection_index_set(const Value& object, const Value& index, Value value);
 
 class Runtime {
 public:
@@ -151,6 +165,7 @@ private:
     struct ActionIndexGuard {
         const Runtime* rt;
         ~ActionIndexGuard() {
+            rt->fast_vm_reset();
             rt->actionIndexProgram_ = nullptr;
             rt->actionIndexCount_ = 0;
             rt->actionIndex_.clear();
@@ -210,6 +225,22 @@ private:
     std::optional<Value> dispatch_value_method(const Value& recv, std::string_view method, const std::vector<Value>& args) const;
     // List/dict methods on evaluated args; nullopt when recv is not a list/dict or method is unknown.
     std::optional<Value> collection_method(const Value& recv, std::string_view method, const std::vector<Value>& args) const;
+
+    // Bytecode fast path (fast_vm.cpp). Each returns false without doing anything when the code
+    // needs the tree-walker, and true once the call or loop has run.
+    friend class FastVm;
+    mutable std::shared_ptr<FastVm> fastVm_;
+    bool fast_call(const Action& action, const std::vector<ExprPtr>& args, const Env& env,
+                   bool statementCall, Value& result) const;
+    bool fast_loop(const WhileStmt& loop, ExecContext& ctx, Env& env) const;
+    bool fast_loop(const ForStmt& loop, ExecContext& ctx, Env& env) const;
+    bool fast_loop(const DoWhileStmt& loop, ExecContext& ctx, Env& env) const;
+    bool fast_loop(const RepeatStmt& loop, ExecContext& ctx, Env& env) const;
+    bool fast_loop(const ForInStmt& loop, ExecContext& ctx, Env& env) const;
+    // Drops compiled code; it points into the Program of the run that compiled it.
+    void fast_vm_reset() const;
+    // Runtime type name of a value as `let` declarations check it ("int", "double", "string", ...).
+    static std::string runtime_value_type(const Value& v, const Env& env);
 
     // Variable lookup: closure cells, slots, locals, then globals. nullptr if unbound.
     const Value* env_find(const Env& env, const std::string& name) const;

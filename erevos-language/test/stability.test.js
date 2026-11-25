@@ -123,6 +123,13 @@ test('large documents skip heuristic diagnostics', () => {
   assert.deepEqual(diagnostics, []);
 });
 
+test('heuristic validation accepts statements without semicolons', () => {
+  const doc = document(['action main() {', '  int value = 1', '  print(value)', '}', 'run main']);
+  let diagnostics;
+  validateDocument(doc, { delete() {}, set(_uri, value) { diagnostics = value; } });
+  assert.deepEqual(diagnostics, []);
+});
+
 test('imported action cache tracks file modification time', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'erevos-'));
   const file = path.join(dir, 'module.elan');

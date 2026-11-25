@@ -1,0 +1,14 @@
+// expect: Modulo by zero
+@strict
+public action remainder(int a, int b): int {
+    return a % b;
+}
+
+action main() {
+    int total = 0;
+    for (int i = 3; i >= 0; i--) {
+        total = total + remainder(10, i);
+    }
+    print total;
+}
+run main;

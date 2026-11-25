@@ -2,6 +2,9 @@
 
 Syntax highlighting, snippets, and IntelliSense for `.elan` files.
 
+Version 0.1.2 removes missing-semicolon diagnostics, including expectations forwarded by older
+compiler builds. Other syntax and type diagnostics remain enabled.
+
 The extension host keeps one document index per open file (symbols, entity members, imports). Completions read that index. Disk access for `#include` paths uses a cached directory listing.
 
 Compiler diagnostics check unsaved buffers after 800 ms of quiet (1.5 seconds during edit/save bursts).

@@ -359,6 +359,7 @@ private:
     bool match_word(std::string_view);
     void expect(TokenKind kind, std::string_view what);
     void skip_separators(); // newlines/semicolons
+    void expect_statement_end(); // ';', or a newline, '}' or end of input left in place
 
     Program parse_program();
     Action parse_action();
